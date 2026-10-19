@@ -37,6 +37,7 @@ from vitalgraph.kg_impl.kg_backend_utils import (
     StaleWrite)
 from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 from .refusals import RequestRefused
+from .frame_reachability import reachability_postcheck
 
 
 def _sparql_binding_to_rdflib(binding):
@@ -280,7 +281,8 @@ class KGFrameCreateProcessor:
             insert_quads=insert_quads, insert_subjects=written,
             keep_outside_links=not parent_uri,
             lock_extra=frames, stamp_subjects=frames,
-            precheck=precheck)
+            precheck=precheck,
+            postcheck=reachability_postcheck(space_id, graph_id, all_objects))
         _written = set(written)
         return CreateFrameResult(
             success=True, created_uris=written,
@@ -404,7 +406,8 @@ class KGFrameCreateProcessor:
                     if_unmodified_since=if_unmodified_since,
                     guard_subject=_lock_uris[0] if if_unmodified_since is not None else None,
                     stamp_subjects=_lock_uris,
-                    precheck=precheck)
+                    precheck=precheck,
+                    postcheck=reachability_postcheck(space_id, graph_id, all_objects))
                 _t2 = _time.time()
                 self.logger.info(f"⏱️ FRAME_CREATE step2 update_subjects_graph: {_t2-_t1:.3f}s")
             else:
@@ -484,7 +487,8 @@ class KGFrameCreateProcessor:
                     replace_frame_graphs=[str(f.URI) for f in frame_objects
                                           if getattr(f, 'URI', None)],
                     removed_uris=removed_uris,
-                    precheck=precheck)
+                    precheck=precheck,
+                    postcheck=reachability_postcheck(space_id, graph_id, all_objects))
             else:
                 delete_quads = await self.build_delete_quads_for_frames(
                     backend_adapter, space_id, graph_id, frame_objects)

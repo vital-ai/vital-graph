@@ -1858,8 +1858,12 @@ class KGEntitiesEndpoint:
                 _upsert = operation_mode_str == "UPSERT"
                 return FrameCreateResponse(
                     status=OperationStatus.UPSERTED if _upsert else OperationStatus.CREATED,
+                    # FRAMES, not every URI written: slots, edges and links were
+                    # counted as "frames", so one frame read as 7 (`issues/279`).
+                    # `created_count` stays the count of URIs it always was.
                     message=(f"Successfully {'upserted' if _upsert else 'created'} "
-                             f"{len(result.created_uris)} frames"),
+                             f"{result.frame_count} frame(s), "
+                             f"{len(result.created_uris)} object(s)"),
                     created_count=len(result.created_uris),
                     created_uris=result.created_uris,
                 )

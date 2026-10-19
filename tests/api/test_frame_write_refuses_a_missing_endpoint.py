@@ -11,10 +11,12 @@ probe. `issues/212` found the same gap on the main KG space.
 Each test sends that shape and asserts: the write is not a success, the reply
 names the missing frame, and NOTHING of the request was stored.
 
-The whole-entity create already refuses it (`KGEntityValidator` requires every
-edge endpoint in the request). The two frame routes do not, and are marked
-`xfail(strict=True)` until they do: fixed, they pass, the mark fails the run, and
-it comes off.
+The whole-entity create already refused it (`KGEntityValidator` requires every
+edge endpoint in the request). The two frame routes now refuse it too, decided on
+the write's OUTCOME inside its transaction (`kg_impl/frame_reachability.py`), so
+the shapes no pre-write check can see are covered — an edge kept to a slot the
+same upsert deletes. And the legitimate shapes, which name stored things, still
+pass.
 """
 
 from __future__ import annotations
@@ -36,12 +38,6 @@ pytestmark = [
 ]
 
 NS = "http://example.org/apitest/endpoint279/"
-
-open_279 = pytest.mark.xfail(
-    strict=True,
-    reason="issues/279: the frame routes accept edges and slots naming a frame "
-           "that is neither in the request nor in the store")
-
 
 def _reply_text(r) -> str:
     return " ".join(str(x) for x in (getattr(r, "error_message", None),
@@ -101,7 +97,6 @@ async def _stored(vg_client, space, graph, uris):
     return {b["s"]["value"] for b in (r.results or {}).get("bindings", [])}
 
 
-@open_279
 @pytest.mark.parametrize("mode", ["create", "upsert"])
 async def test_a_child_frame_named_by_edges_but_never_sent_is_refused(
         vg_client, test_space, test_graph, mode):
@@ -140,7 +135,6 @@ async def test_an_entity_graph_naming_an_absent_child_frame_is_refused(
                              [ent.URI, parent_uri, c_slot_uri])
 
 
-@open_279
 async def test_a_standalone_frame_write_naming_an_absent_child_is_refused(
         vg_client, test_space, test_graph):
     """`POST /kgframes`, no entity."""
@@ -152,3 +146,78 @@ async def test_a_standalone_frame_write_naming_an_absent_child_is_refused(
     assert not r.is_success, "a frame write naming a frame it never sends was ACCEPTED"
     assert child_uri in _reply_text(r), _reply_text(r)
     assert not await _stored(vg_client, test_space, test_graph, [parent_uri, c_slot_uri])
+
+
+async def _frame_with_slot(vg_client, space, graph, entity_uri):
+    f = KGFrame()
+    f.URI = f"{NS}frame_{_uid()}"
+    sl = _slot(f"{str(f.URI)}:slot:a", "kept")
+    edge = _edge(Edge_hasKGSlot, str(f.URI), str(sl.URI))
+    r = await vg_client.kgentities.create_entity_frames(
+        space_id=space, graph_id=graph, entity_uri=entity_uri, objects=[f, sl, edge])
+    assert r.is_success, _reply_text(r)
+    return f, sl, edge
+
+
+async def test_an_upsert_keeping_an_edge_to_a_slot_it_deletes_is_refused(
+        vg_client, test_space, test_graph):
+    """The shape a check BEFORE the write passes: the slot is stored when the
+    request arrives, and the upsert's frame-graph replace deletes it."""
+    entity_uri = await _entity(vg_client, test_space, test_graph)
+    f, sl, edge = await _frame_with_slot(vg_client, test_space, test_graph, entity_uri)
+
+    r = await vg_client.kgentities.create_entity_frames(
+        space_id=test_space, graph_id=test_graph, entity_uri=entity_uri,
+        objects=[f, edge], operation_mode="upsert")      # the slot is not re-sent
+
+    assert not r.is_success, "an upsert that deletes the slot its edge names was ACCEPTED"
+    assert str(sl.URI) in _reply_text(r), _reply_text(r)
+    assert await _stored(vg_client, test_space, test_graph, [str(sl.URI)]) == {str(sl.URI)}, (
+        "the refused upsert must leave the stored slot as it was")
+
+
+async def test_a_slot_sent_without_its_edge_is_refused(vg_client, test_space, test_graph):
+    entity_uri = await _entity(vg_client, test_space, test_graph)
+    f = KGFrame()
+    f.URI = f"{NS}frame_{_uid()}"
+    loose = _slot(f"{str(f.URI)}:slot:loose", "no edge")
+
+    r = await vg_client.kgentities.create_entity_frames(
+        space_id=test_space, graph_id=test_graph, entity_uri=entity_uri,
+        objects=[f, loose])
+
+    assert not r.is_success, "a slot with no Edge_hasKGSlot was ACCEPTED"
+    assert str(loose.URI) in _reply_text(r), _reply_text(r)
+    assert not await _stored(vg_client, test_space, test_graph, [str(f.URI), str(loose.URI)])
+
+
+async def test_children_under_a_stored_parent_are_written(vg_client, test_space, test_graph):
+    """The route used one level per request, as designed: the parent is stored,
+    and the child request names it only through `parent_frame_uri`."""
+    entity_uri = await _entity(vg_client, test_space, test_graph)
+    parent, _sl, _e = await _frame_with_slot(vg_client, test_space, test_graph, entity_uri)
+    child = KGFrame()
+    child.URI = f"{str(parent.URI)}:frame:child:0"
+    c_slot = _slot(f"{str(child.URI)}:slot:b", "child value")
+
+    for mode in ("create", "upsert"):
+        r = await vg_client.kgentities.create_entity_frames(
+            space_id=test_space, graph_id=test_graph, entity_uri=entity_uri,
+            objects=[child, c_slot, _edge(Edge_hasKGSlot, str(child.URI), str(c_slot.URI))],
+            parent_frame_uri=str(parent.URI), operation_mode=mode)
+        assert r.is_success, f"{mode}: {_reply_text(r)}"
+    assert await _stored(vg_client, test_space, test_graph,
+                         [str(child.URI), str(c_slot.URI)]) == {str(child.URI), str(c_slot.URI)}
+
+
+async def test_an_upsert_re_sending_its_slots_and_edges_is_written(
+        vg_client, test_space, test_graph):
+    entity_uri = await _entity(vg_client, test_space, test_graph)
+    f, sl, edge = await _frame_with_slot(vg_client, test_space, test_graph, entity_uri)
+    sl.textSlotValue = "changed"
+    r = await vg_client.kgentities.create_entity_frames(
+        space_id=test_space, graph_id=test_graph, entity_uri=entity_uri,
+        objects=[f, sl, edge], operation_mode="upsert")
+    assert r.is_success, _reply_text(r)
+    assert "1 frame(s)" in _reply_text(r), (
+        f"the message must count frames, not every URI: {_reply_text(r)!r}")

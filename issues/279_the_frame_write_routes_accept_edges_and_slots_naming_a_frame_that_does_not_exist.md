@@ -1,6 +1,6 @@
 # 279 — The frame write routes accept edges and slots naming a frame that does not exist
 
-## Status: OPEN — confirmed 2026-10-19 on the vg test stack. Not fixed.
+## Status: FIXED IN CODE 2026-10-19 (not yet released). Refuses from the first release.
 
 **Related:** `issues/212` (the same gap, first seen as 28 schedule slots on the
 main KG space; recorded there in passing and never opened as an item),
@@ -94,7 +94,48 @@ reply said 7.
    that is the intended outcome: a refused write is reported by the client,
    where an accepted one left 4,704 orphans unnoticed for five days.
 
-Then drop the `xfail` marks from the three tests above.
+
+## Fixed (code)
+
+* `vitalgraph/kg_impl/frame_reachability.py`. `outside_references` reads the
+  request, and `reachability_postcheck` runs the two rules (1 and 2 above) on
+  what the request cannot answer. A self-contained request gets no check at
+  all. A refusal is `UnreachableObjects` (INVALID_REQUEST in a 200), naming
+  every missing object and loose slot, and nothing is written.
+* **The check runs after the write, not before it.** `update_subjects_graph`
+  and `delete_frame_subtrees` take a `postcheck`, which runs in the
+  transaction after the delete and the insert and before the stamp and the
+  commit. A frame upsert replaces each named frame's graph, and a replace
+  deletes subtrees, so a stored object an edge names can be removed by the same
+  write. A check before the write would pass that. A check after it sees the
+  outcome.
+* Wired on every frame write: `/kgentities/kgframes` create, update/upsert and
+  replace (`kgentity_frame_create_impl`), and `/kgframes` create, update/upsert
+  and replace (`kgframe_create_impl`). The slot routes already mint an edge for
+  each new slot and check the frame.
+* Message: "Successfully created N frame(s), M object(s)".
+
+## Verification
+
+`tests/api/test_frame_write_refuses_a_missing_endpoint.py` (8), vg test stack:
+
+* the production shape is refused on create and upsert, and on `/kgframes`;
+* the whole-entity create still refuses it;
+* an upsert that keeps an edge to a slot the same write deletes is refused, and
+  the stored slot survives (the case a pre-write check misses);
+* a slot sent without its edge is refused;
+* children written under a stored parent via `parent_frame_uri` (create and
+  upsert), and an upsert re-sending its slots and edges, still succeed.
+
+The first four tests fail on the previous code. `tests/unit/test_frame_reachability_rules.py`
+(7) covers the request analysis. The full API suite passes against the rebuilt
+stack.
+
+## Not covered
+
+* The whole-entity UPDATE path (`validate_entity_graph_structure`) checks
+  entity → frame and frame → slot edges against the request, but not
+  frame → frame `Edge_hasKGFrame`. Not probed yet.
 
 ## Not VitalGraph's
 

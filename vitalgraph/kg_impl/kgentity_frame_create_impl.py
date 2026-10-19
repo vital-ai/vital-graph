@@ -36,6 +36,7 @@ from vitalgraph.kg_impl.kg_backend_utils import (
 from vitalgraph.kg_impl.edge_uris import edge_uri
 from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 from .refusals import RequestRefused
+from .frame_reachability import reachability_postcheck
 
 
 def _sparql_binding_to_rdflib(binding) -> Any:
@@ -235,7 +236,9 @@ class KGEntityFrameCreateProcessor:
                                                                  precheck=entity_frames_precheck(
                                                                      space_id, graph_id, entity_uri,
                                                                      [str(f.URI) for f in categories.frame_objects],
-                                                                     require_existing=not upserting))
+                                                                     require_existing=not upserting),
+                                                                 postcheck=reachability_postcheck(
+                                                                     space_id, graph_id, all_objects))
             else:
                 # Step 7: Execute atomic creation via backend (extracted from lines 1125-1145)
                 success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects,
@@ -255,7 +258,9 @@ class KGEntityFrameCreateProcessor:
                                                                                      categories.frame_objects
                                                                                      + categories.slot_objects
                                                                                      + categories.edge_objects
-                                                                                     if getattr(o, 'URI', None)])))
+                                                                                     if getattr(o, 'URI', None)])),
+                                                                            postcheck=reachability_postcheck(
+                                                                                space_id, graph_id, all_objects))
             
             if success:
                 created_uris = [str(obj.URI) for obj in all_objects if hasattr(obj, 'URI')]
@@ -369,7 +374,8 @@ class KGEntityFrameCreateProcessor:
             if_unmodified_since=if_unmodified_since,
             insert_quads=insert_quads, insert_subjects=written,
             keep_outside_links=False,
-            precheck=entity_present_precheck(space_id, graph_id, entity_uri))
+            precheck=entity_present_precheck(space_id, graph_id, entity_uri),
+            postcheck=reachability_postcheck(space_id, graph_id, all_objects))
         _written = set(written)
         return CreateFrameResult(
             success=True, created_uris=written,
@@ -565,7 +571,7 @@ class KGEntityFrameCreateProcessor:
                                         entity_uri: Optional[str] = None,
                                         if_unmodified_since: Optional[str] = None,
                                         removed_uris: Optional[List[str]] = None,
-                                        precheck=None) -> tuple:
+                                        precheck=None, postcheck=None) -> tuple:
         """
         Execute atomic frame UPDATE/UPSERT: each frame's WHOLE graph is replaced.
 
@@ -621,7 +627,7 @@ class KGEntityFrameCreateProcessor:
                     replace_frame_graphs=[str(f.URI) for f in frame_objects
                                           if getattr(f, 'URI', None)],
                     removed_uris=removed_uris,
-                    precheck=precheck)
+                    precheck=precheck, postcheck=postcheck)
                 t2 = time.time()
                 self.logger.info(f"⏱️ FRAME_UPDATE step2 update_subjects_graph: {t2-t1:.3f}s "
                                f"({len(subject_uris)} subjects, {len(insert_quads)} quads)")
@@ -891,7 +897,7 @@ class KGEntityFrameCreateProcessor:
                                    graph_id: str, all_objects: List[GraphObject],
                                    entity_uri: Optional[str] = None,
                                    if_unmodified_since: Optional[str] = None,
-                                   precheck=None) -> bool:
+                                   precheck=None, postcheck=None) -> bool:
         """
         Execute atomic frame creation via subject-level delete + insert.
         
@@ -941,7 +947,7 @@ class KGEntityFrameCreateProcessor:
                     # race-free for the next writer.
                     if_unmodified_since=if_unmodified_since,
                     guard_subject=entity_uri,
-                    precheck=precheck)
+                    precheck=precheck, postcheck=postcheck)
                 _t2 = _time.time()
                 self.logger.info(f"⏱️ FRAME_CREATE step2 update_subjects_graph: {_t2-_t1:.3f}s "
                                f"({len(subject_uris)} subjects, {len(insert_quads)} quads)")

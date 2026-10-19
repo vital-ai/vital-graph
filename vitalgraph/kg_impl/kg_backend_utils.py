@@ -2063,7 +2063,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                      stamp_subjects: Optional[List[str]] = None,
                                      replace_frame_graphs: Optional[List[str]] = None,
                                      removed_uris: Optional[List[str]] = None,
-                                     precheck=None) -> bool:
+                                     precheck=None,
+                                     postcheck=None) -> bool:
         """Atomically replace quads for a list of subject URIs.
 
         ``precheck``, if given, is awaited as ``precheck(conn)`` right after the
@@ -2074,6 +2075,13 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         that a `/kgframes` write does not touch an entity's frame. Checked before
         the lock, a delete or an entity-frame write landing in between makes the
         answer stale by the time the write runs.
+
+        ``postcheck``, if given, is awaited as ``postcheck(conn)`` after the
+        delete and the insert, before the stamp and the commit. It sees what this
+        transaction is about to commit, so it can refuse on the write's OUTCOME —
+        an edge left pointing at a frame the same write deleted, which no check
+        before the write can see (`issues/279`). A `RequestRefused` from it rolls
+        everything back.
 
         ``replace_frame_graphs`` REPLACES WHOLE FRAME GRAPHS (`issues/256`).
         For each frame named, every subject whose `hasFrameGraphURI` is that
@@ -2256,6 +2264,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             await self.backend.add_rdf_quads_batch_bulk(
                                 space_id, insert_quads, connection=conn)
                         _mark("insert")
+                        if postcheck is not None:
+                            await postcheck(conn)
 
                         # AFTER the insert, for the reason in `_stamp_subject`:
                         # a standalone frame guards on itself, so a stamp
@@ -2377,7 +2387,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                     keep_outside_links: bool = False,
                                     lock_extra: Optional[List[str]] = None,
                                     stamp_subjects: Optional[List[str]] = None,
-                                    precheck=None) -> "FrameSubtreeDelete":
+                                    precheck=None,
+                                    postcheck=None) -> "FrameSubtreeDelete":
         """Delete frames and everything they own, in ONE locked transaction.
 
         REPLACE IS THIS WITH SOMETHING TO INSERT (`issues/256` item 4). Given
@@ -2393,7 +2404,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
           stays attached. A request that re-creates the link passes False;
         - `lock_extra` adds lock keys (the frames being written), and
           `stamp_subjects` the subjects whose version the write advances.
-        `precheck(conn)` runs after the lock, as in `update_subjects_graph`.
+        `precheck(conn)` runs after the lock, and `postcheck(conn)` after the
+        insert, as in `update_subjects_graph`.
 
         `issues/256`. Both frame delete routes come here. They were two
         implementations — SPARQL discovery then a quad-level `DELETE DATA` on
@@ -2617,6 +2629,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             if insert_quads:
                 await self.backend.add_rdf_quads_batch_bulk(
                     space_id, insert_quads, connection=c)
+            if postcheck is not None:
+                await postcheck(c)
             for _s in (stamp_subjects if stamp_subjects is not None
                        else ([owner_entity_uri] if owner_entity_uri else [])):
                 await _stamp_subject(c, space_id, graph_id, _s)
