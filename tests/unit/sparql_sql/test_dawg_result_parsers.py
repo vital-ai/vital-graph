@@ -225,3 +225,59 @@ class TestUnreadableExpectationsRaise:
         with pytest.raises(UnsupportedResultFormat):
             parse_result_file(f)
         assert issubclass(UnsupportedResultFormat, ResultParseError)
+
+
+# ---------------------------------------------------------------------------
+# issues/280: three comparator artefacts that would fail correct answers once
+# the runner checks the .srx, not only the oracle.
+# ---------------------------------------------------------------------------
+
+SPARQL10 = _PROJECT_ROOT / "tests" / "conformance" / "dawg_data" / "sparql" / "sparql10"
+
+
+class TestGraphResultLiterals:
+    """A graph result's literal datatype is the bare IRI, and xsd:string is
+    folded into the plain literal — `str()` of a pyoxigraph NamedNode is
+    `<iri>`, which kept the brackets and defeated the xsd:string check."""
+
+    def test_datatypes_have_no_brackets(self):
+        r = parse_result_file(SPARQL10 / "construct" / "result-construct-optional.ttl")
+        dts = {b.datatype for row in r.rows for b in row.values()
+               if b.type == "literal" and b.datatype}
+        assert dts and not any(d.startswith("<") for d in dts), dts
+
+    def test_xsd_string_is_the_plain_literal(self):
+        r = parse_result_file(SPARQL10 / "construct" / "result-ident.ttl")
+        lits = [b for row in r.rows for b in row.values() if b.type == "literal"]
+        assert lits and all(b.datatype is None for b in lits), [b.datatype for b in lits]
+
+
+def test_an_empty_result_set_is_not_a_graph():
+    """`[] rdf:type rs:ResultSet .` is zero solutions, not one triple."""
+    r = parse_result_file(SPARQL10 / "graph" / "graph-empty-not-exist.ttl")
+    assert not r.is_graph and r.rows == [] and r.variables == []
+
+
+class TestReduced:
+    """REDUCED may return each distinct row between once and its full count."""
+
+    def _rs(self, *vals):
+        return SparqlResults(variables=["x"], rows=[
+            {"x": SparqlBinding(type="literal", value=v)} for v in vals])
+
+    def test_fewer_duplicates_match(self):
+        full = self._rs("a", "a", "b")
+        assert compare_results(self._rs("a", "b"), full, reduced=True).match
+        assert not compare_results(self._rs("a", "b"), full).match
+
+    def test_a_missing_distinct_row_does_not(self):
+        assert not compare_results(self._rs("a"), self._rs("a", "b"), reduced=True).match
+
+    def test_more_than_the_full_count_does_not(self):
+        assert not compare_results(self._rs("a", "a", "a", "b"),
+                                   self._rs("a", "a", "b"), reduced=True).match
+
+    def test_the_runner_recognises_reduced(self):
+        from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner import is_reduced
+        assert is_reduced((SPARQL10 / "reduced" / "reduced-1.rq").read_text())
+        assert not is_reduced("SELECT DISTINCT ?x WHERE { ?x ?p ?o }")

@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import re
 import time
 from pathlib import Path
 from typing import List, Optional
@@ -55,12 +56,24 @@ from .dawg_report import (
     save_report_json,
 )
 from .dawg_result_comparator import compare_results
+
 from .dawg_srx_parser import (
     ResultParseError,
     SparqlResults,
     UnsupportedResultFormat,
     parse_result_file,
 )
+
+
+# SELECT REDUCED may return each distinct row any number of times between once
+# and its full multiplicity, so it is compared differently (`issues/280`).
+_REDUCED = re.compile(r"\bSELECT\s+REDUCED\b", re.IGNORECASE)
+
+
+def is_reduced(sparql: str) -> bool:
+    """The query's projection is SELECT REDUCED."""
+    return bool(_REDUCED.search(sparql))
+
 
 logger = logging.getLogger(__name__)
 
@@ -466,6 +479,21 @@ async def run_single_test_sql_v2(test: DawgTestCase, db_conn) -> TestResult:
             time_ms=(time.time() - t0) * 1000, error_message=f"Unexpected: {e}",
         )
     elapsed_ms = (time.time() - t0) * 1000
+
+    # REDUCED: straight to the manifest, multiplicity-tolerant (`issues/280`).
+    # Two REDUCED answers can differ in multiplicity and both be right, so
+    # comparing ours with the oracle's says nothing; the full result in the
+    # .srx is what bounds a REDUCED one.
+    if is_reduced(sparql):
+        comparison = compare_results(sql_result, expected, reduced=True)
+        return TestResult(
+            name=test.name, category=test.category,
+            status="PASS" if comparison.match else "FAIL",
+            expected_rows=comparison.expected_count,
+            actual_rows=comparison.actual_count,
+            time_ms=elapsed_ms,
+            error_message=None if comparison.match else f"{comparison.message} [REDUCED, vs manifest]",
+        )
 
     # With no oracle, compare straight to the manifest. That is a stricter
     # test, not a weaker one -- the oracle is normally the primary comparand

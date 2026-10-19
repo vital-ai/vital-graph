@@ -52,6 +52,7 @@ def compare_results(
     actual: SparqlResults,
     expected: SparqlResults,
     ordered: bool = False,
+    reduced: bool = False,
 ) -> ComparisonResult:
     """Compare actual results against expected results.
 
@@ -59,6 +60,9 @@ def compare_results(
         actual: Results from the engine under test.
         expected: Expected results (from .srx or another oracle).
         ordered: If True, row order must match exactly.
+        reduced: The query is SELECT REDUCED, which may return each distinct
+            row any number of times between once and its full multiplicity
+            (`issues/280`). Compared strictly, a correct answer failed.
 
     Returns:
         ComparisonResult with match status and diagnostic message.
@@ -91,6 +95,19 @@ def compare_results(
                 expected_count=len(expected.rows),
                 actual_count=len(actual.rows),
             )
+
+    # REDUCED: the same distinct rows, none more often than in the full result.
+    if reduced and not ordered:
+        lossy_r = getattr(expected, "lossy_types", False) or getattr(actual, "lossy_types", False)
+        e_ms = _rows_to_multiset([_normalize_row(r, exp_vars, lossy=lossy_r) for r in expected.rows])
+        a_ms = _rows_to_multiset([_normalize_row(r, exp_vars, lossy=lossy_r) for r in actual.rows])
+        if set(e_ms) == set(a_ms) and all(a_ms[k] <= e_ms[k] for k in a_ms):
+            return ComparisonResult(True, f"REDUCED match ({len(actual.rows)} of {len(expected.rows)} rows)",
+                                    expected_count=len(expected.rows), actual_count=len(actual.rows))
+        return ComparisonResult(
+            False, "REDUCED mismatch: the distinct rows differ, or a row appears more "
+                   "often than in the full result",
+            expected_count=len(expected.rows), actual_count=len(actual.rows))
 
     # Row count check
     if len(expected.rows) != len(actual.rows):

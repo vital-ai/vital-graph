@@ -487,7 +487,8 @@ class TestDAWGSqlV2:
         except SparqlExecutionError as e:
             pytest.skip(f"pyoxigraph cannot execute: {e}")
 
-        comparison = compare_results(actual, expected)
+        from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner import is_reduced
+        comparison = compare_results(actual, expected, reduced=is_reduced(sparql))
         if not comparison.match:
             pytest.fail(
                 f"Result mismatch: {comparison.message} "

@@ -256,6 +256,7 @@ def _parse_srj(path: Path) -> Optional[SparqlResults]:
 
 
 _RS = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#"
+_RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 
 
 def _rs_term(store, node) -> Optional["SparqlBinding"]:
@@ -303,6 +304,13 @@ def _parse_rs_result_set(store) -> Optional[SparqlResults]:
         return SparqlResults(variables=[], rows=[], is_boolean=True,
                              boolean_value=str(v.value).lower() == "true")
     if not rs_set and not solutions:
+        # `[] rdf:type rs:ResultSet .` alone is a result set with no variables
+        # and no solutions (`graph-not-exist`), not a one-triple graph, which is
+        # how it was read (`issues/280`).
+        typed = list(store.quads_for_pattern(
+            None, pyoxigraph.NamedNode(_RDF_TYPE), pyoxigraph.NamedNode(f"{_RS}ResultSet"), None))
+        if typed:
+            return SparqlResults(variables=[], rows=[])
         return None                      # not a result set; treat as a graph
 
     variables = [q.object.value for q in rs_set]
@@ -378,7 +386,10 @@ def _parse_ttl_graph(path: Path) -> Optional[SparqlResults]:
         elif isinstance(o, pyoxigraph.BlankNode):
             triple["object"] = SparqlBinding(type="bnode", value=o.value)
         elif isinstance(o, pyoxigraph.Literal):
-            dt = str(o.datatype) if o.datatype else None
+            # `.value`, not str(): str() of a NamedNode is its N-Triples form
+            # `<iri>`, so the xsd:string check below never matched and every
+            # datatype arrived in brackets (`issues/280`).
+            dt = o.datatype.value if o.datatype else None
             if dt == _XSD_STRING:
                 dt = None
             triple["object"] = SparqlBinding(
@@ -480,7 +491,10 @@ def _store_to_graph_results(store) -> SparqlResults:
         elif isinstance(o, pyoxigraph.BlankNode):
             triple["object"] = SparqlBinding(type="bnode", value=o.value)
         elif isinstance(o, pyoxigraph.Literal):
-            dt = str(o.datatype) if o.datatype else None
+            # `.value`, not str(): str() of a NamedNode is its N-Triples form
+            # `<iri>`, so the xsd:string check below never matched and every
+            # datatype arrived in brackets (`issues/280`).
+            dt = o.datatype.value if o.datatype else None
             if dt == _XSD_STRING:
                 dt = None
             triple["object"] = SparqlBinding(

@@ -133,7 +133,19 @@ shares. 10 are artefacts of our comparator or result parser.
 
 Order of work:
 
-1. Fix the three artefacts in the comparator and parser (10 cases).
+1. ~~Fix the three artefacts in the comparator and parser (10 cases).~~ DONE
+   2026-10-19:
+   * `dawg_srx_parser`: graph results take the datatype's `.value`, not
+     `str()` (which is `<iri>`), so `xsd:string` folds into the plain literal
+     and no datatype keeps its brackets. A bare `rs:ResultSet` parses as an
+     empty result set, not a graph.
+   * `dawg_result_comparator.compare_results(..., reduced=True)`: the same
+     distinct rows, none more often than in the full result. The runner sends
+     a REDUCED query straight to the `.srx` with it, since two REDUCED answers
+     can differ and both be right. The oracle baseline passes it too.
+   * Verified: compared directly with the `.srx`, the 10 now match and the 15
+     engine bugs still do not. All four DAWG suites pass. 7 unit tests in
+     `tests/unit/sparql_sql/test_dawg_result_parsers.py` fail on the old code.
 2. Fix the engine bugs one group at a time: boolean lexical form (6), zero-length
    constant (4), `GRAPH ?g` scoping (5).
 3. Then land the runner check. Any case still failing at that point is
