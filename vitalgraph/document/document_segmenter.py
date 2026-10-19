@@ -183,21 +183,42 @@ class DocumentSegmenter:
                     self._effective_max_tokens(config.max_segment_tokens),
                     config.overlap_tokens,
                 )
+                max_tokens = self._effective_max_tokens(config.max_segment_tokens)
                 for chunk in sub_chunks:
                     chunk_tokens = self._tokenizer(chunk)
-                    if chunk_tokens >= config.min_segment_tokens:
-                        # Calculate approximate char offset within section
-                        chunk_start = section["start"] + section_text.find(chunk)
-                        results.append(SegmentResult(
-                            content=chunk,
-                            segment_index=segment_index,
-                            start_char_offset=chunk_start,
-                            end_char_offset=chunk_start + len(chunk),
-                            token_length=chunk_tokens,
-                            segment_type_uri="urn:segtype:paragraph",
-                            heading=section_heading,
-                        ))
-                        segment_index += 1
+                    # Calculate approximate char offset within section
+                    chunk_start = section["start"] + section_text.find(chunk)
+                    if chunk_tokens < config.min_segment_tokens and results:
+                        # A short remainder is MERGED, never dropped. This
+                        # branch used to skip it, so the tail of every
+                        # oversized section under the minimum vanished from
+                        # the segments -- and from search -- with no trace
+                        # (issues/287). Merged only while the result still
+                        # fits the embedding limit; otherwise it stands alone.
+                        prev = results[-1]
+                        merged_content = prev.content + "\n\n" + chunk
+                        merged_tokens = self._tokenizer(merged_content)
+                        if merged_tokens <= max_tokens:
+                            results[-1] = SegmentResult(
+                                content=merged_content,
+                                segment_index=prev.segment_index,
+                                start_char_offset=prev.start_char_offset,
+                                end_char_offset=chunk_start + len(chunk),
+                                token_length=merged_tokens,
+                                segment_type_uri=prev.segment_type_uri,
+                                heading=prev.heading,
+                            )
+                            continue
+                    results.append(SegmentResult(
+                        content=chunk,
+                        segment_index=segment_index,
+                        start_char_offset=chunk_start,
+                        end_char_offset=chunk_start + len(chunk),
+                        token_length=chunk_tokens,
+                        segment_type_uri="urn:segtype:paragraph",
+                        heading=section_heading,
+                    ))
+                    segment_index += 1
 
         # Re-index to ensure contiguous 1-based indexing
         for i, result in enumerate(results):

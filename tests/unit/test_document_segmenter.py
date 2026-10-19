@@ -4,9 +4,6 @@ Test script for document segmenter.
 Verifies both markdown and plain text splitting strategies.
 """
 
-import sys
-sys.path.insert(0, "/Users/hadfield/Local/vital-git/vital-graph")
-
 from vitalgraph.document.document_segmenter import DocumentSegmenter, SegmentResult, detect_is_markdown
 from vitalgraph.document.segment_config import MarkdownSegmentConfig, PlainSplitConfig
 
@@ -184,38 +181,25 @@ def test_empty_and_edge_cases():
     print("✅ test_empty_and_edge_cases passed")
 
 
-def main():
-    print("=" * 60)
-    print("Document Segmenter Tests")
-    print("=" * 60)
+def test_an_oversized_sections_short_tail_is_kept():
+    """issues/287: the tail of an oversized section below the minimum was
+    DROPPED from the segments, so its text was unsearchable.
 
-    tests = [
-        test_detect_markdown,
-        test_markdown_splitting,
-        test_plain_splitting,
-        test_auto_detection,
-        test_overlap,
-        test_custom_tokenizer,
-        test_empty_and_edge_cases,
-    ]
+    One section, far over the limit, whose recursive split leaves a short
+    final paragraph. Every word must survive into some segment.
+    """
+    words = lambda n, tag: " ".join(f"{tag}{i}" for i in range(n))
+    tail = "TAILMARKER ends the section here"
+    text = ("# Only section\n\n"
+            + "\n\n".join(words(48, f"p{j}w") for j in range(6))
+            + "\n\n" + tail + "\n\n# Next\n\n" + words(60, "n"))
+    config = MarkdownSegmentConfig(max_segment_tokens=50, min_segment_tokens=20)
+    results = DocumentSegmenter().segment(text, config)
 
-    passed = 0
-    failed = 0
-    for test in tests:
-        try:
-            test()
-            passed += 1
-        except Exception as e:
-            print(f"❌ {test.__name__} FAILED: {e}")
-            import traceback
-            traceback.print_exc()
-            failed += 1
-
-    print("\n" + "=" * 60)
-    print(f"Results: {passed} passed, {failed} failed")
-    print("=" * 60)
-    return 0 if failed == 0 else 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    joined = "\n".join(r.content for r in results)
+    assert "TAILMARKER" in joined, (
+        "the short remainder of an oversized section was dropped")
+    for r in results:
+        assert r.token_length <= 50, (
+            f"a merge pushed segment {r.segment_index} to {r.token_length} "
+            f"tokens, over the limit")

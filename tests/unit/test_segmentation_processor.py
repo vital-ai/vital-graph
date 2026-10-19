@@ -4,9 +4,6 @@ Test script for KGDocument Segmentation Processor.
 Verifies the three-tier model output (parent copy + segments + edges).
 """
 
-import sys
-sys.path.insert(0, "/Users/hadfield/Local/vital-git/vital-graph")
-
 from vitalgraph.document.kgdocument_segmentation_processor import (
     KGDocumentSegmentationProcessor,
     SegmentationOutput,
@@ -230,41 +227,3 @@ def test_multi_method_coexistence():
     print(f"  MD parent: {md_output.parent_copy_properties['URI']}")
     print(f"  Plain parent: {plain_output.parent_copy_properties['URI']}")
     print("✅ test_multi_method_coexistence passed")
-
-
-def main():
-    print("=" * 60)
-    print("KGDocument Segmentation Processor Tests")
-    print("=" * 60)
-
-    tests = [
-        test_extract_content_priority,
-        test_strip_html,
-        test_build_parent_copy_summary,
-        test_processor_markdown,
-        test_processor_plain,
-        test_processor_auto_detect,
-        test_processor_no_content,
-        test_multi_method_coexistence,
-    ]
-
-    passed = 0
-    failed = 0
-    for test in tests:
-        try:
-            test()
-            passed += 1
-        except Exception as e:
-            print(f"❌ {test.__name__} FAILED: {e}")
-            import traceback
-            traceback.print_exc()
-            failed += 1
-
-    print("\n" + "=" * 60)
-    print(f"Results: {passed} passed, {failed} failed")
-    print("=" * 60)
-    return 0 if failed == 0 else 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
