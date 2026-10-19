@@ -61,6 +61,7 @@ the commit.
 * **The next image build will pull FastAPI ≥ 0.147**, so the next release must
   carry this fix or uploads lose their originals. It is on `main` with the
   other fixes since v0.0.90.
-* Not done: whether to pin FastAPI as pyoxigraph now is (`issues/280`).
-  0.147 changed a form default with no deprecation; pinning would turn such
-  changes into Dependabot PRs.
+* **FastAPI pinned** (decided 2026-10-19): `fastapi[standard]==0.147.0` in the
+  `server` extra and `fastapi==0.147.0` in the light test extra. 0.147.0 is
+  the version the test stack ran the full API suite on. 0.148.0 and 0.149.0
+  were released the same day. Upgrades come as Dependabot PRs.

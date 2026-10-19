@@ -160,3 +160,13 @@ Tests: `test_the_whole_entity_write_naming_an_absent_child_is_refused` and
 `…_with_a_slot_and_no_edge_is_refused` (create / upsert / update each), and
 `tests/unit/test_entity_validator_requires_slot_edges.py` (3). Before the fix,
 update accepted the absent child.
+
+## The client's part — done
+
+* The client fixed its frame builder and repaired the 4,704 missing child frames
+  in the UW space, on the client side (reported 2026-10-19). The repair was a
+  production data change made with its own authorisation.
+* Production logs, 2026-10-19 (UTC), dangling sources / destinations on the UW
+  space: 13,518 / 4,411 at 04:21; 508 / 167 at 13:21 (repair); rising to
+  1,200 / 399 by 14:04 (new orphans still being written); 214 / 68 at 14:24;
+  **no warning since**, so the probe finds none.

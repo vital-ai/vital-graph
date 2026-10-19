@@ -75,11 +75,14 @@ client = [
 # Server installation - full database and API capabilities
 server = [
     "vital-graph[heavy]",
-    # 0.143.0: the version the image resolves and the test stack runs, so a
-    # local env cannot sit 30 minor versions behind what is deployed (it was at
-    # 0.112). No `models` extra: FastAPI has never defined one; pip warned and
-    # ignored it on every install.
-    "fastapi[standard]>=0.143.0",
+    # PINNED (issues/281). 0.147.0 (2026-10-19) changed an OMITTED bool form
+    # field to read as False whatever its default, with no deprecation, and CI
+    # and the image picked it up overnight: uploads silently stopped keeping
+    # their originals. Three releases landed that day. Upgrades come as a
+    # Dependabot PR and are judged by that PR's E2E run. Pinned to 0.147.0, the
+    # version the test stack ran the full API suite on.
+    # No `models` extra: FastAPI has never defined one.
+    "fastapi[standard]==0.147.0",
     "uvicorn",
     "SQLAlchemy[asyncio]>=2.0.23",
     "psycopg[binary,pool]>=3.1.13",
@@ -161,7 +164,7 @@ dev = [
     # These are the light half of the `server` extra — deliberately NOT the whole
     # extra, which drags in torch via `heavy`, psycopg and SQLAlchemy.
     "asyncpg>=0.29.0",
-    "fastapi>=0.143.0",     # same floor as `server`
+    "fastapi==0.147.0",     # same pin as `server` (issues/281)
     "PyJWT>=2.8.0",
     #   tests/unit/test_client_retry.py -> client.vitalgraph_client -> httpx,
     #       and transitively endpoint.files_endpoint  -> aiohttp
