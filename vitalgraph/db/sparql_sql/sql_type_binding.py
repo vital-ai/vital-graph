@@ -274,12 +274,13 @@ def _binding_from_companions(
     lang = term_lang if term_lang else None
     datatype = term_datatype if term_datatype else None
 
-    # Normalize xsd:boolean canonical forms: "0"→"false", "1"→"true"
-    if datatype == XSD_BOOLEAN:
-        if val_str == "0":
-            val_str = "false"
-        elif val_str == "1":
-            val_str = "true"
+    # A STORED xsd:boolean keeps its own lexical form (`issues/280`). This
+    # rewrote "0"→"false" and "1"→"true" for every boolean it rendered, so
+    # `"0"^^xsd:boolean` read back as a different term: a literal's identity
+    # includes its lexical form. A COMPUTED boolean is already canonical — the
+    # SQL produces `true`/`false` (xsd:boolean("0") is "false") — so nothing
+    # relied on the rewrite. Production stores only `true`/`false` (checked
+    # 2026-10-19), so no answer there changes.
 
     # RDF 1.1: xsd:string is the default, strip it for comparison
     if datatype == XSD_STRING:

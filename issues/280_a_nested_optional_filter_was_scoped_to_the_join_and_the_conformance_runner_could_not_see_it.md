@@ -146,8 +146,16 @@ Order of work:
    * Verified: compared directly with the `.srx`, the 10 now match and the 15
      engine bugs still do not. All four DAWG suites pass. 7 unit tests in
      `tests/unit/sparql_sql/test_dawg_result_parsers.py` fail on the old code.
-2. Fix the engine bugs one group at a time: boolean lexical form (6), zero-length
-   constant (4), `GRAPH ?g` scoping (5).
+2. Fix the engine bugs one group at a time:
+   * ~~boolean lexical form (6)~~ DONE 2026-10-19. `sql_type_binding._binding_from_companions`
+     rewrote every xsd:boolean `"0"`/`"1"` to `"false"`/`"true"` on output. The
+     rewrite is removed. Computed booleans are canonical from the SQL already
+     (the `cast/*` cases' computed column still matches). The 6 cases now match
+     their `.srx`, and all four DAWG suites, the unit suite and the integration
+     suite pass. Production stores only `true`/`false` in all 11 spaces (read-only
+     check), so nothing there changes. `tests/unit/sparql_sql/test_stored_boolean_keeps_its_lexical_form.py`.
+   * zero-length constant (4);
+   * `GRAPH ?g` scoping (5).
 3. Then land the runner check. Any case still failing at that point is
    recorded individually with its reason.
 
