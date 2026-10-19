@@ -39,8 +39,14 @@ def _code_lines(src: str):
 
 
 def test_the_search_text_is_built_from_the_resolved_rule():
+    """From the rule AND the type description (`issues/282`): built from the
+    rule alone, a `type_description` mapping produced "" and its vectors were
+    deleted."""
+    import re
     code = _code_lines(_vector_sync_source())
-    assert "build_search_text(props, rule)" in code
+    assert re.search(r"build_search_text\(\s*props[^,]*,\s*rule,\s*type_description=", code), (
+        "auto-sync must build each subject's text from its resolved rule and "
+        "its type description, as the populator does")
 
 
 def test_no_unscoped_build_remains():

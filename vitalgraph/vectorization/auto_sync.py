@@ -78,6 +78,7 @@ async def _sync_vectors_for_subjects(
         resolve_search_mapping,
     )
     from vitalgraph.vectorization.registry import get_provider
+    from vitalgraph.vectorization.kgtype_description_lookup import KGTypeDescriptionLookup
 
     # Discover all vector indexes for this space
     try:
@@ -145,6 +146,7 @@ async def _sync_vectors_for_subjects(
         to_embed: List[tuple] = []  # (subj_uuid, search_text)
         to_delete: List[uuid.UUID] = []
 
+        rules: Dict[str, object] = {}
         for subj_uuid in subject_uuids:
             # str() on BOTH sides — asyncpg returns uuid.UUID keys and callers
             # may hold either form. A type mismatch here does not raise, it
@@ -161,11 +163,49 @@ async def _sync_vectors_for_subjects(
                 # defect wrote, rather than only stopping new damage.
                 to_delete.append(subj_uuid)
                 continue
+            rules[str(subj_uuid)] = (subj_uuid, rule, mapping_type)
+
+        # THE TYPE DESCRIPTION, for the rules that are built from it
+        # (`issues/282`). This built every subject's text from its properties
+        # alone, where the populator also resolves the description of the
+        # subject's KGType. A `type_description` rule then produced "" and the
+        # subject's vector was DELETED — on every entity write, and by the
+        # cross-space sync whose whole job is to refresh those vectors after a
+        # type changes — and a `properties_type` rule was embedded without its
+        # type part. Batched as the populator batches it: one lookup of the
+        # subjects' type URIs and one of the descriptions, per mapping type.
+        type_desc: Dict[str, str] = {}
+        needing: Dict[str, list] = {}
+        for _k, (subj_uuid, rule, mapping_type) in rules.items():
+            if rule.source_type in ("type_description", "properties_type"):
+                needing.setdefault(mapping_type or "kgentity", []).append(subj_uuid)
+        for mapping_type, uuids in needing.items():
+            lookup = KGTypeDescriptionLookup(mapping_type)
+            subj_types = await lookup.get_subject_type_uris_batch(
+                conn, space_id, uuids, context_uuid)
+            if not subj_types:
+                continue
+            descs = await lookup.get_descriptions_batch(
+                conn, list(set(subj_types.values())))
+            for su, type_uri in subj_types.items():
+                d = descs.get(type_uri)
+                if d:
+                    type_desc[str(su)] = d
+
+        for _k, (subj_uuid, rule, _mt) in rules.items():
+            desc = type_desc.get(str(subj_uuid))
             props = props_by_subject.get(subj_uuid)
-            if not props:
+            if rule.source_type == "type_description":
+                # Built from the type alone, as the populator does: no
+                # description is no text, and the subject's own properties do
+                # not matter.
+                if not desc:
+                    to_delete.append(subj_uuid)
+                    continue
+            elif not props:
                 to_delete.append(subj_uuid)
                 continue
-            text = build_search_text(props, rule)
+            text = build_search_text(props or [], rule, type_description=desc)
             if not text.strip():
                 to_delete.append(subj_uuid)
                 continue

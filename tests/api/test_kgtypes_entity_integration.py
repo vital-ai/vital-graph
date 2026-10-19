@@ -321,3 +321,38 @@ class TestKGTypeEntityIntegration:
             assert person_idx < pizza_idx, (
                 f"Pizza (idx={pizza_idx}) should NOT rank above Person (idx={person_idx}) for 'man'"
             )
+
+
+class TestTypeDescriptionVectorsSurviveSync:
+    """A type-description vector survives the syncs that should refresh it — issues/282.
+
+    Auto-sync built a subject's text from its properties alone, never resolving
+    the type description the populator uses, so for a `type_description`
+    mapping the text was "" and the vector was DELETED. Two triggers: the
+    cross-space sync after a KGType is created or changed (it raced this
+    module's own fixture, which is why the tests above passed some runs and
+    lost every vector on others), and any write of the entity itself.
+    """
+
+    async def _count(self, vg_client, env, subject_uri=None):
+        kw = dict(space_id=env["space_id"], index_name=env["index_name"])
+        kw.update(subject_uri=subject_uri) if subject_uri else kw.update(graph_uri=env["graph_id"])
+        return (await vg_client.vector_indexes.get_vectors(**kw)).total_count
+
+    async def test_the_cross_space_sync_leaves_every_vector(self, vg_client, type_entity_env):
+        # Long enough for the sync scheduled by the fixture's type creation to
+        # have run (it lands ~0.5 s after the reindex on the vg test stack).
+        await asyncio.sleep(5)
+        assert await self._count(vg_client, type_entity_env) >= 4
+
+    async def test_an_entity_write_keeps_its_vector(self, vg_client, type_entity_env):
+        env = type_entity_env
+        acme = env["acme"]
+        acme.name = "Acme Corporation"
+        r = await vg_client.kgentities.update_kgentities(
+            space_id=env["space_id"], graph_id=env["graph_id"], objects=[acme])
+        assert r.is_success, r.message
+        for _ in range(10):                     # the write's auto-sync is async
+            await asyncio.sleep(1.0)
+        assert await self._count(vg_client, env, str(acme.URI)) == 1, (
+            "the entity's type-description vector was deleted by its own write")
