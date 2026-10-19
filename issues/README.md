@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-192 there, 85 live. An issue is archived only when nothing remains to do:
+192 there, 86 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -138,6 +138,7 @@ Reproduce and measure LOCALLY; dev and vg hold spaces at or above prod scale.
 | **276** | FIXED IN CODE 2026-10-17 (not yet released) | **After a database failover each task stopped hearing the other and served stale cached reads.** The LISTEN loop slept forever without checking its connection; the 2026-10-17 RDS failover killed it silently, so from 17:12 UTC notices received went to 0 while notices sent continued, and each task served cached reads of the other's writes. Fixed: the listener probes its connection, reconnects and re-subscribes, and clears the caches the lost notices kept in step. Production needs a restart until released |
 | **277** | FIXED IN CODE 2026-10-17 (not yet released) | **The slot-sort shortfall alarm counted drift and empty slots as missing rows.** During a mass delete of entity graphs the maintenance job logged a SUSPECTED SHORTFALL and an ERROR recommending `resync_all_auxiliary_tables` every cycle. Nothing was missing: its two counts were separate statements and drifted (3,368 vs 3,339; one snapshot: 3,339 = 3,339), the repair batch filled with valueless slots, and the ERROR named a cause it never measured. Fixed: one-statement counts, entity slots (URIs, possibly cross-space) counted as correctly absent, the repair selects only valued slots, the message says what was measured. No production repair needed |
 | **278** | OPEN; diagnostic added 2026-10-19 (not yet released) | **Gen-2 GC pauses tripled after the 2026-10-17 releases.** Production's once-a-minute gen-2 collection went from ~160 ms (Oct 12-16) to ~500 ms (Oct 18-19), collecting a few dozen objects each time. Every task boots near 140 ms, climbs for ~6 h and levels off — a bounded structure filling, not a leak. Starts with v0.0.88 and with the cleanup/backfill traffic the same evening; not yet separated. Diagnostic: an opt-in single-runner heap census (`VG_HEAP_CENSUS_INTERVAL_S`) logging tracked objects by type and the largest holders by attribute path, frozen caches included |
+| **279** | OPEN | **The frame write routes accept edges and slots naming a frame that does not exist.** `POST /kgentities/kgframes` (create and upsert) and `POST /kgframes` write a request whose `Edge_hasKGFrame`/`Edge_hasKGSlot` name a frame neither sent nor stored; only the whole-entity create checks endpoints, and only against the request. Production: a client builder dropped the child `KGFrame`s of decision explanations, and 4,704 unreachable subtrees accumulated in the UW space over five days, visible only to the dangling-endpoint probe. `issues/212` saw the same gap and never opened it. Fix: refuse unreachable endpoints (request, then an in-transaction precheck against the store), one shared rule for both routes. Repro: three strict-xfail API tests. Also: the success message counts every URI as a "frame" |
 
 Cross-listed in **Other**: `230` (the ANALYZE pile-up — fixed; `236` is the
 frequency behind it), `231` (where background work RUNS — the INTERNAL pool
