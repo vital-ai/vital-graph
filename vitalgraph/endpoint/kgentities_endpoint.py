@@ -1114,6 +1114,22 @@ class KGEntitiesEndpoint:
                     message="No entity URIs found in update data",
                     updated_uri=""
                 )
+
+            # THE SAME STRUCTURE RULE AS CREATE AND UPSERT (`issues/279`). An
+            # update replaces the entity's whole graph with the request, so the
+            # graph after it is exactly what was sent, and an edge or slot the
+            # request does not close over is left pointing at nothing. Create
+            # and upsert refused that through `KGEntityValidator`; update never
+            # called it, and accepted a child frame's slots and edges without
+            # the child frame.
+            from ..kg_impl.kg_validation_utils import KGEntityValidator
+            _structure = KGEntityValidator().validate_entity_structure(updated_objects)
+            if not _structure.valid:
+                return EntityUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=f"Entity validation failed: {'; '.join(_structure.errors)}",
+                    updated_uri=""
+                )
             
             # Combined existence check + property fetch + stamp (T3, Decision 4)
             from datetime import datetime, timezone

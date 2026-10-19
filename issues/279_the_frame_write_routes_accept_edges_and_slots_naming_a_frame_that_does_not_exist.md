@@ -131,18 +131,32 @@ The first four tests fail on the previous code. `tests/unit/test_frame_reachabil
 (7) covers the request analysis. The full API suite passes against the rebuilt
 stack.
 
-## Not covered
+## The whole-entity routes (added 2026-10-19)
 
-* The whole-entity UPDATE path (`validate_entity_graph_structure`) checks
-  entity → frame and frame → slot edges against the request, but not
-  frame → frame `Edge_hasKGFrame`. Not probed yet.
+`POST /kgentities` refused the production shape on create and upsert
+(`KGEntityValidator`: every edge endpoint must be in the request) and
+**accepted it on update**. Update runs `_handle_update_mode` /
+`KGEntityUpdateProcessor`, which checked no edges at all. The
+`validate_entity_graph_structure` previously named here is in
+`kg/kgentity_update_endpoint_impl.py`, which nothing calls.
 
-## Not VitalGraph's
+For a whole-entity write, a check of the request alone is complete. Create,
+upsert and update all replace the entity's graph with the request
+(`update_entity_graph` deletes every subject whose `hasKGGraphURI` is the
+entity, then inserts). So the graph after the write is exactly what was sent,
+and every structural edge links members of that one graph. "Every endpoint is
+in the request" is the same as "every endpoint exists afterwards". That covers
+the missing child and an edge to something the write removes, with no database
+access. The frame routes need the post-write check because they write part of
+a graph.
 
-* The client's builder fix and the repair of the 4,704 missing child frames.
-  Both are in the client team's issue. The repair is a production data change
-  that needs its own authorisation, and it has to come before (or together with)
-  the client fix, because a regeneration would otherwise replace the earlier
-  generations with their empty read-back.
-* The dangling-endpoint WARNING keeps firing until that repair, and should be
-  checked again after it.
+Fixed:
+
+* Update runs the same `KGEntityValidator` as create and upsert.
+* The validator also requires every slot in the request to be the
+  destination of an `Edge_hasKGSlot` in the request, in all three modes.
+
+Tests: `test_the_whole_entity_write_naming_an_absent_child_is_refused` and
+`…_with_a_slot_and_no_edge_is_refused` (create / upsert / update each), and
+`tests/unit/test_entity_validator_requires_slot_edges.py` (3). Before the fix,
+update accepted the absent child.

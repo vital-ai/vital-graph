@@ -221,3 +221,57 @@ async def test_an_upsert_re_sending_its_slots_and_edges_is_written(
     assert r.is_success, _reply_text(r)
     assert "1 frame(s)" in _reply_text(r), (
         f"the message must count frames, not every URI: {_reply_text(r)!r}")
+
+
+@pytest.mark.parametrize("mode", ["create", "upsert", "update"])
+async def test_the_whole_entity_write_naming_an_absent_child_is_refused(
+        vg_client, test_space, test_graph, mode):
+    """`POST /kgentities` in every mode, with the entity and its frames together.
+    For update and upsert the entity exists first, as a caller rewriting it would."""
+    from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
+    ent = KGEntity()
+    ent.URI = f"{NS}entity_{_uid()}"
+    ent.name = "host"
+    if mode != "create":
+        r0 = await vg_client.kgentities.create_kgentities(
+            space_id=test_space, graph_id=test_graph, objects=[ent])
+        assert r0.is_success, _reply_text(r0)
+    parent_uri, child_uri, c_slot_uri, objs = _parent_with_absent_child()
+    objs = [ent, _edge(Edge_hasEntityKGFrame, str(ent.URI), parent_uri)] + objs
+
+    write = {"create": vg_client.kgentities.create_kgentities,
+             "upsert": vg_client.kgentities.upsert_kgentities,
+             "update": vg_client.kgentities.update_kgentities}[mode]
+    r = await write(space_id=test_space, graph_id=test_graph, objects=objs)
+
+    assert not r.is_success, (
+        f"{mode}: an entity graph naming a frame it never sends was ACCEPTED: {_reply_text(r)}")
+    assert child_uri in _reply_text(r), _reply_text(r)
+    assert not await _stored(vg_client, test_space, test_graph, [parent_uri, c_slot_uri]), (
+        f"{mode}: part of a refused write was stored")
+
+
+@pytest.mark.parametrize("mode", ["create", "upsert", "update"])
+async def test_the_whole_entity_write_with_a_slot_and_no_edge_is_refused(
+        vg_client, test_space, test_graph, mode):
+    from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
+    ent = KGEntity()
+    ent.URI = f"{NS}entity_{_uid()}"
+    ent.name = "host"
+    if mode != "create":
+        r0 = await vg_client.kgentities.create_kgentities(
+            space_id=test_space, graph_id=test_graph, objects=[ent])
+        assert r0.is_success, _reply_text(r0)
+    f = KGFrame()
+    f.URI = f"{NS}frame_{_uid()}"
+    loose = _slot(f"{f.URI}:slot:loose", "no edge")
+    objs = [ent, _edge(Edge_hasEntityKGFrame, str(ent.URI), str(f.URI)), f, loose]
+
+    write = {"create": vg_client.kgentities.create_kgentities,
+             "upsert": vg_client.kgentities.upsert_kgentities,
+             "update": vg_client.kgentities.update_kgentities}[mode]
+    r = await write(space_id=test_space, graph_id=test_graph, objects=objs)
+
+    assert not r.is_success, f"{mode}: a slot with no Edge_hasKGSlot was ACCEPTED"
+    assert str(loose.URI) in _reply_text(r), _reply_text(r)
+    assert not await _stored(vg_client, test_space, test_graph, [str(f.URI), str(loose.URI)])

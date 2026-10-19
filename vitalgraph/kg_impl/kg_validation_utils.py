@@ -15,6 +15,7 @@ from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGSlot import KGSlot
+from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from .frame_grouping import assign_frame_groupings
 
 
@@ -246,7 +247,16 @@ class KGEntityValidator:
             
             if dest_uri not in all_uris:
                 errors.append(f"Edge destination not found in objects: {dest_uri}")
-        
+
+        # EVERY SLOT HAS ITS EDGE (`issues/279`). A whole-entity write replaces
+        # the entity's graph with the request, so a slot no Edge_hasKGSlot in
+        # the request reaches is unreachable once it commits — there is nothing
+        # stored left to hold it.
+        edged = {str(e.edgeDestination) for e in edges
+                 if isinstance(e, Edge_hasKGSlot) and e.edgeDestination}
+        for uri in sorted(slot_uris - edged):
+            errors.append(f"Slot has no Edge_hasKGSlot in objects: {uri}")
+
         return errors
     
     def _check_orphaned_objects(self, objects: List[GraphObject]) -> List[str]:

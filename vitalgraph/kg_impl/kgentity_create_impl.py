@@ -110,7 +110,9 @@ class KGEntityCreateProcessor:
             if not validation_result.valid:
                 error_msg = f"Entity validation failed: {'; '.join(validation_result.errors)}"
                 self.logger.error(f"❌ Validation failed: {error_msg}")
-                return self._create_error_response(operation_mode, error_msg)
+                # A malformed request, not a failure: the caller's to fix.
+                return self._create_error_response(
+                    operation_mode, error_msg, status=OperationStatus.INVALID_REQUEST)
             
             # Step 4: Set dual grouping URIs
             # When multiple independent entities are in a batch, each entity
@@ -463,18 +465,23 @@ class KGEntityCreateProcessor:
             raise
     
     
-    def _create_error_response(self, operation_mode: OperationMode, message: str) -> Union[EntityCreateResponse, EntityUpdateResponse]:
-        """Create appropriate error response based on operation mode."""
+    def _create_error_response(self, operation_mode: OperationMode, message: str,
+                               status: OperationStatus = OperationStatus.ERROR
+                               ) -> Union[EntityCreateResponse, EntityUpdateResponse]:
+        """Create appropriate error response based on operation mode.
+
+        `status` is ERROR for a failure, INVALID_REQUEST for a request the
+        contract refuses (`issues/279`)."""
         if operation_mode == OperationMode.CREATE:
             return EntityCreateResponse(
-                status=OperationStatus.ERROR,
+                status=status,
                 message=message,
                 created_count=0,
                 created_uris=[]
             )
         else:  # UPDATE or UPSERT
             return EntityUpdateResponse(
-                status=OperationStatus.ERROR,
+                status=status,
                 message=message,
                 updated_uri=""
             )
