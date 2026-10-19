@@ -114,5 +114,32 @@ artefacts rather than engine bugs:
 
 Each of them can hide a bug the way 005 did. Taken out of this fix rather than
 landing as 25 xfails at once, which would bury the signal the file is careful
-to protect. Next: triage by family, fix or record each case with its own
-reason, then land the runner check.
+to protect. 
+### Triage, 2026-10-19
+
+Each case was dumped with the query, the `.srx`, pyoxigraph's rows and ours.
+The dump is a throwaway pytest in `tests/conformance` that reuses the
+runner's loader and comparator. 15 are real engine bugs that pyoxigraph
+shares. 10 are artefacts of our comparator or result parser.
+
+| group | cases | verdict | detail |
+|---|---|---|---|
+| zero-length path to a constant on the empty dataset | 4 (`*`/`?`, start/end) | **ENGINE BUG** | `?s :p* :o` must return `?s = :o` even when `:o` is in no triple (SPARQL 1.1 ZeroLengthPath with a constant endpoint). We return nothing. |
+| `GRAPH ?g { P }` evaluates P with `?g` already bound | 5 (`graph-variable-scope`, `graph-optional`, VALUES / MINUS / `COUNT` inside GRAPH) | **ENGINE BUG** | SPARQL 1.1 evaluates P in each named graph without `?g`, then joins `?g`. Hence `FILTER(BOUND(?g))` inside is false (expected 0 rows, we return 2), an inner binding of `?g` must agree with the graph name, and `count(*)` gives 0 for a graph with no matches. |
+| a stored `xsd:boolean` is returned in canonical form | 6 (every `cast/*`) | **ENGINE BUG** | `"0"^^xsd:boolean` is stored as `0` and read back as `false`. A literal's identity includes its lexical form. The term table is right, so the read side canonicalises. |
+| graph results: datatype IRI in `<>` from the result parser; `xsd:string` vs plain literal | 7 (5 CONSTRUCT, `sq12`, `sq14`) | ARTEFACT | The `.srx`/`.ttl` graph parser keeps angle brackets (`'<…#integer>'` against `'…#integer'`), and RDF 1.1 makes `"x"^^xsd:string` and `"x"` the same literal. With both normalised, the graphs are isomorphic. |
+| REDUCED | 2 | ARTEFACT | REDUCED may return any multiplicity between DISTINCT and ALL. A strict multiset comparison is wrong. |
+| `graph-not-exist` | 1 | ARTEFACT | A Turtle result set with no variables and no solutions is parsed as a one-triple graph, so the comparison is triples against rows. Both engines correctly return nothing. |
+
+Order of work:
+
+1. Fix the three artefacts in the comparator and parser (10 cases).
+2. Fix the engine bugs one group at a time: boolean lexical form (6), zero-length
+   constant (4), `GRAPH ?g` scoping (5).
+3. Then land the runner check. Any case still failing at that point is
+   recorded individually with its reason.
+
+Production relevance, roughly: `GRAPH ?g` patterns with inner FILTER /
+OPTIONAL / VALUES / aggregates on `?g` are unusual in VitalGraph's generated
+queries. Zero-length paths against an absent constant are rare. Booleans
+written as `0`/`1` are rare (VitalSigns writes `true`/`false`).
