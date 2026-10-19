@@ -39,7 +39,12 @@ dependencies = [
     "rdflib>=7.0.0",
     "PyLD>=2.0.0",
     "six>=1.7.0",
-    "pyoxigraph>=0.4.11",
+    # PINNED (issues/280). pyoxigraph is the conformance suite's oracle, so a
+    # release that changes its answers changes our test results with no change
+    # in this repo: 0.5.12 (2026-10-18) fixed its nested OPTIONAL FILTER
+    # scoping and turned E2E red overnight. Upgrades come as a Dependabot PR
+    # and are judged by the DAWG run on that PR.
+    "pyoxigraph==0.5.12",
     "openai>=1.0.0",
     "minio>=7.0.0",
 ]

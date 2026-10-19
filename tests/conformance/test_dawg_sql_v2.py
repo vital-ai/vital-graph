@@ -225,8 +225,6 @@ XFAIL_TESTS_V2 = {
         "pyoxigraph differs from the .srx; we match it",
     ("sparql10/expr-equals", "Equality 1-2 -- graph"):
         "pyoxigraph differs from the .srx; we match it",
-    ("sparql10/optional-filter", "dawg-optional-filter-005-not-simplified"):
-        "pyoxigraph differs from the .srx on a computed numeric's lexical form",
     # sparql10/graph, wired 2026-08-24. The ORACLE half: pyoxigraph disagrees
     # with these three .srx expectations. `graph-optional` is oracle-only --
     # our backend matches the corpus on it.
@@ -381,6 +379,21 @@ XFAIL_SQL_V2_EXEC: dict = {
 # no case anywhere in the suite where our backend goes unmeasured.
 XFAIL_SQL_V2_ACCEPTED: dict = {}
 
+# Not tests at all: the manifest lists its tests in `mf:entries`, and these are
+# COMMENTED OUT of it, but the collector picks up every QueryEvaluationTest
+# block it finds. Skipped, by name, with the reason.
+#
+# `-simplified` is the pre-1.1 reading of `OPTIONAL { { P FILTER F } }` and
+# contradicts the approved `-not-simplified` on the same query and data, so no
+# engine can pass both. Both of ours passed until 2026-10-19 only because each
+# was compared to pyoxigraph, which had the same bug, and never to its .srx
+# (`issues/280`).
+UNAPPROVED_TESTS = {
+    ("sparql10/optional-filter", "dawg-optional-filter-005-simplified"):
+        "commented out of the manifest's mf:entries: the unapproved pre-1.1 "
+        "scoping, contradicting the approved -not-simplified",
+}
+
 
 # ---------------------------------------------------------------------------
 # Test collection
@@ -444,6 +457,8 @@ class TestDAWGSqlV2:
         SQL pipeline is wrong.
         """
         key = (tc.category, tc.name)
+        if key in UNAPPROVED_TESTS:
+            pytest.skip(UNAPPROVED_TESTS[key])
         if key in XFAIL_TESTS_V2:
             pytest.xfail(XFAIL_TESTS_V2[key])
 
@@ -495,6 +510,8 @@ class TestDAWGSqlV2:
         query side had no SQL conformance coverage either, the same gap issue
         023 identified on the update side.
         """
+        if (tc.category, tc.name) in UNAPPROVED_TESTS:
+            pytest.skip(UNAPPROVED_TESTS[(tc.category, tc.name)])
         if (tc.category, tc.name) in KNOWN_FAILURES:
             pytest.xfail(f"KNOWN: {KNOWN_FAILURES[(tc.category, tc.name)]}")
         key = (tc.category, tc.name)
