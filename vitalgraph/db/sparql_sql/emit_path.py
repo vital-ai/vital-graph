@@ -195,24 +195,33 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
             f"(SELECT term_uuid FROM {term_table} "
             f"WHERE term_text = '{_esc(obj.value)}' AND term_type = 'U' LIMIT 1)"
         )
+    # A CONSTANT end of a top-level `*` / `?` path (`issues/280`), as the
+    # deterministic term uuid — not a term-table lookup, which is NULL for a
+    # constant no triple mentions, and dropped exactly the rows this is for.
+    # Default-graph scope only: inside GRAPH the zero-length path ranges over
+    # the named graphs, which is the `GRAPH ?g` scoping work.
+    from .sparql_sql_space_impl import _generate_term_uuid
+    _zero_capable = isinstance(path_expr, (PathZeroOrMore, PathZeroOrOne)) and graph_uri is None
+    _pin_node = (subject if isinstance(subject, URINode)
+                 else obj if isinstance(obj, URINode) else None)
+    zero_pin = (f"'{_generate_term_uuid(_pin_node.value, 'U')}'::uuid"
+                if _zero_capable and _pin_node is not None else None)
     cte_parts, path_select = _path_to_sql(
         path_expr, quad_table, term_table, graph_clause, cte_alias,
         same_graph=same_graph, seed_start_sql=seed_start_sql,
-        seed_end_sql=seed_end_sql,
+        seed_end_sql=seed_end_sql, zero_pin=zero_pin,
     )
 
     # ── Subject / object constraints ──
+    # The pins as LITERAL uuids: the same value the term-table lookup returns
+    # when the term exists, and not NULL when it does not (`issues/280`).
     where_parts = []
     if isinstance(subject, URINode):
         where_parts.append(
-            f"{cte_alias}.start_uuid = (SELECT term_uuid FROM {term_table} "
-            f"WHERE term_text = '{_esc(subject.value)}' AND term_type = 'U' LIMIT 1)"
-        )
+            f"{cte_alias}.start_uuid = '{_generate_term_uuid(subject.value, 'U')}'::uuid")
     if isinstance(obj, URINode):
         where_parts.append(
-            f"{cte_alias}.end_uuid = (SELECT term_uuid FROM {term_table} "
-            f"WHERE term_text = '{_esc(obj.value)}' AND term_type = 'U' LIMIT 1)"
-        )
+            f"{cte_alias}.end_uuid = '{_generate_term_uuid(obj.value, 'U')}'::uuid")
 
     where_clause = ""
     if where_parts:
@@ -238,12 +247,26 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
         if isinstance(node, VarNode):
             sn = ctx.types.allocate(node.name)
             t_alias = f"t_{sn}"
-            term_joins.append(
-                f"JOIN {term_table} AS {t_alias} "
-                f"ON {cte_alias}.{uuid_col} = {t_alias}.term_uuid"
-            )
-            select_cols.append(f"{t_alias}.term_text AS {sn}")
-            select_cols.append(f"{t_alias}.term_type AS {sn}__type")
+            if zero_pin and uuid_col in ("start_uuid", "end_uuid"):
+                # This end can be the zero-length pin, which may have no term
+                # row: LEFT JOIN, and fall back to the constant itself.
+                term_joins.append(
+                    f"LEFT JOIN {term_table} AS {t_alias} "
+                    f"ON {cte_alias}.{uuid_col} = {t_alias}.term_uuid"
+                )
+                select_cols.append(
+                    f"COALESCE({t_alias}.term_text, CASE WHEN {cte_alias}.{uuid_col} = {zero_pin} "
+                    f"THEN '{_esc(_pin_node.value)}' END) AS {sn}")
+                select_cols.append(
+                    f"COALESCE({t_alias}.term_type, CASE WHEN {cte_alias}.{uuid_col} = {zero_pin} "
+                    f"THEN 'U' END) AS {sn}__type")
+            else:
+                term_joins.append(
+                    f"JOIN {term_table} AS {t_alias} "
+                    f"ON {cte_alias}.{uuid_col} = {t_alias}.term_uuid"
+                )
+                select_cols.append(f"{t_alias}.term_text AS {sn}")
+                select_cols.append(f"{t_alias}.term_type AS {sn}__type")
             select_cols.append(f"{cte_alias}.{uuid_col} AS {sn}__uuid")
             select_cols.append(f"{t_alias}.lang AS {sn}__lang")
             _dt_case = ctx.dt_case_expr(t_alias)
@@ -295,13 +318,32 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
 # within a single named graph.
 # ---------------------------------------------------------------------------
 
+def _absent_pin_identity(zero_pin: str, quad_table: str, graph_clause: str) -> str:
+    """`UNION` the row (pin, pin) when no quad in scope mentions the pin.
+
+    When one does, the quad-derived identity rows already contain (pin, pin),
+    and adding it again (with a NULL context) would duplicate the solution.
+    """
+    return (f" UNION SELECT {zero_pin}, {zero_pin}, NULL::uuid "
+            f"WHERE NOT EXISTS (SELECT 1 FROM {quad_table} q "
+            f"WHERE (q.subject_uuid = {zero_pin} OR q.object_uuid = {zero_pin}){graph_clause})")
+
+
 def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
                  graph_clause: str, cte_alias: str,
                  same_graph: bool = False,
                  seed_start_sql: Optional[str] = None,
                  seed_end_sql: Optional[str] = None,
-                 under_recursion: bool = False) -> Tuple[str, str]:
+                 under_recursion: bool = False,
+                 zero_pin: Optional[str] = None) -> Tuple[str, str]:
     """Convert a PathExpr to SQL.
+
+    `zero_pin` is the literal uuid of a CONSTANT end of a top-level `*` or `?`
+    path, passed only outside GRAPH scopes. The zero-length path from a
+    constant is that constant, whether or not any triple mentions it
+    (SPARQL 1.1 ZeroLengthPath; `issues/280`). The identity rows are otherwise
+    built from the quads that mention the pin, so a constant in no triple
+    produced none.
 
     Returns (cte_prefix, select_sql) where cte_prefix is a WITH RECURSIVE
     clause (or empty string) and select_sql is a SELECT producing
@@ -500,6 +542,8 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
             f"q.context_uuid "
             f"FROM {quad_table} q{' WHERE TRUE' + _id_where_o if _id_where_o else ''}"
         )
+        if zero_pin:
+            identity_sql += _absent_pin_identity(zero_pin, quad_table, graph_clause)
         ctx_rec_constraint = " AND r.ctx_uuid = step.ctx_uuid" if same_graph else ""
         if seed_end_sql and not seed_start_sql:
             # Same reversal as `+`: from the identity row (C, C), PREPEND edges
@@ -547,6 +591,8 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
             f"UNION SELECT q.object_uuid, q.object_uuid, q.context_uuid "
             f"FROM {quad_table} q{' WHERE TRUE' + _wo if _wo else ''}"
         )
+        if zero_pin:
+            identity_sql += _absent_pin_identity(zero_pin, quad_table, graph_clause)
         sql = f"({identity_sql}) UNION ({base_sql})"
         return "", sql
 

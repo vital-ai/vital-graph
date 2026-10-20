@@ -154,7 +154,16 @@ Order of work:
      their `.srx`, and all four DAWG suites, the unit suite and the integration
      suite pass. Production stores only `true`/`false` in all 11 spaces (read-only
      check), so nothing there changes. `tests/unit/sparql_sql/test_stored_boolean_keeps_its_lexical_form.py`.
-   * zero-length constant (4);
+   * ~~zero-length constant (4)~~ DONE 2026-10-19. `emit_path`: a top-level `*`
+     / `?` with a constant end adds the identity row `(pin, pin)` when no quad in
+     scope mentions the pin (if one does, the quad-derived rows already have it).
+     The pins in the outer WHERE are the deterministic term uuid, not a
+     term-table lookup that is NULL for an absent constant. The variable on the
+     other end LEFT JOINs the term table and falls back to the constant's text.
+     Default-graph scope only; inside GRAPH this belongs to the `GRAPH ?g` work.
+     All 33 property-path cases match their `.srx`. All four DAWG suites, unit
+     and integration pass. Two `test_emit_path` assertions now check for the
+     uuid literal, not the URI text.
    * `GRAPH ?g` scoping (5).
 3. Then land the runner check. Any case still failing at that point is
    recorded individually with its reason.

@@ -231,8 +231,10 @@ class TestEmitPath:
             subject=URINode(value="http://ex.org/alice"),
         )
         sql = emit_path(plan, ctx)
-        assert "start_uuid" in sql
-        assert "ex.org/alice" in sql
+        # The pin is the deterministic term uuid, not a term-table lookup,
+        # which is NULL for a constant no triple mentions (`issues/280`).
+        from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+        assert f"start_uuid = '{_generate_term_uuid('http://ex.org/alice', 'U')}'::uuid" in sql
 
     def test_object_uri_constraint(self):
         """URI object → WHERE filter on end_uuid."""
@@ -243,8 +245,10 @@ class TestEmitPath:
             obj=URINode(value="http://ex.org/bob"),
         )
         sql = emit_path(plan, ctx)
-        assert "end_uuid" in sql
-        assert "ex.org/bob" in sql
+        # The pin is the deterministic term uuid, not a term-table lookup,
+        # which is NULL for a constant no triple mentions (`issues/280`).
+        from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+        assert f"end_uuid = '{_generate_term_uuid('http://ex.org/bob', 'U')}'::uuid" in sql
 
     # --- Graph clauses ---
 
