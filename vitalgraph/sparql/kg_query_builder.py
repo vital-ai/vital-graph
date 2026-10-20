@@ -2369,23 +2369,36 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
             where_clauses.append(
                 'OPTIONAL { ?entity haley:hasKGDocumentHeadline ?_seg_headline . }')
 
-        # Segmentation-aware OPTIONAL projections
+        # Segmentation-aware OPTIONAL projections.
+        #
+        # The ORIGINAL is NESTED inside the PARENT group, and both hops are
+        # typed `Edge_hasKGDocumentSegment` (`issues/288`). They were two
+        # SIBLING OPTIONALs, so whenever the parent group did not match -- a hit
+        # that IS a parent copy, or a parent copy without a name -- `?_parent_doc`
+        # was unbound when the second group ran, and it matched ANY edge in the
+        # graph: the hit came back once per edge, its "parent" a slot and its
+        # "original" the frame above it. The name is optional on its own so a
+        # nameless parent copy still resolves.
         if criteria.include_parent_context:
-            where_clauses.append(
-                'OPTIONAL { '
-                '?_parent_edge vital-core:hasEdgeSource ?_parent_doc . '
-                '?_parent_edge vital-core:hasEdgeDestination ?entity . '
-                '?_parent_doc haley:hasKGDocumentSegmentTypeURI '
-                '<urn:segtype:segmentation_parent> . '
-                '?_parent_doc vital-core:hasName ?_parent_name . }')
+            original = ''
             if criteria.include_original_uri:
-                where_clauses.append(
+                original = (
                     'OPTIONAL { '
-                    '?_orig_edge vital-core:hasEdgeSource ?_original_doc . '
                     '?_orig_edge vital-core:hasEdgeDestination ?_parent_doc . '
+                    '?_orig_edge vital-core:vitaltype haley:Edge_hasKGDocumentSegment . '
+                    '?_orig_edge vital-core:hasEdgeSource ?_original_doc . '
                     'FILTER NOT EXISTS { '
                     '?_original_doc haley:hasKGDocumentSegmentTypeURI ?_ot . '
-                    '} }')
+                    '} } ')
+            where_clauses.append(
+                'OPTIONAL { '
+                '?_parent_edge vital-core:hasEdgeDestination ?entity . '
+                '?_parent_edge vital-core:vitaltype haley:Edge_hasKGDocumentSegment . '
+                '?_parent_edge vital-core:hasEdgeSource ?_parent_doc . '
+                '?_parent_doc haley:hasKGDocumentSegmentTypeURI '
+                '<urn:segtype:segmentation_parent> . '
+                'OPTIONAL { ?_parent_doc vital-core:hasName ?_parent_name . } '
+                f'{original}}}')
 
         return " ".join(where_clauses)
 

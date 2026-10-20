@@ -1137,16 +1137,29 @@ def hybrid_search_sql(
     bm25 = (f"CASE WHEN f.tsv @@ {tsquery} THEN "
             f"{_rank_expr('f.tsv', tsquery, _resolve_fts_normalization(resolved_fts_index, ctx))} "
             f"ELSE 0 END")
-    cosine_sim = f"(1 - (v.embedding <=> {embedding_sql}))"
+    # 0 for a subject with no vector -- one whose vectorization is off
+    # (`issues/285`) -- so it still scores, and is still found, through the
+    # lexical arm. "Either arm" is what the fusion means.
+    cosine_sim = f"COALESCE(1 - (v.embedding <=> {embedding_sql}), 0)"
 
+    # NO DISTANCE CUTOFF on the vector arm (`issues/288`). This admitted a row
+    # only when `tsv @@ q OR distance < 0.6`, i.e. cosine SIMILARITY > 0.4. That
+    # constant is a property of the embedding model, not of relevance: MiniLM
+    # puts a good paraphrase near 0.6, OpenAI `text-embedding-3-small` near
+    # 0.2-0.35, so on an OpenAI index the vector arm admitted NOTHING and any
+    # phrase without an all-terms lexical match returned no rows at alpha 0.5,
+    # while alpha 0 kept working. Every subject in the FTS index now gets the
+    # fused score; ranking and the caller's own FILTER decide what is kept.
+    #
+    # Driven from the FTS table, as it always was: a subject with a vector but
+    # no FTS row is not scored. Hybrid search is defined over the FTS index;
+    # the vector table only adds weight to the subjects it holds.
     sql = (
         f"(SELECT {1.0 - alpha:.6f} * {bm25} + {alpha:.6f} * {cosine_sim} "
         f"FROM {fts_table} f "
-        f"JOIN {vec_table} v ON f.subject_uuid = v.subject_uuid "
+        f"LEFT JOIN {vec_table} v ON f.subject_uuid = v.subject_uuid "
         f"AND f.context_uuid = v.context_uuid "
         f"WHERE f.subject_uuid = {uuid_col}{ctx_clause_f} "
-        f"AND (f.tsv @@ {tsquery} "
-        f"OR (v.embedding <=> {embedding_sql}) < 0.6) "
         f"LIMIT 1)"
     )
     return sql, vec_request
