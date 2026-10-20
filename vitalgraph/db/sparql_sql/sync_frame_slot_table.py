@@ -44,14 +44,65 @@ _SLOT_VALUE_UUID = _term_uuid(SLOT_VALUE_URI)
 _VITALTYPE_UUID = _term_uuid(VITALTYPE_URI)
 
 
+def _secondary_index_ddl(space_id: str) -> List[tuple]:
+    """`(index_name, CREATE INDEX statement)` for frame_slot's secondary indexes.
+
+    From the schema, not the catalogue: the rebuild restores what the schema
+    declares, so an index missing before the rebuild exists after it.
+    """
+    from .sparql_sql_schema import SparqlSQLSchema
+    t_fs = f"{space_id}_frame_slot"
+    out = []
+    for stmt in SparqlSQLSchema().create_space_indexes_sql(space_id):
+        if stmt.startswith("CREATE INDEX") and f" ON {t_fs} " in stmt:
+            name = stmt.split("IF NOT EXISTS ", 1)[1].split(" ON ", 1)[0].strip()
+            out.append((name, stmt))
+    return out
+
+
+# The rebuild's index builds sort in memory up to this; it only RAISES the
+# setting (production's parameter group sets 2 GB).
+_REBUILD_MAINTENANCE_WORK_MEM = "1GB"
+
+
 async def resync_frame_slot_table(conn, space_id: str) -> int:
-    """Rebuild the whole table. Returns rows inserted."""
+    """Rebuild the whole table. Returns rows inserted.
+
+    DROPS THE SECONDARY INDEXES FOR THE LOAD and rebuilds them after
+    (`issues/289`). Measured on a 50.6M-quad / 5M-edge space, 3,877,000 rows:
+
+        insert with all 7 indexes in place          357 s
+        drop 6, insert (pkey only), rebuild 6        79 s   (64 s + 15 s)
+
+    The six secondaries are keyed on UUIDs, so maintaining them row by row is a
+    random write per index per row; built afterwards each is one sorted pass.
+    The primary key stays: `DISTINCT ON` already emits rows in its order, so it
+    is appended to, and the per-write sync's `ON CONFLICT` keeps working.
+
+    ONE TRANSACTION. Readers wait on the TRUNCATE's lock rather than seeing a
+    half-built table or one without its indexes, and a failure rolls everything
+    back -- the old rows and the old indexes -- so nothing is left un-indexed.
+    Inside a caller's transaction this is a savepoint, with the same effect.
+
+    The statement itself was always the efficient shape (hash joins over
+    index-only scans: 53 s for the SELECT alone). A 30-minute timeout on this
+    space was a machine swapping, not a slow query; see the issue.
+    """
     t_fs = f"{space_id}_frame_slot"
     t_edge = f"{space_id}_edge"
     t_quad = f"{space_id}_rdf_quad"
+    secondaries = _secondary_index_ddl(space_id)
 
-    await conn.execute(f"TRUNCATE {t_fs}")
-    result = await conn.execute(f"""
+    async with conn.transaction():
+        if await conn.fetchval(
+                "SELECT pg_size_bytes(current_setting('maintenance_work_mem')) "
+                "< pg_size_bytes($1)", _REBUILD_MAINTENANCE_WORK_MEM):
+            await conn.execute(
+                f"SET LOCAL maintenance_work_mem = '{_REBUILD_MAINTENANCE_WORK_MEM}'")
+        await conn.execute(f"TRUNCATE {t_fs}")
+        for name, _ddl in secondaries:
+            await conn.execute(f"DROP INDEX IF EXISTS {name}")
+        result = await conn.execute(f"""
         INSERT INTO {t_fs} (frame_uuid, slot_uuid, role_uuid, entity_uuid,
                             context_uuid, frame_type_uuid)
         SELECT DISTINCT ON (emv.source_node_uuid, emv.dest_node_uuid, emv.context_uuid)
@@ -75,9 +126,13 @@ async def resync_frame_slot_table(conn, space_id: str) -> int:
          AND vt.context_uuid = emv.context_uuid
          AND vt.predicate_uuid = $3
     """, _SLOT_TYPE_UUID, _SLOT_VALUE_UUID, _VITALTYPE_UUID)
+        for _name, ddl in secondaries:
+            await conn.execute(ddl)
+        await conn.execute(f"ANALYZE {t_fs}")
 
     n = int(result.split()[-1]) if result else 0
-    logger.info("resync_frame_slot_table(%s): %d rows inserted", space_id, n)
+    logger.info("resync_frame_slot_table(%s): %d rows inserted, %d indexes rebuilt",
+                space_id, n, len(secondaries))
     return n
 
 
