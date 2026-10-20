@@ -1,6 +1,8 @@
 # 289 — The frame_slot full build maintained six UUID indexes row by row
 
-## Status: FIXED IN CODE 2026-10-20 (not yet released).
+## ARCHIVED 2026-10-20 — fixed and verified locally at prod scale (3,877,000 rows, 79 s), in production with the current code (reported 2026-10-20); nothing remaining. Evidence: tests/integration/test_frame_slot_rebuild_drops_and_restores_indexes.py.
+
+## Status: FIXED IN CODE 2026-10-20 (in production with the current code, reported 2026-10-20).
 
 **Related:** `issues/248` (the fuzzy rebuild, which already drops and rebuilds
 its band indexes), `issues/270` / `issues/271` (index maintenance cost on quad

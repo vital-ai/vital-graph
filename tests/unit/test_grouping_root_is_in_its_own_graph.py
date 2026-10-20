@@ -116,7 +116,6 @@ class TestTheSegmentationDefaultIsWhatMakesThisConsistent:
 
     @pytest.mark.parametrize("rel", [
         "vitalgraph/document/kgdocument_segmentation_processor.py",
-        "vitalgraph/document/auto_segmentation.py",
     ])
     def test_segmentation_still_defaults_the_group_to_the_document(self, rel):
         src = (ROOT / rel).read_text()

@@ -20,6 +20,7 @@ import re
 from typing import Dict, List, Tuple
 
 from .sort_value_key import VALUE_KEY_COLUMN, value_key_column_sql
+from .uri_limit import uri_limit_constraint_sql
 
 logger = logging.getLogger(__name__)
 
@@ -947,7 +948,10 @@ class SparqlSQLSchema:
                 created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 dataset      VARCHAR(50) NOT NULL DEFAULT 'primary',
                 {numeric_term_column()},
-                {datetime_term_column()}
+                {datetime_term_column()},
+                -- No URI over the limit (issues/283), for the writes that intern
+                -- terms in SQL alone; the Python writers refuse it first.
+                {uri_limit_constraint_sql(space_id)}
             )
         ''')
 

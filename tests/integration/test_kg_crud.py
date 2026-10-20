@@ -306,7 +306,7 @@ class TestEntityGraph:
         # Every member of an entity graph carries hasKGGraphURI pointing at the
         # entity, the entity included — it is a member of its own graph. That is
         # the invariant `get_entity_graph` reads, and it is the PRODUCER's job to
-        # establish it (`utils/test_data.py` and `document/auto_segmentation.py`
+        # establish it (`utils/test_data.py` and the segmentation processor
         # both do; `store_objects` is a raw store and does not).
         #
         # This test used to omit it and pass anyway, because get_entity_graph

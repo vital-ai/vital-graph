@@ -20,7 +20,6 @@ from vitalgraph.document.kgdocument_segmentation_processor import (
     extract_content,
     build_parent_copy_summary,
 )
-from vitalgraph.document.auto_segmentation import AutoSegmentationHook
 from vitalgraph.document.vector_index_setup import (
     setup_document_segments_vectorization,
     DOCUMENT_SEGMENTS_INDEX_NAME,
@@ -35,7 +34,6 @@ __all__ = [
     "SegmentationOutput",
     "extract_content",
     "build_parent_copy_summary",
-    "AutoSegmentationHook",
     "setup_document_segments_vectorization",
     "DOCUMENT_SEGMENTS_INDEX_NAME",
 ]

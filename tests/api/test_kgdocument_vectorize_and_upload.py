@@ -174,6 +174,7 @@ async def env(vg_client, test_space, test_graph, pg_conn):
         await asyncio.sleep(2.0)
 
     yield {"space": space, "graph": test_graph, "uris": uris, "upload": up,
+           "configs": dict(zip((TYPE_ON, TYPE_OFF), configs)),
            "jobs_completed": jobs_completed, "vectors_for": vectors_for}
 
     for u in uris.values():
@@ -281,3 +282,187 @@ class TestUpload:
         with pytest.raises(VitalGraphClientError):
             await vg_client.kgdocuments.upload_kgdocument(
                 env["space"], env["graph"], b"text")
+
+
+# ---------------------------------------------------------------------------
+# PUT replaces, and a content change re-segments (`issues/286`); a config
+# change that flips a type's default reaches its existing segments
+# (`issues/285`).
+# ---------------------------------------------------------------------------
+
+TYPE_FLIP = "urn:kgdoctype:test_vec_flip"
+
+
+async def _live(pg_conn, space, uris):
+    """The URIs that still have quads -- the term table keeps deleted ones."""
+    if not uris:
+        return []
+    rows = await pg_conn.fetch(
+        f"SELECT DISTINCT u FROM unnest($1::text[]) u WHERE EXISTS ("
+        f"SELECT 1 FROM {space}_rdf_quad q "
+        f"WHERE q.subject_uuid = vitalgraph_term_uuid(u, 'U'))", list(uris))
+    return sorted(r["u"] for r in rows)
+
+
+async def _values(pg_conn, space, uri, prop):
+    rows = await pg_conn.fetch(
+        f"SELECT t.term_text FROM {space}_rdf_quad q "
+        f"JOIN {space}_term t ON t.term_uuid = q.object_uuid "
+        f"WHERE q.subject_uuid = vitalgraph_term_uuid($1, 'U') "
+        f"AND q.predicate_uuid = vitalgraph_term_uuid($2, 'U')", uri, prop)
+    return sorted(r["term_text"] for r in rows)
+
+
+async def _completed_jobs(pg_conn, space, uri) -> int:
+    """From the job table: the status endpoint returns a document's LATEST job."""
+    return await pg_conn.fetchval(
+        f"SELECT count(*) FROM {space}_segmentation_jobs "
+        f"WHERE document_uri = $1 AND status = 'completed'", uri)
+
+
+async def _wait(cond, tries=60, delay=2.0):
+    for _ in range(tries):
+        if await cond():
+            return True
+        await asyncio.sleep(delay)
+    return False
+
+
+class TestUpdate:
+
+    async def test_a_put_replaces_and_a_content_change_resegments(
+            self, env, vg_client, pg_conn):
+        space, graph = env["space"], env["graph"]
+        doc = _doc(TYPE_ON, "put")
+        assert (await vg_client.kgdocuments.create_kgdocuments(space, graph, [doc])).is_success
+        uri = str(doc.URI)
+        assert await _wait(lambda: _job_completed(vg_client, space, uri))
+        old_segs = await _live(pg_conn, space, await _segments(pg_conn, space, uri))
+        assert old_segs, "precondition: segmented at create"
+
+        # A name change: replaced, not appended, and no re-segmentation.
+        doc.name = "put renamed"
+        assert (await vg_client.kgdocuments.update_kgdocuments(space, graph, [doc])).is_success
+        assert await _values(pg_conn, space, uri, "http://vital.ai/ontology/vital-core#hasName") \
+            == ["put renamed"]
+
+        # A content change: replaced, and re-segmented with the new text.
+        marker = "ZEBRAMARKER"
+        doc.kGDocumentContent = TEXT + f"\n\nA closing paragraph about {marker} " * 3
+        assert (await vg_client.kgdocuments.update_kgdocuments(space, graph, [doc])).is_success
+        assert await _values(pg_conn, space, uri, f"{HALEY}hasKGDocumentContent") \
+            == [str(doc.kGDocumentContent)]
+
+        async def resegmented():
+            live = await _live(pg_conn, space, await _segments(pg_conn, space, uri))
+            return (await _completed_jobs(pg_conn, space, uri) >= 2
+                    and live and not set(live) & set(old_segs))
+        assert await _wait(resegmented), "content change did not re-segment"
+        live = await _live(pg_conn, space, await _segments(pg_conn, space, uri))
+        texts = [t for s in live for t in await _values(
+            pg_conn, space, s, f"{HALEY}hasKGDocumentContent")]
+        assert any(marker in t for t in texts)
+        # Exactly two completed jobs: the create, the content change. The name
+        # change, which came first, queued none.
+        assert await _completed_jobs(pg_conn, space, uri) == 2
+
+    async def test_a_put_keeps_the_documents_vectorize_decision(
+            self, env, vg_client, pg_conn):
+        space, graph = env["space"], env["graph"]
+        doc = _doc(TYPE_ON, "put_keeps")
+        r = await vg_client.kgdocuments.create_kgdocuments(space, graph, [doc], vectorize=False)
+        assert r.is_success
+        uri = str(doc.URI)
+        doc.name = "put_keeps renamed"   # sent WITHOUT kGIndexStatusURI
+        doc.kGIndexStatusURI = None
+        assert (await vg_client.kgdocuments.update_kgdocuments(space, graph, [doc])).is_success
+        assert await _status(pg_conn, space, uri) == NO_INDEX
+
+
+class TestTypeDefaultChange:
+
+    async def test_flipping_auto_vectorize_restamps_existing_segments(
+            self, env, vg_client, pg_conn):
+        space, graph = env["space"], env["graph"]
+        c = await vg_client.kgdocuments.create_segmentation_config(
+            space_id=space, document_type_uri=TYPE_FLIP,
+            segment_method_uri=SEG_METHOD, max_segment_tokens=128,
+            min_segment_tokens=20, overlap_tokens=0, enabled=True,
+            auto_vectorize=True)
+        try:
+            doc = _doc(TYPE_FLIP, "flip")
+            assert (await vg_client.kgdocuments.create_kgdocuments(space, graph, [doc])).is_success
+            uri = str(doc.URI)
+
+            async def segs():
+                return await _live(pg_conn, space, await _segments(pg_conn, space, uri))
+
+            async def embedded():
+                s = await segs()
+                return s and await _vectors(pg_conn, space, [uri] + s) == 1 + len(s)
+            assert await _wait(embedded), "precondition: embedded while on"
+
+            async def set_auto(on):
+                r = await vg_client.kgdocuments.update_segmentation_config(
+                    space_id=space, config_id=c.config_id, document_type_uri=TYPE_FLIP,
+                    segment_method_uri=SEG_METHOD, max_segment_tokens=128,
+                    min_segment_tokens=20, overlap_tokens=0, enabled=True,
+                    auto_vectorize=on)
+                assert r.config_id == c.config_id
+
+            await set_auto(False)
+
+            async def off():
+                s = await segs()
+                return (s and await _vectors(pg_conn, space, [uri] + s) == 0 and all(
+                    [await _status(pg_conn, space, x) == NO_INDEX for x in s]))
+            assert await _wait(off), "turning the type off left vectors or no stamps"
+            assert await _status(pg_conn, space, uri) is None, (
+                "the original follows its type by lookup; it is not stamped")
+
+            await set_auto(True)
+
+            async def on_again():
+                s = await segs()
+                return (s and await _vectors(pg_conn, space, [uri] + s) == 1 + len(s)
+                        and all([await _status(pg_conn, space, x) is None for x in s]))
+            assert await _wait(on_again), "turning the type back on did not re-embed"
+        finally:
+            await vg_client.kgdocuments.delete_segmentation_config(space, c.config_id)
+
+    async def test_an_explicit_decision_is_left_alone(self, env, vg_client, pg_conn):
+        """Turn TYPE_OFF on: its unstamped document is embedded (the positive
+        signal), while `forced_on` -- the same type, created with
+        vectorize=True -- keeps its own stamp. Then back off."""
+        space, uris = env["space"], env["uris"]
+
+        async def set_off_type(on):
+            r = await vg_client.kgdocuments.update_segmentation_config(
+                space_id=space, config_id=env["configs"][TYPE_OFF],
+                document_type_uri=TYPE_OFF, segment_method_uri=SEG_METHOD,
+                max_segment_tokens=128, min_segment_tokens=20, overlap_tokens=0,
+                enabled=True, auto_vectorize=on)
+            assert r.config_id == env["configs"][TYPE_OFF]
+
+        async def segs(key):
+            return await _live(pg_conn, space, await _segments(pg_conn, space, uris[key]))
+
+        await set_off_type(True)
+        try:
+            async def follows():
+                s = await segs("off")
+                return s and await _vectors(pg_conn, space, [uris["off"]] + s) == 1 + len(s)
+            assert await _wait(follows), "the unstamped document did not follow its type"
+            for x in await segs("off"):
+                assert await _status(pg_conn, space, x) is None, x
+            for x in await segs("forced_on"):
+                assert await _status(pg_conn, space, x) == VECTOR, x
+        finally:
+            await set_off_type(False)
+
+        async def off_again():
+            s = await segs("off")
+            return s and await _vectors(pg_conn, space, [uris["off"]] + s) == 0
+        assert await _wait(off_again)
+        for x in await segs("forced_on"):
+            assert await _status(pg_conn, space, x) == VECTOR, x

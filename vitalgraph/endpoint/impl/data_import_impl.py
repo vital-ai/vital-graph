@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from vitalgraph.db.sparql_sql.uri_limit import check_uri
+
 logger = logging.getLogger(__name__)
 
 # Deterministic namespace for term UUID v5 generation
@@ -517,6 +519,8 @@ class ImportEngine:
                    dt_uri: Optional[str] = None) -> str:
             key = (text, ttype, lang, dt_uri)
             if key not in terms:
+                if ttype == "U":
+                    check_uri(text)   # issues/283
                 terms[key] = _term_uuid(text, ttype, lang=lang,
                                         datatype_id=datatype_ids.get(dt_uri))
             return terms[key]
@@ -1518,6 +1522,8 @@ class ImportEngine:
                 for rec in term_batch:
                     if rec[0] not in seen:
                         seen.add(rec[0])
+                        if rec[2] == "U":
+                            check_uri(rec[1])   # issues/283
                         unique_terms.append(rec)
 
                 if unique_terms:

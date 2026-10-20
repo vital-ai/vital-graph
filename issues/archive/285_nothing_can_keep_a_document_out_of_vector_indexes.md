@@ -1,6 +1,8 @@
 # 285 — Nothing can keep a document out of vector indexes
 
-## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production (reported by the deploy session).
+## ARCHIVED 2026-10-20 — the rule released in 0.0.48 and deployed; the type-change follow-up fixed and verified on the vg test stack; the FileNode is not stamped by design (ontology); nothing remaining. Evidence: tests/integration/test_vectorize_policy.py; tests/api/test_kgdocument_vectorize_and_upload.py.
+
+## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production (reported by the deploy session). Type-change follow-up FIXED IN CODE 2026-10-20 (not yet released).
 
 **Related:** `issues/284` and `issues/286`, from the same request. `issues/219`
 (auto-sync scoped to each index's mapping, which this builds on). `issues/245`
@@ -129,10 +131,40 @@ sets descriptions on created documents and uses a type-on upload as a control,
 so that no "not embedded" assertion passes vacuously; the first version of the
 test did not, and passed for the wrong reason.
 
-## Not done
+## Follow-up fix (2026-10-20, not yet released)
 
-- **Changing a type's `auto_vectorize` reaches existing segments only when they
-  are re-segmented.** Their stamps are written at segmentation time. Whole
-  documents follow the change on their next sync.
-- **The FileNode that holds an upload's original is not stamped.** It is not a
-  KGDocument.
+- **A config change that flips a type's default reaches its existing output.**
+  Creating, updating or deleting a segmentation config compares the type's
+  decision before and after (`types_with_vectorize_off`). Only a flip does
+  anything (`_on_type_default_change`). Re-syncing a type whose decision did
+  not change would re-embed every one of its documents for nothing, and an
+  embedding can be billed. On a flip, a background task (`_apply_type_default`):
+  - finds every original of the type with no explicit status, plus its parent
+    copies and segments;
+  - restamps those copies and segments: `NO_INDEX` when the type turns off,
+    stamp removed when it turns on;
+  - re-syncs them and the originals, so vectors are removed or written.
+
+  An original WITH an explicit status is left alone; its decision is its own.
+  The first version selected parent copies through a `BIND(?parent AS ?x)`
+  UNION branch. That branch is its own group, where `?parent` is unbound, so
+  parent copies were silently left out. The API test caught it.
+- **The FileNode that holds an upload's original: not stamped, by design.**
+  The ontology does not declare `hasKGIndexStatusURI` on FileNode (it is on
+  `KGNode`), and the quad converter drops it ("not properties of FileNode
+  were dropped"). A FileNode is classified `kgentity` by auto-sync. Under a
+  `default` mapping it has no `hasKGraphDescription` and so no text, so it is
+  never embedded. Only a catch-all entity mapping with a name-based source
+  could embed its file name.
+
+Verified: `tests/api/test_kgdocument_vectorize_and_upload.py::TestTypeDefaultChange`.
+- **A type flipped off, then on.** Its document's vectors and its parent copy
+  and segments' vectors all go to 0, and every segmentation subject is stamped
+  `NO_INDEX` while the original stays unstamped. Flipped back on, the stamps
+  are gone and everything is re-embedded.
+- **An explicit decision survives the flips.** Turning `TYPE_OFF` on embeds
+  its unstamped document, which is the positive signal. Through both flips,
+  `forced_on` (the same type, created `vectorize=True`) keeps `VECTOR` on
+  every segment.
+
+Both pass, with the rest of the file (16 passed).

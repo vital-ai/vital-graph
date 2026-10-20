@@ -1,6 +1,8 @@
 # 282 — Auto-sync cannot build type-description text, so it deletes the vectors a reindex wrote
 
-## Status: FIXED IN CODE 2026-10-19 (not yet released). Not live in production: no production space uses either affected mapping.
+## ARCHIVED 2026-10-20 — fixed and verified locally, in production with the current code (reported 2026-10-20); nothing remaining. Evidence: tests/api/test_kgtypes_entity_integration.py.
+
+## Status: FIXED IN CODE 2026-10-19 (in production with the current code, reported 2026-10-20). Not live in production: no production space uses either affected mapping.
 
 **Related:** `issues/244` (type-description vectorization; introduced the
 cross-space sync), `issues/260` (indexing a new KGType).

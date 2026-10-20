@@ -1,6 +1,6 @@
 # 277 — The slot-sort shortfall alarm counted drift and empty slots as missing rows
 
-## Status: FIXED IN CODE 2026-10-17 (not yet released). No production repair needed.
+## Status: FIXED IN CODE 2026-10-17; in production with the current code (reported 2026-10-20). No production repair needed. STAYS OPEN for the nested-frame gap under Not done, which the local vg stack's maintenance job reports live on `probe_nurture` (500 valued slots it cannot attribute, 2026-10-20).
 
 **Related:** `issues/194` (the `entity_slot_sort` alarm, repair and gate this
 corrects), `issues/268` (the same multi-statement drift in a count), `issues/212`

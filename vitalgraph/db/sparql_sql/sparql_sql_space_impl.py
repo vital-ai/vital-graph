@@ -30,6 +30,7 @@ from .sparql_sql_schema import SparqlSQLSchema, STANDARD_DATATYPES
 from .compile_cache import SparqlCompileCache
 from .generator import invalidate_datatype_cache
 from . import db_provider
+from .uri_limit import check_uri
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,8 @@ def classify_term(term, dt_map: Dict[str, int]) -> tuple:
         term_type = 'L'
     else:
         term_type = 'U'
+    if term_type == 'U':
+        check_uri(term_text)   # issues/283
 
     lang = None
     datatype_id = None
@@ -3252,6 +3255,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             term_type = 'L'
         else:
             term_type = 'U'
+        if term_type == 'U':
+            check_uri(term_text)   # issues/283
 
         # One convention for what gets STORED: term_text is the bare value, so
         # a blank node is `b1` and never `_:b1`. Normalising the uuid input

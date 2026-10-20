@@ -1,6 +1,6 @@
 # 283 — A value longer than a btree entry fails the write, because the sort tables index it whole
 
-## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production, with both migration phases run there (reported by the deploy session; not independently re-checked from this repo). The local vg test stack (303 spaces, 2,067 indexes rebuilt) and the host dev cluster (45 spaces) were migrated 2026-10-20.
+## Status: URI LIMIT ADDED 2026-10-20 (not yet released; local stacks migrated) — see the follow-up below. The value fix was RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production, with both migration phases run there (reported by the deploy session; not independently re-checked from this repo). The local vg test stack (303 spaces, 2,067 indexes rebuilt) and the host dev cluster (45 spaces) were migrated 2026-10-20.
 
 **Related:** `issues/172`, which named this exact defect and its remedy and did
 not build it (see "This was predicted" below). `issues/194`, which wired the
@@ -172,10 +172,43 @@ not the RDS master.
 - The full `tests/unit` suite passes, and 149 of 149 tests in the 21
   sort-table integration files pass on the test stack.
 
+## Follow-up (2026-10-20, not yet released) — an upper limit on URIs
+
+`entity_uri` and `frame_uri`, the tie-break key column of the prop-sort indexes,
+were still unbounded, so a URI over about 1.6 KB would have failed the same way.
+None exists: the longest URI in any local space is 357 bytes. They are now
+bounded at the source. **No URI term over 1,024 bytes is stored**
+(`vitalgraph/db/sparql_sql/uri_limit.py`). That leaves the widest index tuple
+about 2,120 of 2,704 bytes, even with a 256-character `value_key` made of
+4-byte characters.
+
+- **Refused before any SQL runs,** as `UriTooLong`, a `RequestRefused` that
+  names the size. The check sits in each Python term builder:
+  - `_term_row` (`add_rdf_quads_batch`);
+  - `classify_term` (`add_rdf_quads_batch_bulk`);
+  - the SPARQL UPDATE `_term_upsert`;
+  - both import loaders.
+
+  It covers every URI term, not only entity and frame subjects, because a
+  subject becomes a tie-break only later, by derivation.
+- **A CHECK on the term table,** `ck_<space>_term_uri_len`, is the backstop for
+  the writes that intern terms in SQL alone: a SPARQL UPDATE's WHERE-bound
+  values and the COPY loads. New spaces get it from the schema.
+  `scripts/migrate_term_uri_limit.py` adds it to existing ones: `NOT VALID`,
+  then `VALIDATE`, which blocks neither reads nor writes.
+- **Migrated:** the vg test stack (27 spaces) and the host dev cluster
+  (45 spaces), 2026-10-20, all validated. **Production needs the script**
+  after the release that carries this.
+- **Verified:** `tests/integration/test_uri_length_limit.py`, 5 passed:
+  - a URI at the limit is stored;
+  - one byte over is refused on both write paths, as a refusal, and nothing is
+    written;
+  - multibyte characters count as bytes;
+  - a SPARQL `INSERT DATA` is refused;
+  - the table itself refuses an over-long URI interned in SQL, and leaves
+    literals unlimited.
+
 ## Not done
 
-- **URIs in the tie-break columns are still unbounded.** `entity_uri` and
-  `frame_uri` are key columns of the prop-sort indexes. A URI over about 1.6 KB
-  would fail the same way. No such URI exists and none is plausible, so they are
-  left as they are.
-- Production migration: both phases, around the next deploy.
+- Production: run `scripts/migrate_term_uri_limit.py --all --apply` after the
+  release that carries the limit.

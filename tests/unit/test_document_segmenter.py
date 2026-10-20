@@ -203,3 +203,69 @@ def test_an_oversized_sections_short_tail_is_kept():
         assert r.token_length <= 50, (
             f"a merge pushed segment {r.segment_index} to {r.token_length} "
             f"tokens, over the limit")
+
+
+# ---------------------------------------------------------------------------
+# issues/287: the recursive splitter's four flaws
+# ---------------------------------------------------------------------------
+
+def _words(n, tag="w"):
+    return " ".join(f"{tag}{i}" for i in range(n))
+
+
+def test_words_are_never_cut_when_there_is_no_sentence_separator():
+    """With no ". " the splitter jumped straight to character chunks."""
+    text = _words(300)          # one line, no ". ", plenty of spaces
+    chunks = DocumentSegmenter()._recursive_split(text, max_tokens=50)
+    words = set(text.split())
+    for c in chunks:
+        assert all(w in words for w in c.split()), f"a word was cut: {c[:80]}"
+    assert " ".join(chunks).split() == text.split()
+
+
+def test_character_chunks_respect_the_token_limit():
+    """A dense run with no separator: each hard chunk is re-checked."""
+    # A tokenizer that counts every 'x' as a token makes the dense tail
+    # heavier than the chars-per-token average predicts.
+    tok = lambda s: max(1, len(s) // 10) + s.count("x")
+    seg = DocumentSegmenter(tokenizer=tok)
+    text = "a" * 2000 + "x" * 400
+    for c in seg._recursive_split(text, max_tokens=60):
+        assert tok(c) <= 60, f"chunk over the limit: {tok(c)} tokens"
+
+
+def test_overlap_is_applied_once_and_never_exceeds_the_limit():
+    seg = DocumentSegmenter()
+    # Oversized paragraphs made of sentences, so the split RECURSES: the old
+    # code applied overlap at the sentence level and again at the top.
+    sentence = lambda j, k: " ".join(f"p{j}s{k}w{i}" for i in range(12))
+    text = "\n\n".join(". ".join(sentence(j, k) for k in range(10)) for j in range(4))
+    chunks = seg._recursive_split(text, max_tokens=60, overlap_tokens=5)
+    for c in chunks:
+        assert seg._tokenizer(c) <= 60, c[:80]
+    # Each chunk after the first starts with AT MOST 5 words of the previous
+    # chunk -- not 5 per recursion level.
+    for prev, cur in zip(chunks, chunks[1:]):
+        shared = 0
+        for w in cur.split():
+            if w in prev.split():
+                shared += 1
+            else:
+                break
+        assert shared <= 5, (shared, cur[:80])
+
+
+def test_offsets_locate_each_chunks_own_content_with_overlap():
+    """`find()` returned -1 for an overlapped chunk and corrupted offsets."""
+    seg = DocumentSegmenter()
+    text = "\n\n".join(_words(40, f"p{j}w") for j in range(8))
+    config = PlainSplitConfig(max_segment_tokens=60, min_segment_tokens=1, overlap_tokens=5)
+    results = seg.segment(text, config)
+    assert len(results) > 1
+    last_end = 0
+    for r in results:
+        assert 0 <= r.start_char_offset < r.end_char_offset <= len(text)
+        assert r.start_char_offset >= last_end, "offsets must be monotone"
+        own = text[r.start_char_offset:r.end_char_offset]
+        assert own.strip() and r.content.endswith(own.strip()), (own[:60], r.content[-60:])
+        last_end = r.end_char_offset

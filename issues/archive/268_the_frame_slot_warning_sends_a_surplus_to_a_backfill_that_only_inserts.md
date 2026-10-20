@@ -1,6 +1,8 @@
 # 268 — The frame_slot warning sends a surplus to a backfill that only inserts, and the surplus was not real
 
-## Status: FIXED 2026-10-12 (not yet released). Found in production on v0.0.85.
+## ARCHIVED 2026-10-20 — fixed and verified locally, in production with the current code (reported 2026-10-20); the production confirmation listed under Not done is an observation to make, not work. Evidence: tests/unit/test_frame_slot_warning_matches_the_drift.py, tests/unit/test_frame_slot_residue_backfill.py.
+
+## Status: FIXED 2026-10-12 (in production with the current code, reported 2026-10-20). Found in production on v0.0.85.
 
 **Related:** `issues/263` (made the warning's remedy depend on the finding; this is
 the case it missed), `issues/149` (client-side probe timeouts), `issues/150` (the

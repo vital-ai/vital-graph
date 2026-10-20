@@ -217,6 +217,8 @@ def _term_upsert(term_table: str, text: str, ttype: str,
     aborts the transaction and poisons the pooled connection (see issue 003 /
     019). ``ON CONFLICT`` lets Postgres resolve the race in a single statement.
     """
+    if ttype == 'U':
+        check_uri(text)   # issues/283
     term_uuid = _generate_term_uuid(text, ttype, lang=lang, datatype_id=datatype_id)
     lang_val = f"'{_esc(lang)}'" if lang else "NULL"
     dt_val = str(datatype_id) if datatype_id is not None else "NULL"
@@ -337,6 +339,7 @@ def _node_to_uuid_expr(node: RDFNode, term_table: str,
 # Default graph URI used when no explicit graph is specified.
 # Callers (e.g. DAWG test harness) can override via default_graph_uri param.
 from .default_graph import DEFAULT_GRAPH_URI as _FALLBACK_DEFAULT_GRAPH
+from .uri_limit import check_uri
 
 
 async def update_to_sql(

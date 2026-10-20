@@ -1,6 +1,8 @@
 # 288 — Document query enrichment points at unrelated objects, and hybrid search returns nothing on OpenAI embeddings
 
-## Status: FIXED IN CODE 2026-10-20 (not yet released). Both follow-up decisions made and implemented (below).
+## ARCHIVED 2026-10-20 — fixed and verified locally, both follow-ups decided and fixed, in production with the current code (reported 2026-10-20); nothing remaining. Evidence: tests/api/test_kgdocument_query_enrichment_and_hybrid.py, tests/unit/test_vector_query_scored_rows_only.py, tests/unit/test_document_query_parent_context.py, tests/unit/sparql_sql/test_hybrid_search.py.
+
+## Status: FIXED IN CODE 2026-10-20 (in production with the current code, reported 2026-10-20). Both follow-up decisions made and implemented (below).
 
 **Related:** `issues/284`-`287` (the KG document work this exercised), `issues/280`
 (OPTIONAL scoping in the engine — not the cause here; the query itself was

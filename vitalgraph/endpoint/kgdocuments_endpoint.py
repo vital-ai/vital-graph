@@ -161,6 +161,8 @@ class KGDocumentsEndpoint:
         self._segmentation_worker = segmentation_worker
         self.logger = logging.getLogger(f"{__name__}.KGDocumentsEndpoint")
         self.router = APIRouter()
+        # Strong references to fire-and-forget tasks, which the loop holds weakly.
+        self._background: set = set()
 
         # Object storage for uploaded originals. Optional: without it, uploads
         # still work and the converted Markdown is stored — only the original
@@ -1013,8 +1015,10 @@ class KGDocumentsEndpoint:
         self, space_id: str, body: SegmentationConfigRequest
     ) -> SegmentationConfigResponse:
         """Create a new segmentation config."""
+        from vitalgraph.document.vectorize_policy import types_with_vectorize_off
         manager, pool, conn = await self._get_config_manager(space_id)
         try:
+            was_off = bool(await types_with_vectorize_off(conn, space_id, [body.document_type_uri]))
             config_id = await manager.create_config(
                 document_type_uri=body.document_type_uri,
                 segment_method_uri=body.segment_method_uri,
@@ -1028,6 +1032,7 @@ class KGDocumentsEndpoint:
             config = await manager.get_config(config_id)
             if not config:
                 raise HTTPException(status_code=500, detail="Failed to retrieve created config")
+            await self._on_type_default_change(space_id, conn, config.document_type_uri, was_off)
             return self._dto_to_response(config, status=OperationStatus.CREATED)
         finally:
             if pool and conn:
@@ -1037,8 +1042,12 @@ class KGDocumentsEndpoint:
         self, space_id: str, config_id: int, body: SegmentationConfigRequest
     ) -> SegmentationConfigResponse:
         """Update an existing segmentation config."""
+        from vitalgraph.document.vectorize_policy import types_with_vectorize_off
         manager, pool, conn = await self._get_config_manager(space_id)
         try:
+            before = await manager.get_config(config_id)
+            was_off = before is not None and bool(await types_with_vectorize_off(
+                conn, space_id, [before.document_type_uri]))
             await manager.update_config(
                 config_id,
                 max_segment_tokens=body.max_segment_tokens,
@@ -1057,6 +1066,7 @@ class KGDocumentsEndpoint:
                     document_type_uri=body.document_type_uri,
                     segment_method_uri=body.segment_method_uri,
                 )
+            await self._on_type_default_change(space_id, conn, config.document_type_uri, was_off)
             return self._dto_to_response(config, status=OperationStatus.UPDATED)
         finally:
             if pool and conn:
@@ -1064,8 +1074,12 @@ class KGDocumentsEndpoint:
 
     async def _handle_delete_config(self, space_id: str, config_id: int):
         """Delete a segmentation config."""
+        from vitalgraph.document.vectorize_policy import types_with_vectorize_off
         manager, pool, conn = await self._get_config_manager(space_id)
         try:
+            before = await manager.get_config(config_id)
+            was_off = before is not None and bool(await types_with_vectorize_off(
+                conn, space_id, [before.document_type_uri]))
             deleted = await manager.delete_config(config_id)
             if not deleted:
                 return SegmentationConfigDeleteResponse(
@@ -1073,6 +1087,7 @@ class KGDocumentsEndpoint:
                     message=f"Segmentation config {config_id} not found",
                     config_id=config_id,
                 )
+            await self._on_type_default_change(space_id, conn, before.document_type_uri, was_off)
             return SegmentationConfigDeleteResponse(
                 status=OperationStatus.DELETED,
                 message=f"Deleted config {config_id}",
@@ -1586,7 +1601,16 @@ class KGDocumentsEndpoint:
             raise HTTPException(status_code=500, detail=str(e))
 
     async def _update(self, space_id: str, graph_id: str, quads: List[Quad]) -> QuadResultsResponse:
-        """Update KGDocument(s) from quad payload, with write protection for managed segments."""
+        """Update KGDocument(s) from quad payload, with write protection for managed segments.
+
+        Each object REPLACES its subject's quads. This used to insert the new
+        quads with an empty delete list, so a changed content, name or type was
+        stored NEXT TO the old value, and a failed write still answered
+        UPDATED. An explicit `hasKGIndexStatusURI` the payload omits is kept: it
+        is the document's vectorize decision (`issues/285`), and a PUT has no
+        `vectorize` knob to restate it. Afterwards, a content change
+        re-segments (`issues/286`).
+        """
         try:
             # Check for managed segment types in incoming quads
             protection_error = self._check_write_protection(quads)
@@ -1608,29 +1632,30 @@ class KGDocumentsEndpoint:
                     total_count=0, results=[],
                 )
 
-            # Build delete + insert quads for atomic update
-            updated_uris = []
+            from rdflib import URIRef
+            from ai_haley_kg_domain.model.KGDocument import KGDocument
+            graph_objects = [o for o in graph_objects if getattr(o, 'URI', None)]
+            updated_uris = [str(o.URI) for o in graph_objects]
+            _set_document_grouping_uris(graph_objects)
+
+            kept = await self._explicit_index_status(
+                backend_adapter, space_id, graph_id,
+                [str(o.URI) for o in graph_objects
+                 if isinstance(o, KGDocument) and o.kGIndexStatusURI is None])
             for obj in graph_objects:
-                obj_uri = str(getattr(obj, 'URI', ''))
-                if not obj_uri:
-                    continue
-                updated_uris.append(obj_uri)
+                if str(obj.URI) in kept:
+                    obj.kGIndexStatusURI = kept[str(obj.URI)]
 
-                # Delete existing triples for this subject, then insert new ones
-                from rdflib import URIRef
-                triples = obj.to_triples()
-                insert_quads = [(s, p, o, URIRef(graph_id)) for s, p, o in triples]
-                delete_quads_for_subj = []  # Will be replaced atomically
+            g = URIRef(graph_id)
+            insert_quads = [(s, p, o, g) for obj in graph_objects
+                            for s, p, o in obj.to_triples()]
+            if not await backend_adapter.update_subjects_graph(
+                    space_id, graph_id, updated_uris, insert_quads):
+                raise HTTPException(status_code=500,
+                                    detail="KGDocument update failed; nothing was written")
 
-                await backend_adapter.update_quads(
-                    space_id=space_id,
-                    graph_id=graph_id,
-                    delete_quads=delete_quads_for_subj,
-                    insert_quads=insert_quads,
-                )
-
-            # Schedule auto-sync (vectorization + re-segmentation)
             self._schedule_auto_sync(space_impl, space_id, graph_id, updated_uris, "upsert")
+            await self._auto_resegment(space_id, graph_id, backend_adapter, graph_objects)
 
             return QuadResultsResponse(
                 status=OperationStatus.UPDATED,
@@ -1808,7 +1833,7 @@ class KGDocumentsEndpoint:
 
         `issues/286`. The config API stored per-type settings and nothing
         acted on them at create time: `AutoSegmentationHook` was written for
-        this and never called, so a created document stayed unsegmented until
+        this and never called (since deleted), so a created document stayed unsegmented until
         someone called `/kgdocuments/segment`. The worker resolves the config
         again when it runs (method, sizes, vectorize default), so the job only
         needs to exist.
@@ -1863,6 +1888,227 @@ class KGDocumentsEndpoint:
                 cfgs[0].max_segment_tokens)
             if job_id is not None:
                 queued += 1
+        return queued
+
+    async def _on_type_default_change(self, space_id: str, conn,
+                                      doc_type: Optional[str], was_off: bool) -> None:
+        """After a config create, update or delete: if it FLIPPED the type's
+        vectorize default, carry the new default to the type's existing output.
+
+        `issues/285`. A whole document follows its type by lookup on its next
+        sync; its segments follow by the stamp the worker wrote at segmentation
+        time, so a change used to reach them only on re-segmentation. Only a
+        flip does anything -- re-syncing a type whose decision did not change
+        would re-embed every one of its documents for nothing, and an embedding
+        can be billed. The work runs in the background; it is logged.
+        """
+        from vitalgraph.document.vectorize_policy import types_with_vectorize_off
+        if not doc_type:
+            return
+        is_off = bool(await types_with_vectorize_off(conn, space_id, [doc_type]))
+        if is_off == was_off:
+            return
+        task = asyncio.get_running_loop().create_task(
+            self._apply_type_default(space_id, doc_type, is_off),
+            name=f"type_default:{space_id}:{doc_type}")
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def _apply_type_default(self, space_id: str, doc_type: str, off: bool,
+                                  batch: int = 200) -> int:
+        """Restamp the parent copies and segments of every `doc_type` original
+        that has no explicit status, then re-sync them and the originals.
+
+        An original WITH an explicit `hasKGIndexStatusURI` is untouched: its
+        decision is its own, and its segments carry it (`vectorize_policy`).
+        Off stamps `NO_INDEX`, which the sync then removes vectors for; on
+        removes the stamp, and the sync embeds. Returns how many subjects were
+        restamped.
+        """
+        from vitalgraph.document.segment_deletion import (
+            EDGE_HAS_SEGMENT, HAS_EDGE_DESTINATION, HAS_EDGE_SOURCE,
+            HAS_SEGMENT_TYPE_URI, SEGMENTATION_PARENT_TYPE, VITALTYPE,
+            _is_safe_uri, _value, sparql_bindings)
+        from vitalgraph.document.vectorize_policy import (
+            INDEX_STATUS_NO_INDEX, INDEX_STATUS_PROPERTY, _DOCUMENT_TYPE, _SEGMENT_INDEX)
+        try:
+            if not _is_safe_uri(doc_type):
+                return 0
+            backend_adapter, space_impl = await self._get_backend(space_id)
+            result = await backend_adapter.execute_sparql_query(space_id, f"""
+                SELECT DISTINCT ?g ?doc ?x WHERE {{ GRAPH ?g {{
+                    ?doc <{_DOCUMENT_TYPE}> <{doc_type}> .
+                    FILTER NOT EXISTS {{ ?doc <{_SEGMENT_INDEX}> ?i }}
+                    FILTER NOT EXISTS {{ ?doc <{INDEX_STATUS_PROPERTY}> ?st }}
+                    OPTIONAL {{
+                        # The parent copies, and their segments. Each branch is
+                        # whole: a `BIND(?parent AS ?x)` branch would be its own
+                        # group, where ?parent is unbound, and the parent copy
+                        # would be silently left out.
+                        {{  ?e1 <{HAS_EDGE_SOURCE}> ?doc .
+                            ?e1 <{VITALTYPE}> <{EDGE_HAS_SEGMENT}> .
+                            ?e1 <{HAS_EDGE_DESTINATION}> ?x .
+                            ?x <{HAS_SEGMENT_TYPE_URI}> <{SEGMENTATION_PARENT_TYPE}> . }}
+                        UNION
+                        {{  ?e1 <{HAS_EDGE_SOURCE}> ?doc .
+                            ?e1 <{VITALTYPE}> <{EDGE_HAS_SEGMENT}> .
+                            ?e1 <{HAS_EDGE_DESTINATION}> ?parent .
+                            ?parent <{HAS_SEGMENT_TYPE_URI}> <{SEGMENTATION_PARENT_TYPE}> .
+                            ?e2 <{HAS_EDGE_SOURCE}> ?parent .
+                            ?e2 <{VITALTYPE}> <{EDGE_HAS_SEGMENT}> .
+                            ?e2 <{HAS_EDGE_DESTINATION}> ?x . }}
+                    }} }} }}""")
+            by_graph: Dict[str, Dict[str, set]] = {}
+            for r in sparql_bindings(result):
+                g, doc, x = _value(r, "g"), _value(r, "doc"), _value(r, "x")
+                if not (g and doc):
+                    continue
+                entry = by_graph.setdefault(g, {"docs": set(), "out": set()})
+                entry["docs"].add(doc)
+                if x and _is_safe_uri(x):
+                    entry["out"].add(x)
+            restamped = 0
+            for g, entry in by_graph.items():
+                out = sorted(entry["out"])
+                for i in range(0, len(out), batch):
+                    values = " ".join(f"<{u}>" for u in out[i:i + batch])
+                    insert = (f"INSERT {{ GRAPH <{g}> {{ ?x <{INDEX_STATUS_PROPERTY}> "
+                              f"<{INDEX_STATUS_NO_INDEX}> }} }}" if off else "")
+                    ok = await backend_adapter.execute_sparql_update(space_id, f"""
+                        DELETE {{ GRAPH <{g}> {{ ?x <{INDEX_STATUS_PROPERTY}> ?o }} }}
+                        {insert}
+                        WHERE {{ VALUES ?x {{ {values} }}
+                                 OPTIONAL {{ GRAPH <{g}> {{ ?x <{INDEX_STATUS_PROPERTY}> ?o }} }} }}""")
+                    if not ok:
+                        raise RuntimeError(f"restamp failed in {g}")
+                    restamped += len(out[i:i + batch])
+                self._schedule_auto_sync(space_impl, space_id, g,
+                                         sorted(entry["docs"]) + out, "upsert")
+            self.logger.info(
+                "type default for %s in %s is now vectorize=%s: %d document(s), "
+                "%d segmentation subject(s) restamped and re-synced", doc_type, space_id,
+                not off, sum(len(e["docs"]) for e in by_graph.values()), restamped)
+            return restamped
+        except Exception as e:
+            self.logger.error("applying the vectorize default of %s in %s failed: %s",
+                              doc_type, space_id, e)
+            return 0
+
+    async def _explicit_index_status(self, backend_adapter, space_id: str,
+                                     graph_id: str, uris: List[str]) -> Dict[str, str]:
+        """`{uri: hasKGIndexStatusURI}` for the stored documents that have one."""
+        from vitalgraph.document.segment_deletion import (
+            _is_safe_uri, _value, sparql_bindings)
+        from vitalgraph.document.vectorize_policy import INDEX_STATUS_PROPERTY
+        uris = [u for u in uris if _is_safe_uri(u)]
+        if not uris:
+            return {}
+        values = " ".join(f"<{u}>" for u in uris)
+        result = await backend_adapter.execute_sparql_query(space_id, f"""
+            SELECT ?s ?st WHERE {{ VALUES ?s {{ {values} }}
+                GRAPH <{graph_id}> {{ ?s <{INDEX_STATUS_PROPERTY}> ?st }} }}""")
+        return {_value(r, "s"): _value(r, "st") for r in sparql_bindings(result)
+                if _value(r, "s") and _value(r, "st")}
+
+    async def _auto_resegment(self, space_id: str, graph_id: str,
+                              backend_adapter, graph_objects) -> int:
+        """Re-segment each updated original document whose content changed.
+
+        `issues/286`. Only the SPARQL UPDATE hook re-segmented on a content
+        change; `PUT /kgdocuments` did not, so its segments went on answering
+        searches with the old text. A document qualifies when it is already
+        segmented (re-run with the method it has) or its type has an enabled
+        config (the method `_auto_segment` would pick at create).
+
+        "Changed" is the job table's own test: the job carries the new content's
+        hash and `enqueue` skips it when the last completed job has the same
+        one, so a PUT of a name or a status does not re-segment.
+
+        Best effort, like `_auto_segment`: a failure leaves the update stored
+        and the old segments in place. Returns the number of jobs queued.
+        """
+        from ai_haley_kg_domain.model.KGDocument import KGDocument
+        from vitalgraph.document.segment_deletion import (
+            EDGE_HAS_SEGMENT, HAS_EDGE_DESTINATION, HAS_EDGE_SOURCE,
+            HAS_SEGMENT_METHOD_URI, HAS_SEGMENT_TYPE_URI, SEGMENTATION_PARENT_TYPE,
+            VITALTYPE, _is_safe_uri, _value, sparql_bindings)
+        from vitalgraph.document.segmentation_job_manager import SegmentationJobManager
+
+        docs = {}
+        for obj in graph_objects:
+            if not isinstance(obj, KGDocument) or obj.kGDocumentSegmentIndex is not None:
+                continue
+            props = {k: str(getattr(obj, k)) for k in (
+                "kGDocumentExtractedContent", "kGDocumentHTMLContent", "kGDocumentContent")
+                if getattr(obj, k, None) is not None}
+            content_hash = SegmentationJobManager.compute_content_hash(props)
+            if content_hash and _is_safe_uri(str(obj.URI)):
+                docs[str(obj.URI)] = (
+                    str(obj.kGDocumentType) if obj.kGDocumentType is not None else None,
+                    content_hash)
+        if not docs:
+            return 0
+        try:
+            values = " ".join(f"<{u}>" for u in docs)
+            result = await backend_adapter.execute_sparql_query(space_id, f"""
+                SELECT ?doc ?method WHERE {{ VALUES ?doc {{ {values} }}
+                    GRAPH <{graph_id}> {{
+                        ?e <{HAS_EDGE_SOURCE}> ?doc .
+                        ?e <{VITALTYPE}> <{EDGE_HAS_SEGMENT}> .
+                        ?e <{HAS_EDGE_DESTINATION}> ?parent .
+                        ?parent <{HAS_SEGMENT_TYPE_URI}> <{SEGMENTATION_PARENT_TYPE}> .
+                        OPTIONAL {{ ?parent <{HAS_SEGMENT_METHOD_URI}> ?method }} }} }}
+                ORDER BY ?doc ?method""")
+            existing = {}
+            for r in sparql_bindings(result):
+                existing.setdefault(_value(r, "doc"), _value(r, "method"))
+            configs = {}
+            types = {t for u, (t, _h) in docs.items() if t and u not in existing}
+            if types:
+                manager, pool, conn = await self._get_config_manager(space_id)
+                try:
+                    if await conn.fetchval(
+                            "SELECT to_regclass($1) IS NOT NULL",
+                            f"{space_id}_document_segmentation_config"):
+                        for t in types:
+                            configs[t] = await manager.get_config_for_document_type(t)
+                finally:
+                    if pool and conn:
+                        await pool.release(conn)
+        except Exception as e:
+            self.logger.warning("re-segmentation on update: lookup failed: %s", e)
+            return 0
+
+        jobs = []
+        for uri, (doc_type, content_hash) in docs.items():
+            if uri in existing:
+                jobs.append((uri, existing[uri], None, content_hash))
+            elif configs.get(doc_type):
+                cfg = configs[doc_type][0]   # the same choice as `_auto_segment`
+                jobs.append((uri, cfg.segment_method_uri, cfg.max_segment_tokens,
+                             content_hash))
+        if not jobs:
+            return 0
+        manager, pool, conn = await self._get_job_manager(space_id)
+        if not manager:
+            self.logger.warning("re-segmentation on update: no job manager for %s", space_id)
+            return 0
+        queued = 0
+        try:
+            for uri, method_uri, max_tokens, content_hash in jobs:
+                try:
+                    if await manager.enqueue(
+                            graph_id=graph_id, document_uri=uri,
+                            segment_method_uri=method_uri,
+                            max_segment_tokens=max_tokens,
+                            content_hash=content_hash) is not None:
+                        queued += 1
+                except Exception as e:
+                    self.logger.warning("re-segmentation on update: enqueue failed for %s: %s",
+                                        uri, e)
+        finally:
+            if pool and conn:
+                await pool.release(conn)
         return queued
 
     async def _set_index_status(self, space_id: str, graph_id: str,

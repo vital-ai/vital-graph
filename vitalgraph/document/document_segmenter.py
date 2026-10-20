@@ -178,16 +178,14 @@ class DocumentSegmenter:
                         segment_index += 1
             else:
                 # Oversized section — recursive split
-                sub_chunks = self._recursive_split(
-                    section_text,
-                    self._effective_max_tokens(config.max_segment_tokens),
-                    config.overlap_tokens,
-                )
                 max_tokens = self._effective_max_tokens(config.max_segment_tokens)
-                for chunk in sub_chunks:
+                sub_chunks = self._recursive_split_spans(
+                    section_text, max_tokens, config.overlap_tokens)
+                for chunk, own_start, own_end in sub_chunks:
                     chunk_tokens = self._tokenizer(chunk)
-                    # Calculate approximate char offset within section
-                    chunk_start = section["start"] + section_text.find(chunk)
+                    # The chunk's own span in the section (issues/287).
+                    chunk_start = section["start"] + own_start
+                    chunk_end = section["start"] + own_end
                     if chunk_tokens < config.min_segment_tokens and results:
                         # A short remainder is MERGED, never dropped. This
                         # branch used to skip it, so the tail of every
@@ -203,7 +201,7 @@ class DocumentSegmenter:
                                 content=merged_content,
                                 segment_index=prev.segment_index,
                                 start_char_offset=prev.start_char_offset,
-                                end_char_offset=chunk_start + len(chunk),
+                                end_char_offset=chunk_end,
                                 token_length=merged_tokens,
                                 segment_type_uri=prev.segment_type_uri,
                                 heading=prev.heading,
@@ -213,7 +211,7 @@ class DocumentSegmenter:
                         content=chunk,
                         segment_index=segment_index,
                         start_char_offset=chunk_start,
-                        end_char_offset=chunk_start + len(chunk),
+                        end_char_offset=chunk_end,
                         token_length=chunk_tokens,
                         segment_type_uri="urn:segtype:paragraph",
                         heading=section_heading,
@@ -317,14 +315,13 @@ class DocumentSegmenter:
         self, text: str, config: PlainSplitConfig
     ) -> List[SegmentResult]:
         """Split text using recursive character splitting."""
-        chunks = self._recursive_split(
+        chunks = self._recursive_split_spans(
             text, self._effective_max_tokens(config.max_segment_tokens), config.overlap_tokens
         )
 
         results: List[SegmentResult] = []
-        char_offset = 0
 
-        for i, chunk in enumerate(chunks):
+        for i, (chunk, own_start, own_end) in enumerate(chunks):
             token_count = self._tokenizer(chunk)
             if token_count < config.min_segment_tokens and results:
                 # Merge with previous
@@ -334,7 +331,7 @@ class DocumentSegmenter:
                     content=merged,
                     segment_index=prev.segment_index,
                     start_char_offset=prev.start_char_offset,
-                    end_char_offset=char_offset + len(chunk),
+                    end_char_offset=own_end,
                     token_length=self._tokenizer(merged),
                     segment_type_uri=config.segment_type_uri,
                 )
@@ -342,17 +339,11 @@ class DocumentSegmenter:
                 results.append(SegmentResult(
                     content=chunk,
                     segment_index=i + 1,
-                    start_char_offset=char_offset,
-                    end_char_offset=char_offset + len(chunk),
+                    start_char_offset=own_start,
+                    end_char_offset=own_end,
                     token_length=token_count,
                     segment_type_uri=config.segment_type_uri,
                 ))
-            # Track position (approximate due to overlap)
-            chunk_pos = text.find(chunk, char_offset)
-            if chunk_pos >= 0:
-                char_offset = chunk_pos + len(chunk)
-            else:
-                char_offset += len(chunk)
 
         # Re-index
         for i, result in enumerate(results):
@@ -364,95 +355,136 @@ class DocumentSegmenter:
     # Recursive character splitter (shared utility)
     # -------------------------------------------------------------------------
 
+    _SEPARATORS = ["\n\n", "\n", ". ", " "]
+
     def _recursive_split(
         self, text: str, max_tokens: int, overlap_tokens: int = 0
     ) -> List[str]:
-        """
-        Recursively split text at natural boundaries until all chunks
-        fit within max_tokens.
+        """Split `text` at natural boundaries until every chunk fits.
 
-        Split hierarchy: paragraphs → newlines → sentences → spaces.
+        Hierarchy: paragraphs -> newlines -> sentences -> words, and only then
+        character chunks. Overlap, when configured, is applied ONCE to the
+        final chunks (`issues/287`). See `_recursive_split_spans` for offsets.
         """
-        separators = ["\n\n", "\n", ". ", " "]
-        return self._split_recursive(text, separators, max_tokens, overlap_tokens)
+        return [c for c, _s, _e in self._recursive_split_spans(text, max_tokens, overlap_tokens)]
+
+    def _recursive_split_spans(
+        self, text: str, max_tokens: int, overlap_tokens: int = 0
+    ) -> List[tuple]:
+        """`(content, start, end)` per chunk.
+
+        `start`/`end` locate the chunk's OWN content in `text` -- not the overlap
+        prefix borrowed from the previous chunk, which is not contiguous with it
+        in the source. They used to come from `text.find(chunk)`, which returns
+        -1 for an overlapped chunk and corrupted every offset after it
+        (`issues/287`).
+        """
+        base = self._split_recursive(text, self._SEPARATORS, max_tokens)
+        spans, cursor = [], 0
+        for chunk in base:
+            pos = text.find(chunk, cursor)
+            if pos < 0:          # cannot happen for substrings; keep monotone
+                pos = cursor
+            spans.append((chunk, pos, pos + len(chunk)))
+            cursor = pos + len(chunk)
+        if overlap_tokens > 0 and len(spans) > 1:
+            contents = self._apply_overlap([c for c, _s, _e in spans],
+                                           overlap_tokens, max_tokens)
+            spans = [(c, st, en) for c, (_c, st, en) in zip(contents, spans)]
+        return spans
 
     def _split_recursive(
-        self, text: str, separators: List[str], max_tokens: int, overlap_tokens: int
+        self, text: str, separators: List[str], max_tokens: int
     ) -> List[str]:
-        """Recursive implementation of character text splitting."""
+        """Recursive implementation of character text splitting.
+
+        Every returned chunk is a stripped SUBSTRING of `text` that fits
+        `max_tokens`. Overlap is not applied here.
+        """
         if not text.strip():
             return []
-
-        # If text fits, return as-is
         if self._tokenizer(text) <= max_tokens:
-            return [text.strip()] if text.strip() else []
+            return [text.strip()]
 
-        # Find best separator
-        separator = separators[0] if separators else " "
-        remaining_separators = separators[1:] if len(separators) > 1 else [" "]
+        # The first separator that actually splits the text, trying each in
+        # turn down to words. This used to stop BEFORE the word separator --
+        # `remaining_separators != [" "]` -- and fall to character chunks, so a
+        # paragraph with no ". " was cut mid-word (`issues/287`).
+        for i, separator in enumerate(separators):
+            parts = text.split(separator)
+            if len(parts) > 1:
+                remaining = separators[i + 1:]
+                break
+        else:
+            return self._hard_chunk(text, max_tokens)
 
-        # Split by separator
-        parts = text.split(separator)
-        if len(parts) == 1:
-            if remaining_separators and remaining_separators != [" "]:
-                # This separator doesn't help — try next
-                return self._split_recursive(text, remaining_separators, max_tokens, overlap_tokens)
-            else:
-                # No separator works — hard-chunk by character count
-                # Estimate chars per token from current text
-                current_tokens = self._tokenizer(text)
-                if current_tokens == 0:
-                    return [text.strip()] if text.strip() else []
-                chars_per_token = max(1, len(text) // current_tokens)
-                chunk_size = max(1, max_tokens * chars_per_token)
-                chunks = []
-                for i in range(0, len(text), chunk_size):
-                    chunk = text[i:i + chunk_size].strip()
-                    if chunk:
-                        chunks.append(chunk)
-                return chunks
-
-        # Merge parts into chunks that fit within max_tokens
         chunks: List[str] = []
-        current_chunk = ""
-
+        current = ""
         for part in parts:
-            candidate = (current_chunk + separator + part) if current_chunk else part
+            candidate = (current + separator + part) if current else part
             if self._tokenizer(candidate) <= max_tokens:
-                current_chunk = candidate
+                current = candidate
+                continue
+            if current.strip():
+                chunks.append(current.strip())
+            if self._tokenizer(part) > max_tokens:
+                chunks.extend(self._split_recursive(part, remaining, max_tokens))
+                current = ""
             else:
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                # If single part exceeds max, recursively split it
-                if self._tokenizer(part) > max_tokens:
-                    sub_chunks = self._split_recursive(
-                        part, remaining_separators, max_tokens, overlap_tokens
-                    )
-                    chunks.extend(sub_chunks)
-                    current_chunk = ""
-                else:
-                    current_chunk = part
+                current = part
+        if current.strip():
+            chunks.append(current.strip())
+        return [c for c in chunks if c]
 
-        if current_chunk.strip():
-            chunks.append(current_chunk.strip())
+    def _hard_chunk(self, text: str, max_tokens: int) -> List[str]:
+        """Character chunks for text with no separator at all, each CHECKED
+        against `max_tokens` and halved until it fits.
 
-        # Apply overlap if configured
-        if overlap_tokens > 0 and len(chunks) > 1:
-            chunks = self._apply_overlap(chunks, overlap_tokens)
+        The size comes from an average chars-per-token estimate, which a dense
+        stretch exceeds; the chunk was never re-checked, so it could go past the
+        embedding limit and be truncated there (`issues/287`).
+        """
+        text = text.strip()
+        if not text:
+            return []
+        if self._tokenizer(text) <= max_tokens or len(text) == 1:
+            return [text]
+        tokens = max(1, self._tokenizer(text))
+        size = max(1, (len(text) * max_tokens) // tokens)
+        out: List[str] = []
+        for i in range(0, len(text), size):
+            piece = text[i:i + size].strip()
+            if not piece:
+                continue
+            if self._tokenizer(piece) <= max_tokens or len(piece) == 1:
+                out.append(piece)
+            else:
+                mid = len(piece) // 2
+                out.extend(self._hard_chunk(piece[:mid], max_tokens))
+                out.extend(self._hard_chunk(piece[mid:], max_tokens))
+        return out
 
-        return [c for c in chunks if c.strip()]
+    def _apply_overlap(self, chunks: List[str], overlap_tokens: int,
+                       max_tokens: Optional[int] = None) -> List[str]:
+        """Prefix each chunk with the tail of the previous one.
 
-    def _apply_overlap(self, chunks: List[str], overlap_tokens: int) -> List[str]:
-        """Add overlap between consecutive chunks."""
+        Measured with the TOKENIZER, not by counting whitespace words, and
+        shrunk so an overlapped chunk never exceeds `max_tokens`. It used to be
+        applied at every level of recursion, compounding, and could push a chunk
+        past the limit (`issues/287`).
+        """
         if len(chunks) <= 1:
             return chunks
-
         result = [chunks[0]]
         for i in range(1, len(chunks)):
-            # Get tail of previous chunk as overlap prefix
-            prev_words = chunks[i - 1].split()
-            overlap_words = prev_words[-overlap_tokens:] if len(prev_words) > overlap_tokens else prev_words
-            overlap_text = " ".join(overlap_words)
-            result.append(overlap_text + " " + chunks[i])
-
+            words = chunks[i - 1].split()
+            tail: List[str] = []
+            for w in reversed(words):
+                if self._tokenizer(" ".join([w] + tail)) > overlap_tokens:
+                    break
+                tail.insert(0, w)
+            while tail and max_tokens is not None and \
+                    self._tokenizer(" ".join(tail) + " " + chunks[i]) > max_tokens:
+                tail.pop(0)
+            result.append((" ".join(tail) + " " + chunks[i]) if tail else chunks[i])
         return result

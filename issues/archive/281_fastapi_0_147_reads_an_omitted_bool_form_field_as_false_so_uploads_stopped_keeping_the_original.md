@@ -1,6 +1,8 @@
 # 281 — FastAPI 0.147 reads an omitted bool form field as False, so uploads stopped keeping the original
 
-## Status: FIXED IN CODE 2026-10-19 (not yet released). Production not affected yet: its image predates FastAPI 0.147. The next image build would be.
+## ARCHIVED 2026-10-20 — fixed and verified locally, in production with the current code (reported 2026-10-20); nothing remaining. Evidence: tests/unit/test_form_flags_survive_fastapi_checkbox_semantics.py.
+
+## Status: FIXED IN CODE 2026-10-19 (in production with the current code, reported 2026-10-20). Production not affected yet: its image predates FastAPI 0.147. The next image build would be.
 
 **Related:** `issues/280` (the same day's other dependency surprise: a new
 release, no change in this repo, E2E red).

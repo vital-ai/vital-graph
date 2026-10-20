@@ -1,6 +1,8 @@
 # 273 — Incremental derived-table syncs scanned the space, not the write
 
-## Status: FIXED 2026-10-17 (not yet released). Found measuring v0.0.86 in production.
+## ARCHIVED 2026-10-20 — fixed and verified locally, in production with the current code (reported 2026-10-20). The Not done items are an evaluated-and-not-adopted change and an unmeasured micro-optimisation, not defects. Evidence: tests/unit/test_incremental_derivations_probe_by_write.py.
+
+## Status: FIXED 2026-10-17 (in production with the current code, reported 2026-10-20). Found measuring v0.0.86 in production.
 
 **Related:** `issues/271` (the write path this continues), `issues/238` and
 `issues/253` (the same class on the delete side: a filter the planner could not
