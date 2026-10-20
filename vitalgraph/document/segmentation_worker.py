@@ -364,7 +364,7 @@ class SegmentationWorker:
             # The document type's registered config, and the vectorize
             # decision its segments inherit (`issues/285`, `issues/286`).
             type_config, index_status = await self._resolve_type_policy(
-                space_id, job, doc_properties)
+                space_id, job, doc_properties, manager.conn)
 
             # Build segmentation config
             config = self._build_config(
@@ -774,7 +774,8 @@ class SegmentationWorker:
         if props.get("kGIndexStatusURI"):
             obj.kGIndexStatusURI = props["kGIndexStatusURI"]
 
-    async def _resolve_type_policy(self, space_id: str, job, doc_properties: dict):
+    async def _resolve_type_policy(self, space_id: str, job, doc_properties: dict,
+                                   conn):
         """`(type_config, index_status)` for this job's document.
 
         `type_config` is the enabled config for the document's type -- the one
@@ -784,34 +785,50 @@ class SegmentationWorker:
         `index_status` is what the segments are stamped with
         (`vectorize_policy.segment_index_status`).
 
-        Best effort: a failed lookup segments with the job's own settings and
-        stamps nothing, which is the behaviour before either was added.
+        ON THE CONNECTION THE WORKER ALREADY HOLDS (`conn`, the job manager's).
+        This used to take a SECOND connection from the internal pool while that
+        one was held -- the `issues/274` anti-pattern. On a small, busy pool the
+        acquire timed out (an empty `TimeoutError`), the lookup was skipped, and
+        a document that had opted out of vectors had its segments embedded
+        anyway, with billed provider calls (`issues/290`).
+
+        FAILS CLOSED. The document's own explicit status needs no lookup -- it is
+        in `doc_properties` -- so it is applied whatever happens. If the TYPE
+        lookup fails and there is no explicit status, this raises and the job is
+        failed and retried, rather than segmenting with nothing stamped:
+        embedding against an opt-out is the expensive wrong direction.
         """
         from vitalgraph.document.segmentation_config_manager import SegmentationConfigManager
-        from vitalgraph.document.vectorize_policy import segment_index_status
+        from vitalgraph.document.vectorize_policy import (
+            INDEX_STATUS_NO_INDEX, INDEX_STATUS_VECTOR, segment_index_status)
 
         doc_type = doc_properties.get("kGDocumentType")
-        pool = await self._get_pool(space_id)
-        if pool is None:
-            return None, None
+        explicit = doc_properties.get("kGIndexStatusURI")
+        if explicit not in (INDEX_STATUS_NO_INDEX, INDEX_STATUS_VECTOR):
+            explicit = None
         try:
-            async with pool.acquire() as conn:
-                type_config = None
-                if doc_type and await conn.fetchval(
-                        "SELECT to_regclass($1) IS NOT NULL",
-                        f"{space_id}_document_segmentation_config"):
-                    configs = await SegmentationConfigManager(
-                        conn, space_id).get_config_for_document_type(doc_type)
-                    matching = [c for c in configs
-                                if c.segment_method_uri == job.segment_method_uri]
-                    type_config = (matching or configs or [None])[0]
-                index_status = await segment_index_status(
-                    conn, space_id, doc_properties.get("kGIndexStatusURI"), doc_type)
-                return type_config, index_status
+            type_config = None
+            if doc_type and await conn.fetchval(
+                    "SELECT to_regclass($1) IS NOT NULL",
+                    f"{space_id}_document_segmentation_config"):
+                configs = await SegmentationConfigManager(
+                    conn, space_id).get_config_for_document_type(doc_type)
+                matching = [c for c in configs
+                            if c.segment_method_uri == job.segment_method_uri]
+                type_config = (matching or configs or [None])[0]
+            index_status = explicit or await segment_index_status(
+                conn, space_id, None, doc_type)
+            return type_config, index_status
         except Exception as e:
-            logger.warning("Job %s: type policy lookup failed, using job settings: %s",
-                           job.job_id, e)
-            return None, None
+            if explicit is not None:
+                logger.warning(
+                    "Job %s: type config lookup failed (%s: %s); segmenting with "
+                    "the job's settings and the document's own status %s",
+                    job.job_id, type(e).__name__, e, explicit)
+                return None, explicit
+            raise RuntimeError(
+                f"type policy lookup failed ({type(e).__name__}: {e}); not "
+                f"segmenting without a vectorize decision") from e
 
     def _fire_vectorization_background(
         self, space_impl, space_id: str, graph_id: str, output, job_id: int,

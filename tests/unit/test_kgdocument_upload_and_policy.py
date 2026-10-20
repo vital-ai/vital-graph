@@ -148,3 +148,50 @@ def test_deleting_segmentation_removes_the_index_rows_too(monkeypatch):
     assert n == 2
     assert calls and calls[0]["operation"] == "delete"
     assert calls[0]["subject_uris"] == ["urn:p", "urn:p_seg_1"]
+
+
+class TestTypePolicyLookup:
+    """issues/290: the segment stamp was skipped when a SECOND pool connection
+    timed out, so an opted-out document's segments were embedded anyway."""
+
+    NO_INDEX = "http://vital.ai/ontology/haley-ai-kg#KGIndexStatus_NO_INDEX"
+
+    class _Conn:
+        def __init__(self, fail=False):
+            self.fail = fail
+
+        async def fetchval(self, *a, **k):
+            if self.fail:
+                raise TimeoutError()
+            return False          # no config table: no type default
+
+        async def fetch(self, *a, **k):
+            return []
+
+    def _worker(self):
+        w = SegmentationWorker(None)
+
+        async def no_pool(space_id):
+            raise AssertionError("must use the held connection, not the pool")
+        w._get_pool = no_pool
+        return w
+
+    def test_uses_the_held_connection(self):
+        job = SimpleNamespace(job_id=1, segment_method_uri=None)
+        cfg, status = asyncio.run(self._worker()._resolve_type_policy(
+            "sp", job, {"kGDocumentType": "urn:t", "kGIndexStatusURI": self.NO_INDEX},
+            self._Conn()))
+        assert status == self.NO_INDEX
+
+    def test_an_explicit_opt_out_survives_a_failed_lookup(self):
+        job = SimpleNamespace(job_id=1, segment_method_uri=None)
+        cfg, status = asyncio.run(self._worker()._resolve_type_policy(
+            "sp", job, {"kGDocumentType": "urn:t", "kGIndexStatusURI": self.NO_INDEX},
+            self._Conn(fail=True)))
+        assert (cfg, status) == (None, self.NO_INDEX)
+
+    def test_without_an_explicit_status_a_failed_lookup_fails_the_job(self):
+        job = SimpleNamespace(job_id=1, segment_method_uri=None)
+        with pytest.raises(RuntimeError, match="TimeoutError"):
+            asyncio.run(self._worker()._resolve_type_policy(
+                "sp", job, {"kGDocumentType": "urn:t"}, self._Conn(fail=True)))
