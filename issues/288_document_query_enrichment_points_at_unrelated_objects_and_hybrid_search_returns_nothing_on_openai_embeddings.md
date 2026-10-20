@@ -110,9 +110,16 @@ Map a hit back to its report through the segment itself, for example
   segmentation copy holds the whole text, sits under the same
   `kgdocument_segment` mapping, and is a legitimate whole-document match for
   other callers. It stays in results by default. To search segments only, pass
-  `search_scope="segments"` with `exclude_managed_segments=False`. That scope
-  keeps rows with a segment index above 0, and the parent copy's is 0. The
-  client's `query_documents` docstring now says so.
+  `search_scope="segments"`. That scope keeps rows with a segment index above
+  0, and the parent copy's is 0. The client's `query_documents` docstring now
+  says so.
+* **An explicit `search_scope` of `segments` or `summaries` overrides the
+  default `exclude_managed_segments=True`.** The two contradicted each other:
+  the scope asks for exactly the managed objects the default excludes. Until
+  `paragraph` joined the managed list, a segment search under the default
+  returned only the pieces of oversized markdown sections; with
+  `text_chunk` segments it returned nothing. Found when the Wikipedia e2e,
+  which relied on that leak, returned 0 rows after `paragraph` was added.
 * **A vector query returns only scored rows.** Under the default
   `exclude_managed_segments=True`, a vector query over a segment-only index
   returned the originals, which have no vector, with `score=None` in arbitrary

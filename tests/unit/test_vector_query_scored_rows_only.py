@@ -73,3 +73,19 @@ class TestTheGeneratedQuery:
             DocumentQueryCriteria(exclude_managed_segments=True))
         for t in ("segmentation_parent", "markdown_section", "text_chunk", "paragraph"):
             assert f"<urn:segtype:{t}>" in where, t
+
+
+def test_an_explicit_managed_scope_overrides_the_default_exclusion():
+    """`search_scope="segments"` with the default `exclude_managed_segments=True`
+    excluded every segment it asked for (markdown `paragraph` pieces slipped
+    through until that type joined the list)."""
+    b = KGQueryCriteriaBuilder()
+    for scope in ("segments", "summaries"):
+        where = b._build_document_where_clause(
+            DocumentQueryCriteria(search_scope=scope, exclude_managed_segments=True))
+        assert "?_mst" not in where, (scope, where)
+    where = b._build_document_where_clause(
+        DocumentQueryCriteria(search_scope="originals", exclude_managed_segments=True))
+    assert "?_mst" in where
+    where = b._build_document_where_clause(DocumentQueryCriteria(exclude_managed_segments=True))
+    assert "?_mst" in where

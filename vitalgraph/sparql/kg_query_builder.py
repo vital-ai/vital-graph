@@ -2307,7 +2307,15 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
         # Exclude every managed segment type -- the shared list, which includes
         # `paragraph`; this copy lacked it, so those segments got through
         # (`issues/288`).
-        if criteria.exclude_managed_segments:
+        #
+        # NOT when the scope ASKS for managed objects. `segments` and
+        # `summaries` (the parent copies) select exactly what this excludes, so
+        # applying the default exclusion to them could only return a wrong
+        # subset or nothing: markdown segments are `markdown_section` and
+        # `paragraph`, and until `paragraph` joined the list a segment search
+        # returned only the pieces of oversized sections. An explicit scope is
+        # the caller's intent; the exclusion is a default.
+        if criteria.exclude_managed_segments and scope not in ("segments", "summaries"):
             from vitalgraph.document.segment_config import MANAGED_SEGMENT_TYPES
             managed = ", ".join(f"<{t}>" for t in sorted(MANAGED_SEGMENT_TYPES))
             filter_clauses.append(
