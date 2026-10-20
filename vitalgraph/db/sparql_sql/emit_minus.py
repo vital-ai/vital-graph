@@ -72,7 +72,13 @@ def emit_minus(plan: PlanV2, ctx: EmitContext) -> str:
         ctx.types.register(ColumnInfo.simple_output(
             v, sn, typed_lane=lane, from_triple=ft, text_materialized=tm))
 
-    if not shared:
+    # A `.gctx` variable is the same-graph correlation of a scoped
+    # `GRAPH ?g` (`graph_scope_rewrite`, `issues/280`): the right side must be
+    # in the same graph, but the graph is not a variable the two sides SHARE,
+    # so it does not count toward dom(μ1) ∩ dom(μ2) ≠ ∅. Sharing only it, the
+    # two are disjoint and nothing is removed.
+    from .graph_scope_rewrite import is_graph_ctx_var
+    if not shared or all(is_graph_ctx_var(v) for v in shared):
         return f"SELECT {', '.join(select_cols)}\nFROM ({left_sql}) AS {l_alias}"
 
     # SPARQL MINUS semantics (§18.5):
@@ -116,6 +122,11 @@ def emit_minus(plan: PlanV2, ctx: EmitContext) -> str:
         # NULL for such a variable either — `_identity_expr` derives one when the
         # variable has no stored `__uuid`, which is what `issues/026` required.
         both_bound = (v in left_scope.defined) and (v in right_scope.defined)
+        if is_graph_ctx_var(v):
+            compat_parts.append(
+                f"{l_uuid} = {r_uuid}" if both_bound else
+                f"({l_uuid} IS NULL OR {r_uuid} IS NULL OR {l_uuid} = {r_uuid})")
+            continue
         if both_bound:
             compat_parts.append(f"{l_uuid} = {r_uuid}")
             # Domain intersection is satisfied by construction: this variable is

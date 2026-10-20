@@ -164,7 +164,30 @@ Order of work:
      All 33 property-path cases match their `.srx`. All four DAWG suites, unit
      and integration pass. Two `test_emit_path` assertions now check for the
      uuid literal, not the URI text.
-   * `GRAPH ?g` scoping (5).
+   * ~~`GRAPH ?g` scoping (5)~~ DONE 2026-10-19 for 3, and 2 recorded (decided:
+     option 1). `graph_scope_rewrite.py`: when P mentions ?g or contains MINUS,
+     `GRAPH ?g { P }` is rewritten so P runs per graph with ?g renamed, then
+     `!bound(?gp) || sameTerm(?gp, ?ctx)` and `?g := ?ctx`. A P with no triple
+     (FILTERs, VALUES) is joined with the plain enumeration of ?g instead. Plain
+     triple patterns keep the cheap compile. `emit_minus` compares a `.gctx`
+     variable for equality without counting it toward the shared domain.
+     `emit_distinct`'s push-down now re-registers the variables it resolves as
+     text-materialised; an expression above a DISTINCT reading one was refused.
+     That also affects `GRAPH ?g {}` with a FILTER on ?g outside.
+     * **Fixed:** `graph-variable-scope`, `graph-optional`, MINUS disjointness.
+       `graph-variable-join` and `sq02` also now match the `.srx` (they passed
+       before only by agreeing with the oracle).
+     * **Recorded, not fixed:** `VALUES inside GRAPH …` and `COUNT: no GROUP BY
+       inside of GRAPH`. Both count an EMPTY named graph, and VitalGraph
+       enumerates graphs by their contents (`named_graph_semantics` §4.4), so
+       an empty graph is absent. Each now returns exactly the rows that do not
+       involve the empty graph.
+     * **Behaviour change:** a client query with `GRAPH ?g { … FILTER(?g = <x>) }`
+       now sees ?g unbound inside the group and returns nothing, as SPARQL 1.1
+       requires. VitalGraph's own code never generates that shape.
+     * 112 of the 114 cases in the graph, negation, bindings, aggregates,
+       dataset, exists and subquery categories match the `.srx`; the other 2
+       are the recorded ones. `tests/unit/sparql_sql/test_graph_scope_rewrite.py` (9).
 3. Then land the runner check. Any case still failing at that point is
    recorded individually with its reason.
 

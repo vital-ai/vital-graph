@@ -535,6 +535,13 @@ def _collect_graph(op: OpGraph, space_id: str, aliases: AliasGenerator,
 
     if isinstance(op.graph_node, VarNode):
         graph_var = op.graph_node.name
+        # P sees ?g itself (a FILTER on it, a binding of it, a MINUS beside
+        # it): evaluate it per graph with ?g unbound, as SPARQL 1.1 says,
+        # rather than binding ?g to every quad's context (`issues/280`).
+        from .graph_scope_rewrite import needs_scoped_graph, rewrite_scoped_graph
+        if needs_scoped_graph(op.sub_op, graph_var):
+            return collect(rewrite_scoped_graph(op.sub_op, graph_var, aliases.next("g")),
+                           space_id, aliases, graph_uri)
         if _is_unit_pattern(op.sub_op):
             return _enumerate_graphs(space_id, aliases, graph_var)
         inner = collect(op.sub_op, space_id, aliases, graph_uri=GRAPH_VAR_SCOPE)

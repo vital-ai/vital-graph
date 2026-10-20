@@ -163,7 +163,15 @@ P0_CATEGORIES = [
 # authority, all eight pass. Removed rather than left as documentation --
 # `pytest.xfail()` is imperative and STOPS the test, so an entry here is not a
 # note, it is a hole.
-KNOWN_FAILURES: dict = {}
+KNOWN_FAILURES: dict = {
+    # Counts an EMPTY named graph (`empty.ttl`, declared in the dataset). Graphs
+    # are enumerated by their CONTENTS (`named_graph_semantics` §4.4), so an
+    # empty one does not exist for `GRAPH ?g`. We return the one row that does
+    # not involve it, `(data02, "foo")`; the .srx has three. Decided 2026-10-19
+    # (`issues/280`).
+    ("bindings", "VALUES inside GRAPH binding the same variable as the graph name"):
+        "an empty named graph is not enumerated (named_graph_semantics §4.4; issues/280)",
+}
 
 
 

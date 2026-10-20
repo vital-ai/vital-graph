@@ -182,6 +182,17 @@ def _emit_pushdown(plan: PlanV2, ctx: EmitContext) -> str:
     for _var, sn in other_vars:
         select_cols.extend(TypeRegistry.deferred_text_companions(sn, r_alias))
 
+    # The resolved variables HAVE their text now. The child was emitted with
+    # text resolution off, so its registrations say text_materialized=False,
+    # and an expression above this DISTINCT reading one of them was refused as
+    # "text-not-materialised" (`issues/280`: a FILTER on ?g over
+    # `GRAPH ?g {}` enumeration).
+    import dataclasses as _dc
+    for _var, _sn in vars_to_resolve:
+        _info = ctx.types.get(_var)
+        if _info is not None and _info.text_materialized is False:
+            ctx.types.register(_dc.replace(_info, text_materialized=True))
+
     n_deferred = len(vars_to_resolve)
     logger.debug("DISTINCT push-down: %d term JOINs deferred past DISTINCT "
                  "(%d UUID cols)", n_deferred, len(all_output))
