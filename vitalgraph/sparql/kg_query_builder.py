@@ -2137,6 +2137,14 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
                 where_parts.append(
                     f'BIND(vg:vectorNearby(?{anchor_var}, "{vc.vector}", "{vc.index_name}") AS ?{score_var})')
             
+            # ONLY SCORED ROWS, as the multi-vector form already requires. A row
+            # the index holds no vector for is not a search result: it came back
+            # with `score=None` in arbitrary order, which is what a document
+            # query under the default `exclude_managed_segments=True` returned
+            # from a segment-only index (`issues/288`). Exempt from the top-K
+            # rewrite's refusal, since its join only yields scored rows.
+            where_parts.append(f'FILTER(BOUND(?{score_var}))')
+
             # Threshold filter
             if vc.min_score is not None:
                 where_parts.append(f'FILTER(?{score_var} > {vc.min_score})')
@@ -2296,16 +2304,16 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
             uri_list = " ".join([f"<{uri}>" for uri in criteria.document_uris])
             filter_clauses.append(f"VALUES ?entity {{ {uri_list} }}")
 
-        # Exclude managed segment types (segmentation_parent, markdown_section, text_chunk)
+        # Exclude every managed segment type -- the shared list, which includes
+        # `paragraph`; this copy lacked it, so those segments got through
+        # (`issues/288`).
         if criteria.exclude_managed_segments:
+            from vitalgraph.document.segment_config import MANAGED_SEGMENT_TYPES
+            managed = ", ".join(f"<{t}>" for t in sorted(MANAGED_SEGMENT_TYPES))
             filter_clauses.append(
                 'FILTER NOT EXISTS { '
                 '?entity haley:hasKGDocumentSegmentTypeURI ?_mst . '
-                'FILTER(?_mst IN ('
-                '<urn:segtype:segmentation_parent>, '
-                '<urn:segtype:markdown_section>, '
-                '<urn:segtype:text_chunk>'
-                ')) }')
+                f'FILTER(?_mst IN ({managed})) }}')
 
         # Reuse entity_property_filters (same logic as entity path)
         if criteria.entity_property_filters:

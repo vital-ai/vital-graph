@@ -21,6 +21,19 @@ from typing import List
 # larger-context provider (OpenAI accepts 8191) can be configured higher.
 DEFAULT_MAX_SEGMENT_TOKENS = 512
 
+# The segment types segmentation MANAGES: the hidden whole-document parent copy
+# and the three kinds of segment the splitters emit (`paragraph` is what the
+# markdown splitter gives the pieces of an oversized section). Callers cannot
+# write them, default listings hide them, and `exclude_managed_segments` drops
+# them. ONE list: the query builder had its own copy without `paragraph`, so
+# that filter let those segments through (`issues/288`).
+MANAGED_SEGMENT_TYPES = frozenset([
+    "urn:segtype:segmentation_parent",
+    "urn:segtype:markdown_section",
+    "urn:segtype:text_chunk",
+    "urn:segtype:paragraph",
+])
+
 
 @dataclass
 class MarkdownSegmentConfig:

@@ -186,6 +186,15 @@ def _find_extend_for_var(
     return None
 
 
+def _is_bound_of(expr, var: Optional[str]) -> bool:
+    """Whether `expr` is exactly `BOUND(?var)`."""
+    if not isinstance(expr, ExprFunction) or var is None:
+        return False
+    args = expr.args or []
+    return ((expr.name or "").lower() == "bound" and len(args) == 1
+            and isinstance(args[0], ExprVar) and args[0].var == var)
+
+
 def _restriction_between(
     top: Optional[PlanV2], extend_node: PlanV2, score_var: str,
     depth: int = 0,
@@ -207,8 +216,15 @@ def _restriction_between(
         if node.kind == KIND_FILTER:
             for expr in (node.filter_exprs or []):
                 # A threshold on the score variable is pushed into the subquery.
-                if _extract_threshold(expr, score_var) is None:
-                    return "FILTER"
+                if _extract_threshold(expr, score_var) is not None:
+                    continue
+                # BOUND(?score) removes nothing the driving join keeps: that join
+                # yields only rows with a vector, so every one has a score. The
+                # query builder emits it for every vector query (`issues/288`);
+                # refusing on it would cost every such query the HNSW path.
+                if _is_bound_of(expr, score_var):
+                    continue
+                return "FILTER"
         if not node.children:
             return None
         node = node.children[0]

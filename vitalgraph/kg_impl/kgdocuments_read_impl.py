@@ -16,12 +16,7 @@ from .kg_graph_retrieval_utils import GraphObjectRetriever
 
 
 # Managed segment type URIs (should not be returned in default listings)
-_MANAGED_SEGMENT_TYPES = frozenset([
-    "urn:segtype:segmentation_parent",
-    "urn:segtype:markdown_section",
-    "urn:segtype:text_chunk",
-    "urn:segtype:paragraph",
-])
+from vitalgraph.document.segment_config import MANAGED_SEGMENT_TYPES as _MANAGED_SEGMENT_TYPES  # noqa: E402
 
 # KGDocument type URIs (including subclasses)
 _KGDOCUMENT_TYPE_URIS = [

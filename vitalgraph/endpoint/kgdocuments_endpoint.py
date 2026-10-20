@@ -1172,12 +1172,7 @@ class KGDocumentsEndpoint:
     # ------------------------------------------------------------------
 
     # Managed segment types that cannot be externally created/updated/deleted
-    _MANAGED_SEGMENT_TYPES = frozenset([
-        "urn:segtype:segmentation_parent",
-        "urn:segtype:markdown_section",
-        "urn:segtype:text_chunk",
-        "urn:segtype:paragraph",
-    ])
+    from vitalgraph.document.segment_config import MANAGED_SEGMENT_TYPES as _MANAGED_SEGMENT_TYPES
 
     _HAS_SEGMENT_TYPE_PRED = "http://vital.ai/ontology/haley-ai-kg#hasKGDocumentSegmentTypeURI"
 

@@ -538,6 +538,15 @@ class KGQueriesEndpoint(BaseEndpoint):
 
         Document-specific fields are packed into DocumentSearchCriteria;
         shared fields (vector, geo, sort, etc.) go on KGQueryCriteria.
+
+        Searching segments (vector or full text over a segment index): pass
+        ``search_scope="segments"`` with ``exclude_managed_segments=False``.
+        That returns segments only. Without the scope, results also include
+        each document's hidden parent copy, which holds the whole text, is
+        indexed alongside its segments and often ranks high. It is a legitimate
+        whole-document match, so it is not dropped by default. With the default
+        ``exclude_managed_segments=True`` every segment is excluded, and a
+        vector query over a segment-only index returns nothing (issues/288).
         """
         doc_criteria = DocumentSearchCriteria(
             document_type_uri=document_type_uri,

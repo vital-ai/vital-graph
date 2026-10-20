@@ -165,6 +165,14 @@ class TestEnrichment:
                 search_text="contractor that fixes leaks on the top of houses",
                 index_name=INDEX, top_k=5))
         results = r.document_results or []
+        if managed:
+            # Managed objects excluded leaves only the originals, which a
+            # segment-only index holds no vector for. They came back unscored
+            # and unordered; a vector query now returns only scored rows.
+            assert all(x.score is not None for x in results), (
+                f"unscored rows in a vector result: {results}")
+            assert not results, f"originals have no vector here: {results}"
+            return
         assert results, f"no results: {r}"
         uris = [x.document_uri for x in results]
         assert len(uris) == len(set(uris)), f"a hit is repeated: {uris}"
@@ -212,3 +220,22 @@ class TestHybrid:
             vg_client, env["space"], env["graph"],
             f'BIND(vg:hybridSearch(?seg, "roofing", "{INDEX}", 0) AS ?score)')
         assert rows and all(s.startswith(env["docs"]["roofing"]) for s, _ in rows), rows
+
+
+class TestSegmentScope:
+
+    async def test_search_scope_segments_returns_segments_only(self, env, vg_client):
+        """The documented way to search segments: no hidden parent copies."""
+        from vitalgraph.model.kgentities_model import VectorSearchCriteria
+        r = await vg_client.kgqueries.query_documents(
+            env["space"], env["graph"], search_scope="segments",
+            exclude_managed_segments=False, include_parent_context=True,
+            vector_criteria=VectorSearchCriteria(
+                search_text="contractor that fixes leaks on the top of houses",
+                index_name=INDEX, top_k=5))
+        results = r.document_results or []
+        assert results, r
+        for x in results:
+            assert "_seg_" in x.document_uri, f"not a segment: {x.document_uri}"
+            assert x.score is not None
+            assert x.parent_document_uri, x

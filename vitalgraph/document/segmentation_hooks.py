@@ -26,12 +26,7 @@ _SEGMENTATION_PREDICATES = frozenset([
 ])
 
 # Segment types that should NOT trigger re-segmentation (they are managed).
-_MANAGED_SEGMENT_TYPES = frozenset([
-    "urn:segtype:segmentation_parent",
-    "urn:segtype:markdown_section",
-    "urn:segtype:text_chunk",
-    "urn:segtype:paragraph",
-])
+from vitalgraph.document.segment_config import MANAGED_SEGMENT_TYPES as _MANAGED_SEGMENT_TYPES  # noqa: E402
 
 _HAS_SEGMENT_TYPE = "http://vital.ai/ontology/haley-ai-kg#hasKGDocumentSegmentTypeURI"
 

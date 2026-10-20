@@ -1,6 +1,6 @@
 # 288 — Document query enrichment points at unrelated objects, and hybrid search returns nothing on OpenAI embeddings
 
-## Status: FIXED IN CODE 2026-10-20 (not yet released). Two findings below are left for a decision.
+## Status: FIXED IN CODE 2026-10-20 (not yet released). Both follow-up decisions made and implemented (below).
 
 **Related:** `issues/284`-`287` (the KG document work this exercised), `issues/280`
 (OPTIONAL scoping in the engine — not the cause here; the query itself was
@@ -104,18 +104,34 @@ Map a hit back to its report through the segment itself, for example
 `include_parent_context`. Use `vg:vectorSimilarity` instead of
 `vg:hybridSearch` on OpenAI-backed indexes.
 
-## Left for a decision
+## Follow-ups, decided 2026-10-20
 
-* **Parent copies appear in results.** The hidden segmentation copy of each
-  document holds the full text (in `hasKGraphDescription`), sits under the same
-  `kgdocument_segment` mapping, and is indexed alongside its segments, so a
-  search returns it too, often with a high score. Options:
-  * leave it, since it is the whole-document match;
-  * drop it from `query_documents` results unless asked for;
-  * stop indexing it.
-* **With `exclude_managed_segments=True`, the client default, a vector query
-  over a segment index returns unscored originals.** Only the originals remain
-  once managed objects are excluded, and a segment-only index holds no vector
-  for them, so they come back with `score=None` in arbitrary order rather than
-  being left out. The consumer avoided this by passing `False`. A vector query
-  probably should return only scored rows.
+* **Parent copies in results: documented, not dropped.** The hidden
+  segmentation copy holds the whole text, sits under the same
+  `kgdocument_segment` mapping, and is a legitimate whole-document match for
+  other callers. It stays in results by default. To search segments only, pass
+  `search_scope="segments"` with `exclude_managed_segments=False`. That scope
+  keeps rows with a segment index above 0, and the parent copy's is 0. The
+  client's `query_documents` docstring now says so.
+* **A vector query returns only scored rows.** Under the default
+  `exclude_managed_segments=True`, a vector query over a segment-only index
+  returned the originals, which have no vector, with `score=None` in arbitrary
+  order. The single-vector clause now carries `FILTER(BOUND(?score))`, as the
+  multi-vector form already did.
+  * That filter sits between the ORDER and the score's EXTEND, where the
+    vector top-K rewrite refuses on any restriction (`issues/220`). It is
+    EXEMPT (`vg_optimize._is_bound_of`), because the rewrite's join yields only
+    rows with a vector.
+  * The multi-vector form's existing `BOUND` filter had been costing it the
+    rewrite all along; the exemption fixes that too.
+* **`exclude_managed_segments` missed `paragraph` segments.** The builder had
+  its own copy of the managed-type list without `urn:segtype:paragraph`, which
+  is what the markdown splitter gives the pieces of an oversized section. There
+  were three other copies, all complete. All four now read one
+  `segment_config.MANAGED_SEGMENT_TYPES`.
+
+Tests: `tests/unit/test_vector_query_scored_rows_only.py` covers the top-K
+exemption, a real filter still refusing, `BOUND` emitted, and `paragraph`
+excluded; three of its five fail on the previous code. In the API test
+(`TestSegmentScope`, and the managed case of `TestEnrichment`), managed objects
+excluded now returns nothing rather than unscored originals.
