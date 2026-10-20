@@ -1,6 +1,6 @@
 # 287 — Markdown segmentation drops the short tail of an oversized section
 
-## Status: FIXED IN CODE 2026-10-19 (not yet released). Documents already segmented keep their gaps until re-segmented.
+## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production. Documents already segmented keep their gaps until re-segmented.
 
 **Related:** `issues/286` (the worker now passes the type's real minimum).
 

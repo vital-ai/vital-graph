@@ -1,6 +1,8 @@
 # 284 — The Python client cannot upload a document, so no caller can keep an original
 
-## Status: FIXED IN CODE 2026-10-19 (not yet released). Callers need the next client release; 0.0.47 does not have it.
+## ARCHIVED 2026-10-20 — released and verified, nothing remaining. Evidence: tests/unit/test_kgdocument_upload_and_policy.py::TestUploadClient, tests/api/test_kgdocument_vectorize_and_upload.py::TestUpload; Python client 0.0.48 (PyPI), TS client 0.1.6 (npm).
+
+## Status: RELEASED 2026-10-19 — Python client `vital-graph` 0.0.48 (PyPI) and TypeScript client 0.1.6 (npm); server deployed 2026-10-20 to AWS test and production.
 
 **Related:** `issues/283`, whose reporter is moving long reports into KG documents.
 `issues/285` and `issues/286` came from the same request. `issues/281` (the
@@ -45,5 +47,4 @@ entity (`issues/285`).
   `vectorize`.~~ Done in TS client 0.1.6: `upload()` takes `documentType` and
   `vectorize`, `create()` takes `{ vectorize }`, and `segment()` accepts
   `vectorize`.
-- The release itself (0.0.48): the version bump and changelog are made in the
-  release commit.
+- ~~The release itself (0.0.48).~~ Done: `34a1df43`, tag `v0.0.48`, on PyPI.

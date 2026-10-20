@@ -1,6 +1,6 @@
 # 283 — A value longer than a btree entry fails the write, because the sort tables index it whole
 
-## Status: FIXED IN CODE 2026-10-19 (not yet released). Existing spaces need `scripts/migrate_sort_value_key.py`, run in two phases around the deploy (below).
+## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production, with both migration phases run there (reported by the deploy session; not independently re-checked from this repo). The local vg test stack (303 spaces, 2,067 indexes rebuilt) and the host dev cluster (45 spaces) were migrated 2026-10-20.
 
 **Related:** `issues/172`, which named this exact defect and its remedy and did
 not build it (see "This was predicted" below). `issues/194`, which wired the

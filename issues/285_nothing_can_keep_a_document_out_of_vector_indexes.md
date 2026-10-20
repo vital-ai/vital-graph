@@ -1,6 +1,6 @@
 # 285 — Nothing can keep a document out of vector indexes
 
-## Status: FIXED IN CODE 2026-10-19 (not yet released).
+## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production (reported by the deploy session).
 
 **Related:** `issues/284` and `issues/286`, from the same request. `issues/219`
 (auto-sync scoped to each index's mapping, which this builds on). `issues/245`

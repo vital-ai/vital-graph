@@ -1,6 +1,6 @@
 # 286 — A document's segmentation config is never acted on at create
 
-## Status: FIXED IN CODE 2026-10-19 (not yet released).
+## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production (reported by the deploy session).
 
 **Related:** `issues/285` (the same config's `auto_vectorize`), `issues/284`
 (uploads gain a `document_type`), `issues/287` (what the segmenter drops).
