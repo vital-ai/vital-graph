@@ -171,6 +171,11 @@ KNOWN_FAILURES: dict = {
     # (`issues/280`).
     ("bindings", "VALUES inside GRAPH binding the same variable as the graph name"):
         "an empty named graph is not enumerated (named_graph_semantics §4.4; issues/280)",
+    # Same cause: the .srx has a count per named graph, `0` for the empty one.
+    # We, and pyoxigraph, return the non-empty graph's count only. It passed
+    # by agreeing with pyoxigraph until the runner asked the .srx too.
+    ("aggregates", "COUNT: no GROUP BY inside of GRAPH"):
+        "an empty named graph is not enumerated (named_graph_semantics §4.4; issues/280)",
 }
 
 

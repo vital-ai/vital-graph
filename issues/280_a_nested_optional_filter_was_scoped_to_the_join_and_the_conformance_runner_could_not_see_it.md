@@ -1,6 +1,6 @@
 # 280 — A nested OPTIONAL filter was scoped to the join, and the conformance runner could not see it
 
-## Status: ENGINE FIXED IN CODE 2026-10-19 (not yet released). Runner gap OPEN: 25 cases to triage.
+## Status: FIXED IN CODE 2026-10-19 (not yet released). The engine, the 25 cases the oracle hid, and the runner check are all done; 2 cases are recorded as known differences.
 
 **Related:** `c7caf819` (2026-08-25, which introduced the wrong scoping),
 `issues/128` (the sparql10 categories wired then).
@@ -188,8 +188,17 @@ Order of work:
      * 112 of the 114 cases in the graph, negation, bindings, aggregates,
        dataset, exists and subquery categories match the `.srx`; the other 2
        are the recorded ones. `tests/unit/sparql_sql/test_graph_scope_rewrite.py` (9).
-3. Then land the runner check. Any case still failing at that point is
-   recorded individually with its reason.
+3. ~~Then land the runner check.~~ DONE 2026-10-19. Both
+   `run_single_test_sql_v2` paths now require the `.srx` too when we match the
+   oracle; the older one computed that comparison and discarded it. With it
+   on, every DAWG suite passes, and exactly two cases are recorded in
+   `KNOWN_FAILURES`: `VALUES inside GRAPH …` and `COUNT: no GROUP BY inside of
+   GRAPH`. Both count an empty named graph (§4.4).
+
+Of the 25: 13 engine bugs fixed (nested OPTIONAL FILTER was the first, then
+boolean lexical form ×6, zero-length constant ×4, `GRAPH ?g` scoping ×3), 10
+comparator artefacts fixed, and 2 recorded. Agreeing with pyoxigraph can no
+longer pass a case the corpus disagrees with.
 
 Production relevance, roughly: `GRAPH ?g` patterns with inner FILTER /
 OPTIONAL / VALUES / aggregates on `?g` are unusual in VitalGraph's generated

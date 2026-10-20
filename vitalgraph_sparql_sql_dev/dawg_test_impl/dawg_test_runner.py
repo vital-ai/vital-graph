@@ -319,8 +319,16 @@ async def run_single_test_sql(test: DawgTestCase, orchestrator, db_conn) -> Test
     # Compare SQL result against pyoxigraph baseline
     comparison = compare_results(sql_result, oxigraph_result)
     if comparison.match:
-        # Also check against .srx for full confidence
+        # Agreeing with the oracle is not agreeing with the corpus (`issues/280`).
+        # This computed the .srx comparison and then ignored it.
         srx_cmp = compare_results(sql_result, expected)
+        if not srx_cmp.match:
+            return TestResult(
+                name=test.name, category=test.category, status="FAIL",
+                expected_rows=srx_cmp.expected_count,
+                actual_rows=srx_cmp.actual_count, time_ms=elapsed_ms,
+                error_message=srx_cmp.message
+                + " [we agree with pyoxigraph, and both differ from .srx]")
         return TestResult(
             name=test.name, category=test.category,
             status="PASS",
@@ -513,6 +521,20 @@ async def run_single_test_sql_v2(test: DawgTestCase, db_conn) -> TestResult:
 
     comparison = compare_results(sql_result, oxigraph_result)
     if comparison.match:
+        # AGREEING WITH THE ORACLE IS NOT AGREEING WITH THE CORPUS (`issues/280`).
+        # This returned PASS here without asking the .srx, so a mistake the
+        # oracle shared with us was invisible: 25 cases, 15 of them engine bugs
+        # pyoxigraph shared (nested OPTIONAL FILTER scoping, zero-length paths,
+        # `GRAPH ?g` scoping, boolean lexical forms) and 10 comparator artefacts.
+        # All found by asking the .srx; this is that question, kept.
+        srx_cmp = compare_results(sql_result, expected)
+        if not srx_cmp.match:
+            return TestResult(
+                name=test.name, category=test.category, status="FAIL",
+                expected_rows=srx_cmp.expected_count,
+                actual_rows=srx_cmp.actual_count, time_ms=elapsed_ms,
+                error_message=srx_cmp.message
+                + " [we agree with pyoxigraph, and both differ from .srx]")
         return TestResult(
             name=test.name, category=test.category, status="PASS",
             expected_rows=comparison.expected_count,
