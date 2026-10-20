@@ -2,6 +2,101 @@
 
 Notable changes per release. Dates are the release date, not the first commit.
 
+## 0.0.48 — 2026-10-19
+
+40 commits since 0.0.47. Production builds v0.0.86–v0.0.90 already carry the
+write-path and maintenance work (`268`–`277`); this is the first PyPI release
+with it. New here: long values stop failing writes (`283`), KG document upload
+from the Python client, a vectorize opt-out and segmentation on create
+(`284`–`286`), and frame-write structure checks (`279`). **Run
+`scripts/migrate_sort_value_key.py --apply` BEFORE deploying the server and
+`--drop-old --apply` after it.** **The frame-write refusals (`279`) apply from
+this release, with no log-only phase.**
+
+### Changed — behaviour a caller will see (server)
+
+- **KG documents are synced on write.** The document endpoint's auto-sync
+  looked for a backend attribute that does not exist, so no document create,
+  update or delete was ever vectorized, FTS-, geo- or fuzzy-indexed, and
+  deletes left rows behind. A space with a `kgdocument` mapping now indexes new
+  documents (`issues/285`).
+- **Vectorization can be turned off**, per document type with the segmentation
+  config's `auto_vectorize`, or per request with `vectorize=true|false` on
+  `POST /kgdocuments`, the upload and `POST /kgdocuments/segment`. The decision
+  is stored on the document as `hasKGIndexStatusURI` and carried to its
+  segments (`issues/285`).
+- **A typed document whose type has an enabled segmentation config is
+  segmented on create and upload.** The worker uses the config's method, sizes
+  and overlap (`issues/286`). A create followed by an explicit
+  `segment_document` leaves one `cancelled` job.
+- **`POST /kgdocuments/segment` requires space write access** (`issues/285`).
+- **Frame writes are refused when they would leave an edge or slot pointing at
+  nothing**: both frame routes in every mode, and whole-entity update. The
+  answer is `invalid_request` (`issues/279`).
+- **`OPTIONAL { { P FILTER F } }` scopes F to the inner group**, as SPARQL 1.1
+  requires. A stored `xsd:boolean` keeps its lexical form. A zero-length path
+  from a constant returns the constant. `GRAPH ?g` evaluates per graph where
+  `?g` matters (`issues/280`).
+- **Text sorts tie on the first 256 characters**: two values identical for that
+  long are ordered by the tie-break (`issues/283`).
+
+### Fixed — server
+
+- **A value over ~2.7 KB failed the write that carried it**, in every space and
+  for every slot type: the sort tables btree-indexed the whole text. They now
+  index a bounded `value_key` (`issues/283`).
+- **An upload with no `store_original` dropped the original** on FastAPI 0.147
+  (`issues/281`).
+- **Untyped documents were embedded as entities. Re-segmenting orphaned the old
+  segments' vectors. One vector index whose provider could not be built aborted
+  the whole sync** (`issues/285`).
+- **Markdown segmentation dropped the short tail of an oversized section**
+  (`issues/287`).
+- **Auto-sync deleted type-description vectors** a reindex wrote (`issues/282`).
+- **After a database failover each task stopped hearing the other** and served
+  stale cached reads; the listener now reconnects and resyncs (`issues/276`).
+- **Write path** (`issues/271`, `273`, `274`): set-based inserts, upserts write
+  only changed subjects, derived-table syncs probe by the write rather than the
+  space, and graph registration runs on the write's own connection.
+- **Maintenance** (`issues/268`, `270`, `272`, `275`, `277`): drift and
+  shortfall counts share one snapshot; timed-out probes back off;
+  ANALYZE/VACUUM are gated by table size; an invalid index counts as missing;
+  the analytics timeout applies.
+
+### Added — server
+
+- An opt-in heap census (`VG_HEAP_CENSUS_INTERVAL_S`, default off) that logs
+  what the gen-2 collection scans (`issues/278`).
+- An opt-in single-runner prewarm job (`issues/271`).
+
+### Client
+
+- **`kgdocuments.upload_kgdocument(space_id, graph_id, file, ...)`** uploads a
+  path or bytes. The server converts it to Markdown and keeps the original in
+  object storage. Options: `store_original`, `headline`, `source_url`,
+  `document_type`, `vectorize` (`issues/284`).
+- **`vectorize=`** on `create_kgdocuments` and `segment_document`
+  (`issues/285`).
+- **`setup_document_segments_mapping` creates a `kgdocument_segment` mapping**;
+  it created one no segment matched (`issues/285`).
+- TypeScript client unchanged (0.1.5).
+
+### Operations
+
+- **Sort-table migration, two phases:** `scripts/migrate_sort_value_key.py
+  --all --apply` BEFORE the deploy (adds the generated column, which rewrites
+  three derived tables per space, and builds the new indexes beside the old),
+  then `--all --drop-old --apply` once every instance runs this release. Long
+  values keep failing until the second phase. Run as the tables' owner. Dry run
+  by default (`issues/283`).
+- **Index migration** from the write-path work:
+  `scripts/migrate_drop_redundant_quad_indexes.py` drops `quad_pred`,
+  `quad_ctx` and `quad_sp` (`issues/270`, `271`).
+- **Packaging: `pyoxigraph==0.5.12` is pinned in the base dependencies**, so a
+  client install with another pyoxigraph version conflicts.
+  `fastapi[standard]==0.147.0` is pinned in `server` and `dev`. Upgrades of
+  both arrive as Dependabot PRs (`issues/280`, `281`).
+
 ## 0.0.47 — 2026-10-11
 
 17 commits since 0.0.46, 10 of them code, build or test changes. One maintenance runner instead of two,
