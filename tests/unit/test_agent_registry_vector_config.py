@@ -8,6 +8,19 @@ settable independently.
 import pytest
 
 from vitalgraph.agent_registry import agent_registry_vector_config as cfg
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_registry_config(monkeypatch):
+    """Every test starts from an UNSET provider, model and key-name variable.
+
+    A developer `.env` that selects `openai` reached these tests through any
+    earlier test importing a module that loads `.env` at import, and
+    `test_dimension_mismatch_is_refused` then stopped raising. A test that wants
+    a value sets it itself, after this runs.
+    """
+    for var in (cfg.ENV_VAR, cfg.MODEL_ENV_VAR, cfg.OPENAI_KEY_ENV_VAR):
+        monkeypatch.delenv(var, raising=False)
 from vitalgraph.entity_registry import entity_registry_vector_config as entity_cfg
 
 pytestmark = pytest.mark.unit
