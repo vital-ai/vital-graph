@@ -33,12 +33,26 @@ export class KGDocumentsEndpoint extends BaseEndpoint {
    * file rather than extracting text client-side.
    *
    * No Content-Type is set: the browser must add the multipart boundary itself.
+   *
+   * `documentType` sets the document's `kGDocumentType`: a type with an enabled
+   * segmentation config is segmented on upload, and its `auto_vectorize`
+   * decides whether it is embedded. `vectorize` overrides that per document —
+   * false keeps the document and its segments out of every vector index, true
+   * embeds them even if the type's default is off — and is stored on the
+   * document, so later updates and re-segmentation keep it (server 0.0.48).
    */
   async upload(
     spaceId: string,
     graphId: string,
     file: File | Blob,
-    options?: { filename?: string; headline?: string; sourceUrl?: string; storeOriginal?: boolean },
+    options?: {
+      filename?: string;
+      headline?: string;
+      sourceUrl?: string;
+      storeOriginal?: boolean;
+      documentType?: string;
+      vectorize?: boolean;
+    },
   ): Promise<KGDocumentUploadResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId });
 
@@ -50,6 +64,10 @@ export class KGDocumentsEndpoint extends BaseEndpoint {
     if (options?.storeOriginal !== undefined) {
       form.append('store_original', String(options.storeOriginal));
     }
+    if (options?.documentType) form.append('document_type', options.documentType);
+    if (options?.vectorize !== undefined) {
+      form.append('vectorize', String(options.vectorize));
+    }
 
     return this.request('POST', '/api/graphs/kgdocuments/upload', {
       params: { space_id: spaceId, graph_id: graphId },
@@ -57,10 +75,21 @@ export class KGDocumentsEndpoint extends BaseEndpoint {
     });
   }
 
-  async create(spaceId: string, graphId: string, data: unknown): Promise<KGDocumentCreateResponse> {
+  /**
+   * Create KGDocuments from a quad payload. A document whose `kGDocumentType`
+   * has an enabled segmentation config is segmented automatically.
+   *
+   * `options.vectorize`: see `upload`. Omitted, each document follows its type.
+   */
+  async create(
+    spaceId: string,
+    graphId: string,
+    data: unknown,
+    options?: { vectorize?: boolean },
+  ): Promise<KGDocumentCreateResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId });
     return this.request('POST', '/api/graphs/kgdocuments', {
-      params: { space_id: spaceId, graph_id: graphId },
+      params: { space_id: spaceId, graph_id: graphId, vectorize: options?.vectorize },
       json: data,
     });
   }
@@ -95,11 +124,17 @@ export class KGDocumentsEndpoint extends BaseEndpoint {
     });
   }
 
+  /**
+   * Queue segmentation of a document. `vectorize`, when given, is stored on the
+   * document first (see `upload`); turning it off also removes vectors the
+   * document already has.
+   */
   async segment(spaceId: string, graphId: string, data: {
     document_uri: string;
     segment_method_uri?: string;
     max_segment_tokens?: number;
     config_id?: string;
+    vectorize?: boolean;
   }): Promise<VitalGraphResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId });
     return this.request('POST', '/api/graphs/kgdocuments/segment', {

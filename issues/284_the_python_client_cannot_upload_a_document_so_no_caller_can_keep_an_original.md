@@ -41,7 +41,9 @@ entity (`issues/285`).
 
 ## Not done
 
-- The TypeScript client's `upload()` does not send `document_type` or
+- ~~The TypeScript client's `upload()` does not send `document_type` or
+  `vectorize`.~~ Done in TS client 0.1.6: `upload()` takes `documentType` and
+  `vectorize`, `create()` takes `{ vectorize }`, and `segment()` accepts
   `vectorize`.
 - The release itself (0.0.48): the version bump and changelog are made in the
   release commit.

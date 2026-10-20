@@ -79,7 +79,9 @@ this release, with no log-only phase.**
   (`issues/285`).
 - **`setup_document_segments_mapping` creates a `kgdocument_segment` mapping**;
   it created one no segment matched (`issues/285`).
-- TypeScript client unchanged (0.1.5).
+- **TypeScript client 0.1.6** (published after the 0.0.48 tag): `upload()`
+  takes `documentType` and `vectorize`, `create()` takes `{ vectorize }`, and
+  `segment()` accepts `vectorize` (`issues/284`, `issues/285`).
 
 ### Operations
 
