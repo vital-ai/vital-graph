@@ -1,9 +1,9 @@
 """
 Auto-sync hooks for vector, geo, fuzzy, and FTS data.
 
-Provides fire-and-forget post-CRUD sync that re-vectorizes and/or
-re-populates geo and fuzzy data for changed subjects.  The caller is not blocked;
-sync runs as a background asyncio task.
+A write calls `schedule_sync`, which queues the changed subjects in
+`{space}_index_sync_queue`; `index_sync_worker` consumers re-derive their rows
+(`issues/291`). The caller is not blocked. `sync_subjects` is the sync itself.
 
 Usage from an endpoint::
 
@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass, field
 
 import asyncpg
 from typing import Dict, List, Literal, Optional, Set
@@ -53,6 +54,22 @@ def _generate_term_uuid(term_text: str, term_type: str = 'U') -> uuid.UUID:
 _VECTOR_CONCURRENCY = 8
 
 
+@dataclass
+class _VectorPlan:
+    """One index's share of a sync: what to embed, and where it goes."""
+    idx_name: str
+    provider: object
+    upsert_sql: str
+    to_embed: List[tuple]                       # (subj_uuid, search_text)
+    embeddings: List[Optional[List[float]]] = field(default_factory=list)
+
+
+class EmbeddingUnavailable(RuntimeError):
+    """Every text of a plan failed to embed: the provider is down, not one
+    text bad. Raised so a queued sync is RETRIED rather than recorded as
+    done with no vectors (`issues/291`)."""
+
+
 async def _sync_vectors_for_subjects(
     conn,
     space_id: str,
@@ -60,13 +77,27 @@ async def _sync_vectors_for_subjects(
     context_uuid: uuid.UUID,
     operation: str,
 ) -> None:
-    """Re-vectorize or delete vectors for a list of subject UUIDs.
+    """Re-vectorize or delete vectors for a list of subject UUIDs, all on one
+    connection. `sync_subjects` runs the same three steps but releases its
+    connection across the embedding call (`issues/291`)."""
+    plans = await _plan_vectors(conn, space_id, subject_uuids, context_uuid, operation)
+    await _embed_plans(space_id, plans)
+    await _write_vectors(conn, space_id, context_uuid, plans)
 
-    For upserts with multiple subjects, uses a three-phase approach:
-      1. Batch-fetch all literal properties (single DB query)
-      2. Embed all texts in one batched provider call (falls back to
-         per-subject, bounded by _VECTOR_CONCURRENCY, if the batch fails)
-      3. Sequentially upsert embeddings on the single connection
+
+async def _plan_vectors(
+    conn,
+    space_id: str,
+    subject_uuids: List[uuid.UUID],
+    context_uuid: uuid.UUID,
+    operation: str,
+) -> List[_VectorPlan]:
+    """Everything a vector sync needs from the database before embedding.
+
+    Resolves each index's mapping per subject, builds the search texts, and
+    DELETES the vectors of subjects that are out of scope, opted out or
+    without text -- those are cheap and need no provider. Returns, per index,
+    what remains to embed. Holds `conn` only for SQL.
     """
     from vitalgraph.vectorization.vector_populator import (
         delete_subject_vectors,
@@ -88,10 +119,10 @@ async def _sync_vectors_for_subjects(
     except asyncpg.exceptions.UndefinedTableError:
         # No vector indexes configured for this space. Narrow on purpose: a
         # broad `except Exception` here would also swallow real query failures.
-        return
+        return []
 
     if not rows:
-        return
+        return []
 
     # For deletes, run sequentially (fast DB-only operations)
     if operation == "delete":
@@ -105,7 +136,7 @@ async def _sync_vectors_for_subjects(
                         "auto_sync vector delete %s/%s/%s failed: %s",
                         space_id, row["index_name"], subj_uuid, e,
                     )
-        return
+        return []
 
     # ── Upsert path: batch fetch → concurrent embed → sequential upsert ──
 
@@ -139,6 +170,7 @@ async def _sync_vectors_for_subjects(
     from vitalgraph.document.vectorize_policy import vector_opt_outs
     opted_out = await vector_opt_outs(conn, space_id, subject_uuids, context_uuid)
 
+    plans: List[_VectorPlan] = []
     # Process each index
     for row in rows:
         idx_name = row["index_name"]
@@ -248,14 +280,23 @@ async def _sync_vectors_for_subjects(
                     space_id, idx_name, subj_uuid, e,
                 )
 
-        if not to_embed:
-            continue
+        if to_embed:
+            plans.append(_VectorPlan(idx_name, provider, upsert_sql, to_embed))
+    return plans
 
-        # Phase 3: Batch embedding.
-        #
+
+async def _embed_plans(space_id: str, plans: List[_VectorPlan]) -> None:
+    """Embed every plan's texts. Uses NO database connection.
+
+    Raises `EmbeddingUnavailable` when every text of a plan failed, after
+    the per-subject fallback: that is the provider failing, and a sync that
+    swallowed it would be recorded as done with no vectors written.
+    """
+    for plan in plans:
+        idx_name, provider, to_embed = plan.idx_name, plan.provider, plan.to_embed
         # One request for the whole set, not one per subject.  vectorize_texts
         # chunks internally at the provider's batch_size (100 for OpenAI), so a
-        # large set is safe; results come back in input order, which Phase 4
+        # large set is safe; results come back in input order, which the write
         # relies on when it zips embeddings[i] against to_embed[i].
         #
         # This used to fire vectorize_text() per subject through a semaphore of
@@ -290,19 +331,27 @@ async def _sync_vectors_for_subjects(
             await asyncio.gather(*[
                 _embed(i, text) for i, text in enumerate(texts)
             ])
+            if all(e is None for e in embeddings):
+                raise EmbeddingUnavailable(
+                    f"{space_id}/{idx_name}: all {len(texts)} text(s) failed to embed")
+        plan.embeddings = embeddings
 
-        # Phase 4: Sequential upsert on the single connection
-        for i, (subj_uuid, _) in enumerate(to_embed):
-            emb = embeddings[i]
+
+async def _write_vectors(conn, space_id: str, context_uuid: uuid.UUID,
+                         plans: List[_VectorPlan]) -> None:
+    """Upsert what `_embed_plans` produced, sequentially on `conn`."""
+    for plan in plans:
+        for i, (subj_uuid, _) in enumerate(plan.to_embed):
+            emb = plan.embeddings[i] if i < len(plan.embeddings) else None
             if emb is None:
                 continue
             try:
                 vec_str = "[" + ",".join(str(v) for v in emb) + "]"
-                await conn.execute(upsert_sql, subj_uuid, context_uuid, vec_str)
+                await conn.execute(plan.upsert_sql, subj_uuid, context_uuid, vec_str)
             except Exception as e:
                 logger.warning(
                     "auto_sync vector upsert %s/%s/%s failed: %s",
-                    space_id, idx_name, subj_uuid, e,
+                    space_id, plan.idx_name, subj_uuid, e,
                 )
 
 
@@ -588,17 +637,49 @@ async def _space_still_exists(conn, space_id: str) -> bool:
     return await space_tables_present(conn, space_id)
 
 
-async def _run_sync(
-    db_impl,
+async def sync_subjects(
+    pool,
     space_id: str,
-    subject_uris: List[str],
-    graph_uri: str,
+    subject_uuids: List[uuid.UUID],
+    context_uuid: uuid.UUID,
     operation: str,
-) -> None:
-    """Core sync coroutine: acquire connection and sync vector + geo + fuzzy."""
-    if not subject_uris:
-        return
+) -> bool:
+    """Re-derive vector, geo, fuzzy and FTS rows for these subjects.
 
+    THE CONNECTION IS NOT HELD ACROSS THE EMBEDDING CALL (`issues/291`). One
+    acquire reads and plans (and deletes what needs no provider), the provider
+    is called with no connection held, and a second acquire writes. Holding one
+    connection throughout kept an internal-pool connection idle for the length
+    of every OpenAI round trip, so a burst of writes filled the 3-connection
+    pool and starved the segmentation worker, ANALYZE and the maintenance job.
+
+    What was read may be overtaken by a write during the embedding; the queue's
+    generation rule (`index_sync_queue`) re-syncs it. Raises on failure, so a
+    queued sync is retried. Returns False if the space no longer exists.
+    """
+    if not subject_uuids:
+        return True
+    async with pool.acquire() as conn:
+        if not await _space_still_exists(conn, space_id):
+            logger.debug("auto_sync: space '%s' no longer exists — skipping sync "
+                         "of %d subject(s)", space_id, len(subject_uuids))
+            return False
+        plans = await _plan_vectors(conn, space_id, subject_uuids, context_uuid, operation)
+    await _embed_plans(space_id, plans)
+    async with pool.acquire() as conn:
+        # Checked again: the space may have been deleted, by any process,
+        # while the provider was being called.
+        if not await _space_still_exists(conn, space_id):
+            return False
+        await _write_vectors(conn, space_id, context_uuid, plans)
+        # Geo, fuzzy, FTS share the same connection — must be sequential
+        await _sync_geo_for_subjects(conn, space_id, subject_uuids, context_uuid, operation)
+        await _sync_fuzzy_for_subjects(conn, space_id, subject_uuids, context_uuid, operation)
+        await _sync_fts_for_subjects(conn, space_id, subject_uuids, context_uuid, operation)
+    return True
+
+
+def _internal_pool(db_impl):
     # THE INTERNAL POOL, NOT THE REQUEST POOL (`issues/231`).
     #
     # This runs AFTER the write it belongs to has returned 200. On the request
@@ -610,39 +691,100 @@ async def _run_sync(
     # accident" and reports the second at ERROR; a bare `or` made the bulkhead's
     # absence invisible.
     from ..db.pool import internal_pool_for
-    pool = internal_pool_for(db_impl)
+    return internal_pool_for(db_impl)
+
+
+async def _run_sync(
+    db_impl,
+    space_id: str,
+    subject_uris: List[str],
+    graph_uri: str,
+    operation: str,
+) -> None:
+    """Sync these subjects NOW, in this task, bypassing the queue.
+
+    For callers that must have the rows before they go on (the archive
+    script), and for a space that has no queue table yet. Logs and swallows a
+    failure, as it always has; a queued sync is retried instead.
+    """
+    if not subject_uris:
+        return
+    pool = _internal_pool(db_impl)
     if pool is None:
         logger.debug("auto_sync: no pool on db_impl, skipping")
         return
-
-    context_uuid = _generate_term_uuid(graph_uri)
-    subject_uuids = [_generate_term_uuid(uri) for uri in subject_uris]
-
     try:
-        async with pool.acquire() as conn:
-            if not await _space_still_exists(conn, space_id):
-                logger.debug(
-                    "auto_sync: space '%s' no longer exists — skipping sync of "
-                    "%d subject(s)", space_id, len(subject_uuids),
-                )
-                return
-
-            # Vector sync (uses concurrent embedding internally)
-            await _sync_vectors_for_subjects(
-                conn, space_id, subject_uuids, context_uuid, operation,
-            )
-            # Geo, fuzzy, FTS share the same connection — must be sequential
-            await _sync_geo_for_subjects(
-                conn, space_id, subject_uuids, context_uuid, operation,
-            )
-            await _sync_fuzzy_for_subjects(
-                conn, space_id, subject_uuids, context_uuid, operation,
-            )
-            await _sync_fts_for_subjects(
-                conn, space_id, subject_uuids, context_uuid, operation,
-            )
+        await sync_subjects(
+            pool, space_id, [_generate_term_uuid(u) for u in subject_uris],
+            _generate_term_uuid(graph_uri), operation)
     except Exception as e:
-        logger.error("auto_sync(%s) failed: %s", space_id, e)
+        logger.error("auto_sync(%s) failed: %s: %s", space_id, type(e).__name__, e)
+
+
+# Spaces already warned about running without a queue table, so the warning
+# is said once per process rather than on every write.
+_NO_QUEUE_WARNED: Set[str] = set()
+
+
+async def _enqueue_sync(
+    db_impl,
+    space_id: str,
+    subject_uris: List[str],
+    graph_uri: str,
+    operation: str,
+) -> None:
+    """Queue these subjects for the index sync workers (`issues/291`).
+
+    A space without `{space}_index_sync_queue` -- not yet migrated
+    (`scripts/migrate_index_sync_queue.py`) -- is synced directly, as before,
+    so the deploy order does not matter. Tables are never created here.
+    """
+    if not subject_uris:
+        return
+    pool = _internal_pool(db_impl)
+    if pool is None:
+        logger.debug("auto_sync: no pool on db_impl, skipping")
+        return
+    from . import index_sync_queue as q
+    context_uuid = _generate_term_uuid(graph_uri)
+    subject_uuids = [_generate_term_uuid(u) for u in subject_uris]
+    async with pool.acquire() as conn:
+        if await q.table_exists(conn, space_id):
+            async with conn.transaction():
+                await q.enqueue(conn, space_id, context_uuid, subject_uuids, operation)
+            return
+    if space_id not in _NO_QUEUE_WARNED:
+        _NO_QUEUE_WARNED.add(space_id)
+        logger.warning("auto_sync: %s has no index sync queue table; syncing "
+                       "directly. Run scripts/migrate_index_sync_queue.py.", space_id)
+    await _run_sync(db_impl, space_id, subject_uris, graph_uri, operation)
+
+
+async def wait_until_synced(db_impl, space_id: str, subject_uris: List[str],
+                            graph_uri: str, *, timeout: float = 600.0,
+                            poll: float = 0.5) -> bool:
+    """Wait until none of these subjects is queued. True if they drained.
+
+    Holds no connection between polls. A space without a queue table synced
+    directly, so it is drained by definition.
+    """
+    pool = _internal_pool(db_impl)
+    if pool is None or not subject_uris:
+        return True
+    from . import index_sync_queue as q
+    context_uuid = _generate_term_uuid(graph_uri)
+    subject_uuids = [_generate_term_uuid(u) for u in subject_uris]
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        async with pool.acquire() as conn:
+            if not await q.table_exists(conn, space_id):
+                return True
+            if not await q.pending(conn, space_id, context_uuid, subject_uuids):
+                return True
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(poll)
 
 
 # -----------------------------------------------------------------------
@@ -657,7 +799,13 @@ def schedule_sync(
     graph_uri: str,
     operation: Literal["upsert", "delete"] = "upsert",
 ) -> Optional[asyncio.Task]:
-    """Schedule a background auto-sync task (non-blocking).
+    """Queue these subjects for an index sync (non-blocking).
+
+    The returned task only ENQUEUES (`issues/291`): a short insert into
+    `{space}_index_sync_queue`, after which the index sync workers -- in any
+    app process -- do the work, bounded, merged per subject, and retried on
+    failure. Awaiting the task means "queued", not "synced"; use
+    `wait_until_synced` for the latter.
 
     Args:
         db_impl: Database implementation with ``connection_pool`` attribute.
@@ -679,7 +827,7 @@ def schedule_sync(
         return None
 
     task = loop.create_task(
-        _run_sync(db_impl, space_id, subject_uris, graph_uri, operation),
+        _enqueue_sync(db_impl, space_id, subject_uris, graph_uri, operation),
         name=f"auto_sync:{space_id}:{len(subject_uris)}",
     )
 

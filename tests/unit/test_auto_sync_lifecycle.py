@@ -68,7 +68,7 @@ class TestScheduleSyncRegistry:
             started.set()
             await asyncio.sleep(0)
 
-        monkeypatch.setattr(auto_sync, "_run_sync", _fake_run)
+        monkeypatch.setattr(auto_sync, "_enqueue_sync", _fake_run)
         task = auto_sync.schedule_sync(
             db_impl=object(), space_id="sp1", subject_uris=["urn:a"], graph_uri="g",
         )
@@ -96,7 +96,7 @@ class TestCancelSpaceSyncs:
             await asyncio.sleep(10)
             ran_to_completion = True
 
-        monkeypatch.setattr(auto_sync, "_run_sync", _slow)
+        monkeypatch.setattr(auto_sync, "_enqueue_sync", _slow)
         task = auto_sync.schedule_sync(
             db_impl=object(), space_id="sp1", subject_uris=["urn:a"], graph_uri="g",
         )
@@ -112,7 +112,7 @@ class TestCancelSpaceSyncs:
         async def _slow(*a, **kw):
             await asyncio.sleep(10)
 
-        monkeypatch.setattr(auto_sync, "_run_sync", _slow)
+        monkeypatch.setattr(auto_sync, "_enqueue_sync", _slow)
         task = auto_sync.schedule_sync(
             db_impl=object(), space_id="sp1", subject_uris=["urn:a"], graph_uri="g",
         )
@@ -124,7 +124,7 @@ class TestCancelSpaceSyncs:
         async def _slow(*a, **kw):
             await asyncio.sleep(10)
 
-        monkeypatch.setattr(auto_sync, "_run_sync", _slow)
+        monkeypatch.setattr(auto_sync, "_enqueue_sync", _slow)
         keep = auto_sync.schedule_sync(
             db_impl=object(), space_id="keep", subject_uris=["urn:a"], graph_uri="g",
         )
@@ -152,7 +152,7 @@ class TestCancelSpaceSyncs:
         async def _slow(*a, **kw):
             await asyncio.sleep(10)
 
-        monkeypatch.setattr(auto_sync, "_run_sync", _slow)
+        monkeypatch.setattr(auto_sync, "_enqueue_sync", _slow)
         auto_sync.schedule_sync(
             db_impl=object(), space_id="sp1", subject_uris=["urn:a"], graph_uri="g",
         )
@@ -176,7 +176,7 @@ class TestCancelSpaceSyncs:
                 swallowed.set()
                 await asyncio.sleep(10)   # a second cancel WILL end this
 
-        monkeypatch.setattr(auto_sync, "_run_sync", _stubborn)
+        monkeypatch.setattr(auto_sync, "_enqueue_sync", _stubborn)
         task = auto_sync.schedule_sync(
             db_impl=object(), space_id="sp1", subject_uris=["urn:a"], graph_uri="g",
         )

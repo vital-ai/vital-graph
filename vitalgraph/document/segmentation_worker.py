@@ -864,7 +864,15 @@ class SegmentationWorker:
                     operation="upsert",
                 )
                 if task is not None:
-                    await task
+                    await task      # queued (`issues/291`), not yet synced
+                    from vitalgraph.vectorization.auto_sync import wait_until_synced
+                    if not await wait_until_synced(db_impl, space_id, uris, graph_id):
+                        # Still queued: the sync will happen, but the job
+                        # cannot claim it did. Said, not hidden.
+                        await self._complete_vectorization(
+                            space_id, job_id,
+                            error="vectorization still queued after 600s")
+                        return
                     logger.info(f"Job {job_id}: vectorization completed for {len(uris)} subjects")
 
                 await self._complete_vectorization(space_id, job_id, error=None)

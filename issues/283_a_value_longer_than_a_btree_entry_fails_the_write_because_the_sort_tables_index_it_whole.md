@@ -208,7 +208,15 @@ about 2,120 of 2,704 bytes, even with a 256-character `value_key` made of
   - the table itself refuses an over-long URI interned in SQL, and leaves
     literals unlimited.
 
+- **Regression, found and fixed 2026-10-20 (after `7f9e2e44`): space rename
+  refused every space carrying the constraint.** The rename maps object names
+  by the prefixes a space id can sit behind (`idx_`, `trg_`, none), and
+  `ck_{space}_term_uri_len` fitted none of them, so
+  `tests/integration/test_space_rename.py` failed with "1 object name(s) could
+  not be mapped". `space_rename._DECORATORS` now includes `ck_`. The rename,
+  schema and lifecycle integration tests pass.
+
 ## Not done
 
 - Production: run `scripts/migrate_term_uri_limit.py --all --apply` after the
-  release that carries the limit.
+  release that carries the limit, and after the rename fix with it.

@@ -56,7 +56,9 @@ logger = logging.getLogger(__name__)
 
 #: Prefixes a space id can sit behind in an object name. Longest first, and the
 #: empty string last so `{space}_term_pkey` maps only after `idx_`/`trg_` fail.
-_DECORATORS = ("idx_", "trg_", "")
+#: `ck_` is the term table's URI limit, `ck_{space}_term_uri_len` (`issues/283`);
+#: without it every space carrying that constraint refused to rename.
+_DECORATORS = ("idx_", "trg_", "ck_", "")
 
 #: A space id must be a bare identifier: it is concatenated into object names
 #: unescaped, so anything else is an injection surface as well as a broken name.

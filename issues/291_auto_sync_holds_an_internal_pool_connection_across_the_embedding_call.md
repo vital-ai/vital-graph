@@ -1,6 +1,6 @@
 # 291 — Auto-sync holds an internal-pool connection across the embedding call
 
-## Status: OPEN 2026-10-20. Found reviewing `issues/290`; not yet measured as a fix.
+## Status: STEP 1 FIXED IN CODE 2026-10-20 (not yet released): a per-space Postgres queue with bounded consumers. Step 2 (enqueue inside each write's transaction) not done. Found reviewing `issues/290`.
 
 **Related:** `issues/290` (the symptom: a worker's second acquire timed out),
 `issues/231` (the internal pool, its size of 3, and "whether 3 is right" left
@@ -44,20 +44,101 @@ default is the same 3, and the deploy configuration lives elsewhere. Why AWS
 test did not show the symptom (fewer concurrent writes, lower OpenAI latency
 from AWS, or a configured size) is **unverified**.
 
-## What a fix looks like (not built)
+## Worse than starvation: a timed-out sync was lost
 
-* **Release the connection across the provider call.** Fetch and decide on one
-  acquire, release it, embed, then acquire again for the upserts and the
-  geo/fuzzy/FTS steps. A sync then occupies a connection for its SQL alone.
-  * The writes must re-check that the space still exists after the second
-    acquire, since `cancel_space_syncs` reaches only this process.
-* **Bound the task fan-out**, for example with a semaphore around
-  `_run_sync`, so a burst queues in memory instead of on the pool.
-* Only then revisit the size of 3 (`issues/231`'s open question). Its
-  measurement used a fast local embedding provider, and that is the condition
-  under which holding across the call costs nothing.
+Every acquire on the internal pool times out after 15 s (`db/pool.py`), and
+the sync tasks' own acquires are no exception. A sync that timed out logged
+`auto_sync(...) failed:`, with an empty message for a `TimeoutError`, and
+nothing retried it. The document's vector, FTS, geo and fuzzy rows then stayed
+stale until a reindex. Neither local log showed one, but under a burst on
+OpenAI it is the likely outcome.
+
+## Measured before the fix
+
+The vg test stack's own log, during the `issues/285`/`286` API run on the
+2026-10-20 image, recorded 9 `pool_wait` records on the INTERNAL pool, all at
+3/3 in use: median 1.2 s, max 5.1 s, while 26-27 request connections sat idle.
+That stack embeds with the local model, not OpenAI.
+
+## Fix, step 1 — a per-space queue in Postgres, drained by bounded consumers
+
+Decided 2026-10-20: a table, not an in-process queue, so that nothing is lost
+on a restart and every app process shares it. Production runs two ECS tasks
+and will scale.
+
+- **`{space}_index_sync_queue`**, one row per `(context_uuid, subject_uuid)`
+  (`sparql_sql_schema`, `vectorization/index_sync_queue.py`).
+  - **A second write merges** into the row, bumping `generation` and recording
+    the latest `operation`, so a burst of updates to one document is embedded
+    once.
+  - **A consumer deletes the row only if the generation is the one it
+    claimed.** A write during a sync leaves the row for another pass, from the
+    data as it now is.
+  - **Claims are `FOR UPDATE SKIP LOCKED` with a lease** (`claimed_until`, 300 s),
+    committed at once. Any number of processes share the table without taking
+    the same rows; a consumer that dies gives its rows back when the lease
+    ends, and a clean shutdown releases them at once.
+  - **A failure backs off** (5 s doubling, capped at 10 min) with `last_error`
+    recorded. A new write to the row makes it due again at once.
+- **`index_sync_worker.IndexSyncWorker`**, one per app process, started and
+  stopped with the app. It runs a fixed number of consumers: one less than the
+  internal pool, so 2 by default (`VG_INDEX_SYNC_CONSUMERS` overrides).
+  - **Woken by NOTIFY** on `vg_index_sync`, sent in the enqueue's transaction,
+    on one LISTEN connection outside the pools.
+  - **A 10 s sweep** finds rows a notification missed, a retry whose backoff
+    ended and an expired lease.
+- **`auto_sync.sync_subjects` holds no connection across the embedding.** One
+  acquire reads, plans, and does the deletes that need no provider. The
+  provider is called with nothing held. A second acquire re-checks that the
+  space still exists, then writes vectors, geo, fuzzy and FTS.
+- **A provider outage is retried, not recorded as done.** When every text of
+  an index fails, after the per-subject fallback, the sync raises
+  `EmbeddingUnavailable` and the row is failed for a retry.
+- **`schedule_sync` keeps its signature and its 11 call sites.** Its task now
+  only enqueues.
+  - **A space without the table**, not yet migrated, is synced directly as
+    before, with one WARNING per space, so deploy order does not matter.
+  - **The segmentation worker** marks a job completed once its subjects have
+    drained from the queue (`wait_until_synced`, 600 s). If they have not, it
+    says so in the job's error.
+  - **`cancel_space_syncs`** still cancels a consumer's in-flight sync for a
+    space being deleted.
+- **`scripts/migrate_index_sync_queue.py`** creates the table and its index on
+  existing spaces, from the schema's own statements. Run on the vg test stack
+  (27 spaces) and the host dev cluster (45), 2026-10-20.
+
+## Verified
+
+`tests/integration/test_index_sync_queue.py`, 10 passed.
+
+- **The queue's rules:**
+  - a second write merges into one row, with the latest operation;
+  - completing removes the row;
+  - a write during a sync leaves the row, unclaimed and due;
+  - two consumers never claim the same rows (40 rows, two claims of 25);
+  - an expired lease gives the rows back;
+  - a failure backs off, and a new write cuts the backoff short;
+  - a release returns only that consumer's rows.
+- **The control:** the old single-connection form, ten syncs at once on a
+  3-connection pool with a 1 s provider. An unrelated acquire waits at least
+  0.8 s. This is the starvation, reproduced.
+- **The fix:** the same burst through the queue with 2 consumers. All ten
+  synced, at most 2 embeddings at once, every unrelated acquire under 0.5 s,
+  and the queue empty afterwards.
+- **A provider outage** leaves the row queued with `EmbeddingUnavailable`
+  recorded, no vectors written, claim released.
+
+Plus the unit suite, the schema, rename and lifecycle integration tests, and
+the full API suite on the rebuilt vg test stack (below).
 
 ## Not done
 
-Everything above. 290's own fix stands regardless: the worker no longer takes
-a second connection, and it fails closed.
+- **Step 2: enqueue inside each write's transaction.** Today `schedule_sync`
+  enqueues just after the write commits, so a crash in that gap still loses
+  the sync. Moving `index_sync_queue.enqueue` onto the write's own connection,
+  call site by call site, closes it.
+- **Monitoring.** `index_sync_queue.stats()` returns depth, claimed, failing
+  and the oldest age; nothing reads it yet. The maintenance job, or the admin
+  status endpoint, should report a backlog or a failing row.
+- **Production:** run `scripts/migrate_index_sync_queue.py --all --apply` after
+  the release.

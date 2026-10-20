@@ -910,6 +910,7 @@ class SparqlSQLSchema:
             'fts_index': f'{space_id}_fts_index',
             'segmentation_jobs': f'{space_id}_segmentation_jobs',
             'document_segmentation_config': f'{space_id}_document_segmentation_config',
+            'index_sync_queue': f'{space_id}_index_sync_queue',
         }
 
     # ------------------------------------------------------------------
@@ -1645,6 +1646,38 @@ class SparqlSQLSchema:
             )
         ''')
 
+        # THE INDEX SYNC QUEUE (`issues/291`): subjects whose vector, geo,
+        # fuzzy and FTS rows must be re-derived after a write. It replaces a
+        # fire-and-forget task per write, which held an internal-pool
+        # connection across the embedding call, had no bound on how many ran,
+        # and was lost on a timeout or a restart.
+        #
+        # ONE ROW PER SUBJECT: a second write upserts the row, so a burst of
+        # updates to one document is synced once. `generation` counts the
+        # writes; a consumer deletes the row on completion only if it is the
+        # generation it claimed, so a write that lands DURING a sync leaves the
+        # row for another pass rather than being lost. `operation` is the
+        # latest write's: a delete after an upsert is a delete.
+        #
+        # Shared by every app process: a claim is `FOR UPDATE SKIP LOCKED`
+        # with a lease (`claimed_until`), so a consumer that dies mid-batch
+        # gives its rows back when the lease runs out.
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['index_sync_queue']} (
+                context_uuid     UUID NOT NULL,
+                subject_uuid     UUID NOT NULL,
+                operation        TEXT NOT NULL CHECK (operation IN ('upsert', 'delete')),
+                generation       BIGINT NOT NULL DEFAULT 1,
+                attempts         INTEGER NOT NULL DEFAULT 0,
+                enqueued_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                claimed_by       TEXT,
+                claimed_until    TIMESTAMPTZ,
+                last_error       TEXT,
+                PRIMARY KEY (context_uuid, subject_uuid)
+            )
+        ''')
+
         assert_identifiers_fit(stmts, f"space_id={space_id!r}")
 
         return stmts
@@ -2015,6 +2048,9 @@ class SparqlSQLSchema:
             f"idx_{space_id}_dsc_doctype "
             f"ON {t['document_segmentation_config']} (document_type_uri) "
             f"WHERE enabled = TRUE",
+            # The claim's order: the next row due (`issues/291`).
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_isq_due "
+            f"ON {t['index_sync_queue']} (next_attempt_at)",
 
             # Geo table indexes
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_gist ON {t['geo']} USING gist (location)",
@@ -2081,6 +2117,7 @@ class SparqlSQLSchema:
             f"DROP TABLE IF EXISTS {t['search_mapping_index']} CASCADE",
             f"DROP TABLE IF EXISTS {t['search_mapping_property']} CASCADE",
             f"DROP TABLE IF EXISTS {t['search_mapping']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['index_sync_queue']} CASCADE",
         ]
 
     def drop_space_indexes_sql(self, space_id: str) -> List[str]:

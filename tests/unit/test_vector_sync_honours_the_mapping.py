@@ -28,7 +28,7 @@ import vitalgraph.vectorization.auto_sync as auto_sync
 
 
 def _vector_sync_source() -> str:
-    return inspect.getsource(auto_sync._sync_vectors_for_subjects)
+    return inspect.getsource(auto_sync._plan_vectors)
 
 
 def _code_lines(src: str):
@@ -89,7 +89,7 @@ def test_the_uuid_key_lookup_is_string_on_both_sides():
     assert "scope.get(str(subj_uuid)" in code
 
 
-@pytest.mark.parametrize("name", ["_sync_fts_for_subjects", "_sync_vectors_for_subjects"])
+@pytest.mark.parametrize("name", ["_sync_fts_for_subjects", "_plan_vectors"])
 def test_both_sync_paths_resolve_a_mapping(name):
     """The two halves must not drift apart again — that drift IS issues/219."""
     code = _code_lines(inspect.getsource(getattr(auto_sync, name)))

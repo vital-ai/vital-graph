@@ -111,6 +111,8 @@ class VitalGraphAppImpl:
         # Segmentation background worker
         self._segmentation_worker: Optional[Any] = None
         self._segmentation_worker_task: Optional[Any] = None
+        self._index_sync_worker: Optional[Any] = None
+        self._index_sync_worker_task: Optional[Any] = None
         self._warm_pipeline_task: Optional[Any] = None
         
         # Import/export job manager (created in startup_event after pool is available)
@@ -970,6 +972,20 @@ class VitalGraphAppImpl:
                     except Exception as e:
                         self.logger.warning(f"Segmentation worker initialization failed (non-critical): {e}")
 
+                    # Start the index sync consumers (`issues/291`): writes
+                    # queue their vector/geo/fuzzy/FTS re-derivation, and
+                    # these drain it, bounded and retried.
+                    try:
+                        if self.space_manager:
+                            import asyncio as _asyncio
+                            from vitalgraph.vectorization.index_sync_worker import IndexSyncWorker
+                            self._index_sync_worker = IndexSyncWorker(self.space_manager)
+                            self._index_sync_worker_task = _asyncio.create_task(
+                                self._index_sync_worker.run())
+                            self.logger.info("✅ Index sync worker started")
+                    except Exception as e:
+                        self.logger.error(f"Index sync worker failed to start: {e}")
+
                     # Start incremental backfill of server-managed entity properties
                     try:
                         pool = getattr(self.db_impl, 'connection_pool', None)
@@ -1042,6 +1058,17 @@ class VitalGraphAppImpl:
                         self.logger.info("✅ Segmentation worker stopped")
                     except Exception as e:
                         self.logger.warning(f"Error stopping segmentation worker: {e}")
+
+                # Stop the index sync consumers. Rows they had claimed are
+                # given back when their lease runs out.
+                if self._index_sync_worker:
+                    try:
+                        self._index_sync_worker.stop()
+                        if self._index_sync_worker_task:
+                            await self._index_sync_worker_task
+                        self.logger.info("✅ Index sync worker stopped")
+                    except Exception as e:
+                        self.logger.warning(f"Error stopping index sync worker: {e}")
 
                 # Stop backfill task
                 if self._backfill_task:
