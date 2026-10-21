@@ -273,14 +273,8 @@ def needed_ranges(plan, aliases) -> set:
             # The variable's leaf gives the predicate whose objects the range
             # constrains — that pair is what the count is over.
             for bgp in _bgps(plan):
-                slot = bgp.var_slots.get(var)
-                if not slot or not slot.positions:
-                    continue
-                alias, _col = slot.positions[0]
-                pred = (bgp.leaf_terms or {}).get((alias, "predicate_uuid"))
-                if not pred:
-                    continue
-                p_uuid = _term_uuid(aliases, *pred)
+                hit = object_leaf(bgp, var, aliases)
+                p_uuid = hit[1] if hit else None
                 if p_uuid:
                     out.add((p_uuid, op, lit))
                     break
@@ -388,14 +382,8 @@ def needed_ins(plan, aliases) -> set:
             # unmeasured. The caller resolves and sums in one query instead.
             values = tuple(sorted(keys))
             for bgp in _bgps(plan):
-                slot = bgp.var_slots.get(var_name)
-                if not slot or not slot.positions:
-                    continue
-                alias, _col = slot.positions[0]
-                pred = (bgp.leaf_terms or {}).get((alias, "predicate_uuid"))
-                if not pred:
-                    continue
-                p_uuid = _term_uuid(aliases, *pred)
+                hit = object_leaf(bgp, var_name, aliases)
+                p_uuid = hit[1] if hit else None
                 if p_uuid:
                     out.add((p_uuid, values, negated))
                     break
@@ -445,17 +433,37 @@ def text_specs_of_filter(node):
         yield var, cond
 
 
-def text_bgp_binding(bgp, var, aliases):
-    """(alias, predicate_uuid) where `bgp` binds `var` under a bound predicate."""
+def object_leaf(bgp, var, aliases):
+    """(alias, predicate_uuid) of a leaf where `bgp` binds `var` as the OBJECT
+    of a bound predicate, or None.
+
+    OBJECT POSITION ONLY (`issues/292`). Every count this feeds -- text needles,
+    ranges, IN lists -- is "quads with this predicate whose OBJECT is in the
+    set". This took the variable's first position and ignored its column, so
+    `?s <p> ?o FILTER(STRSTARTS(STR(?s), ...))` measured the needle against
+    `<p>`'s objects: zero, and `_required_text_matches_nothing` declared the
+    query empty. A subject-position variable is simply not measured here.
+    """
     slot = (getattr(bgp, "var_slots", None) or {}).get(var)
     if not slot or not slot.positions:
         return None
-    alias, _col = slot.positions[0]
-    pred = (getattr(bgp, "leaf_terms", None) or {}).get((alias, "predicate_uuid"))
-    if not pred:
-        return None
-    p_uuid = _term_uuid(aliases, *pred)
-    return (alias, p_uuid) if p_uuid else None
+    leaf_terms = getattr(bgp, "leaf_terms", None) or {}
+    for alias, col in slot.positions:
+        if col != "object_uuid":
+            continue
+        pred = leaf_terms.get((alias, "predicate_uuid"))
+        if not pred:
+            continue
+        p_uuid = _term_uuid(aliases, *pred)
+        if p_uuid:
+            return (alias, p_uuid)
+    return None
+
+
+def text_bgp_binding(bgp, var, aliases):
+    """(alias, predicate_uuid) where `bgp` binds `var` as an object -- see
+    `object_leaf`."""
+    return object_leaf(bgp, var, aliases)
 
 
 def needed_texts(plan, aliases) -> set:
@@ -512,14 +520,8 @@ def needed_texts(plan, aliases) -> set:
                 cond = f"term_text {like} '%{esc}'"
 
             for bgp in _bgps(plan):
-                slot = bgp.var_slots.get(var)
-                if not slot or not slot.positions:
-                    continue
-                alias, _col = slot.positions[0]
-                pred = (bgp.leaf_terms or {}).get((alias, "predicate_uuid"))
-                if not pred:
-                    continue
-                p_uuid = _term_uuid(aliases, *pred)
+                hit = object_leaf(bgp, var, aliases)
+                p_uuid = hit[1] if hit else None
                 if p_uuid:
                     out.add((p_uuid, cond))
                     break

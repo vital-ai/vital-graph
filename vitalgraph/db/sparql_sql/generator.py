@@ -1415,7 +1415,15 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                     conn=conn, conn_params=conn_params,
                     lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
                 n = crows[0]["n"] if crows else 0
-            _pair_count_cache[ck] = n
+            # NEVER CACHE A ZERO (`issues/292`). Zero is the one value acted on
+            # as fact -- `_required_text_matches_nothing` makes the query
+            # provably empty -- and this cache is process-wide with no
+            # invalidation on write. Cached, a needle searched for before the
+            # value was written kept the query empty after it was written,
+            # until a restart. A zero is cheap to re-measure: the trigram index
+            # answers it in ~1 ms, which is the case issues/202 is about.
+            if n:
+                _pair_count_cache[ck] = n
             aliases.text_stats[(p_uuid, cond)] = n
 
         _mark("done")
