@@ -47,6 +47,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("repair_stats_tables")
 
@@ -78,7 +79,7 @@ async def sampled_counts_wrong(conn, space_id: str, sample: int = 5) -> tuple | 
     gate and the largest rows are where it shows. Exact counts on `sample`
     pairs are index scans on (predicate_uuid, object_uuid) — bounded work.
     """
-    t_stats = f"{space_id}_rdf_stats"
+    t_stats = f"{space_prefix(space_id)}_rdf_stats"
     if not await _table_exists(conn, t_stats):
         return None
     rows = await conn.fetch(
@@ -86,7 +87,7 @@ async def sampled_counts_wrong(conn, space_id: str, sample: int = 5) -> tuple | 
         f"ORDER BY row_count DESC LIMIT {int(sample)}")
     for r in rows:
         actual = await conn.fetchval(
-            f"SELECT count(*) FROM {space_id}_rdf_quad "
+            f"SELECT count(*) FROM {space_prefix(space_id)}_rdf_quad "
             f"WHERE predicate_uuid = $1 AND object_uuid = $2",
             r["predicate_uuid"], r["object_uuid"])
         if actual != r["row_count"]:
@@ -101,7 +102,7 @@ async def survey_space(conn, space_id: str) -> dict | None:
     behind still gives the planner a number to work with, while a missing row
     gives it nothing and is not self-healing.
     """
-    t_quad, t_ps = f"{space_id}_rdf_quad", f"{space_id}_rdf_pred_stats"
+    t_quad, t_ps = f"{space_prefix(space_id)}_rdf_quad", f"{space_prefix(space_id)}_rdf_pred_stats"
     if not await _table_exists(conn, t_quad) or not await _table_exists(conn, t_ps):
         return None
     quads = await conn.fetchval(f"SELECT count(*) FROM {t_quad}")
@@ -147,7 +148,7 @@ async def repair_space(conn, space_id: str) -> dict:
     # Backfill pred_rows now that the reference counts exist. Doing it here
     # rather than telling the operator to run the other script keeps the
     # ordering dependency from being a footgun.
-    t_vs = f"{space_id}_rdf_value_stats"
+    t_vs = f"{space_prefix(space_id)}_rdf_value_stats"
     if await _table_exists(conn, t_vs):
         has_col = await conn.fetchval(
             "SELECT 1 FROM information_schema.columns WHERE table_schema='public' "
@@ -155,7 +156,7 @@ async def repair_space(conn, space_id: str) -> dict:
         if has_col:
             await conn.execute(f"""
                 UPDATE {t_vs} vs SET pred_rows = ps.row_count
-                FROM {space_id}_rdf_pred_stats ps
+                FROM {space_prefix(space_id)}_rdf_pred_stats ps
                 WHERE ps.predicate_uuid = vs.predicate_uuid
                   AND vs.pred_rows IS DISTINCT FROM ps.row_count
             """)

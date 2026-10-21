@@ -28,6 +28,7 @@ import pytest
 from rdflib import Literal, URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -55,7 +56,7 @@ GRAPH = URIRef("urn:test:frame_slot_delete_graph")
 
 
 async def _fe_rows(conn, space_id: str) -> int:
-    return await conn.fetchval(f"SELECT count(*) FROM {space_id}_frame_slot")
+    return await conn.fetchval(f"SELECT count(*) FROM {space_prefix(space_id)}_frame_slot")
 
 
 async def _stale_fe_rows(conn, space_id: str) -> int:
@@ -79,18 +80,18 @@ async def _stale_fe_rows(conn, space_id: str) -> int:
     """
     return await conn.fetchval(
         f"""
-        SELECT count(*) FROM {space_id}_frame_slot fs
+        SELECT count(*) FROM {space_prefix(space_id)}_frame_slot fs
         WHERE NOT EXISTS (
             SELECT 1
-            FROM {space_id}_edge e
-            JOIN {space_id}_rdf_quad st
+            FROM {space_prefix(space_id)}_edge e
+            JOIN {space_prefix(space_id)}_rdf_quad st
               ON st.subject_uuid = fs.slot_uuid
              AND st.object_uuid = fs.role_uuid
-             AND st.predicate_uuid = (SELECT term_uuid FROM {space_id}_term
+             AND st.predicate_uuid = (SELECT term_uuid FROM {space_prefix(space_id)}_term
                                       WHERE term_text = $1)
-            LEFT JOIN {space_id}_rdf_quad sv
+            LEFT JOIN {space_prefix(space_id)}_rdf_quad sv
               ON sv.subject_uuid = fs.slot_uuid
-             AND sv.predicate_uuid = (SELECT term_uuid FROM {space_id}_term
+             AND sv.predicate_uuid = (SELECT term_uuid FROM {space_prefix(space_id)}_term
                                       WHERE term_text = $2)
             WHERE e.source_node_uuid = fs.frame_uuid
               AND e.dest_node_uuid = fs.slot_uuid

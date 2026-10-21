@@ -55,6 +55,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("repair_dupe_timestamps")
 
@@ -102,13 +103,13 @@ TARGETS = [
 
 async def _predicate_uuid(conn, space_id: str, uri: str):
     return await conn.fetchval(
-        f"SELECT term_uuid FROM {space_id}_term "
+        f"SELECT term_uuid FROM {space_prefix(space_id)}_term "
         f"WHERE term_text = $1 AND term_type = 'U' LIMIT 1", uri)
 
 
 async def _graph_uuid(conn, space_id: str, graph_uri: str):
     return await conn.fetchval(
-        f"SELECT term_uuid FROM {space_id}_term "
+        f"SELECT term_uuid FROM {space_prefix(space_id)}_term "
         f"WHERE term_text = $1 AND term_type = 'U' LIMIT 1", graph_uri)
 
 
@@ -124,11 +125,11 @@ def _victims_sql(space_id: str, order_by: str) -> str:
             SELECT q.subject_uuid, q.object_uuid,
                    row_number() OVER (PARTITION BY q.subject_uuid
                                       ORDER BY {order_by}) AS rn
-              FROM {space_id}_rdf_quad q
-              JOIN {space_id}_term t ON t.term_uuid = q.object_uuid
+              FROM {space_prefix(space_id)}_rdf_quad q
+              JOIN {space_prefix(space_id)}_term t ON t.term_uuid = q.object_uuid
              WHERE q.predicate_uuid = $1 AND q.context_uuid = $2
                AND q.subject_uuid IN (
-                   SELECT subject_uuid FROM {space_id}_rdf_quad
+                   SELECT subject_uuid FROM {space_prefix(space_id)}_rdf_quad
                     WHERE predicate_uuid = $1 AND context_uuid = $2
                     GROUP BY subject_uuid HAVING count(*) > 1)
         ) x WHERE rn > 1
@@ -156,7 +157,7 @@ async def repair(conn, space_id: str, graph_uri: str, apply: bool) -> int:
 
         if apply and rows:
             await conn.executemany(
-                f"DELETE FROM {space_id}_rdf_quad "
+                f"DELETE FROM {space_prefix(space_id)}_rdf_quad "
                 f" WHERE subject_uuid = $1 AND predicate_uuid = $2 "
                 f"   AND object_uuid = $3 AND context_uuid = $4",
                 [(r["subject_uuid"], p_uuid, r["object_uuid"], g_uuid) for r in rows])

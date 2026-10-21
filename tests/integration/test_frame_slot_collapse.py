@@ -41,6 +41,7 @@ import pytest_asyncio
 from rdflib import URIRef
 
 from .conftest import skip_no_infra, TEST_SPACE_PREFIX, SIDECAR_URL
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -361,7 +362,7 @@ class TestWhetherTheTableIsUsed:
         # `hasKGSlotType` VALUES in its columns and 26 of 29 spaces use others.
         # `frame_slot` replaces it and holds the role as data.
         rows = await pg_conn.fetch(
-            f"SELECT count(*) AS n FROM {space_id}_frame_slot")
+            f"SELECT count(*) AS n FROM {space_prefix(space_id)}_frame_slot")
         populated = rows[0]["n"] if rows else 0
 
         print(f"\nframe_slot rows: {populated}")
@@ -549,7 +550,7 @@ class TestMultiHopTraversal:
         """
         space_id, graph = seeded
         sql = await _sql_for(pg_conn, space_id, _chain_query(graph, f"{EX}c0", depth))
-        joins = sql.count(f"{space_id}_frame_slot")
+        joins = sql.count(f"{space_prefix(space_id)}_frame_slot")
         # TWO joins per hop, not one. `frame_slot` holds one row per (frame,
         # slot) with the role as data, so a hop's two arms are two rows joined
         # on `frame_uuid` — where `frame_slot` folded both into one row by
@@ -570,11 +571,11 @@ class TestMultiHopTraversal:
         sparql = _chain_query(graph, f"{EX}c0", depth)
 
         sql_on, rows_on = await _rows(pg_conn, space_id, sparql)
-        assert f"{space_id}_frame_slot" in sql_on
+        assert f"{space_prefix(space_id)}_frame_slot" in sql_on
 
         _disable_rewrite(monkeypatch)
         sql_off, rows_off = await _rows(pg_conn, space_id, sparql)
-        assert f"{space_id}_frame_slot" not in sql_off, "rewrite not disabled"
+        assert f"{space_prefix(space_id)}_frame_slot" not in sql_off, "rewrite not disabled"
 
         assert _reached(rows_on) == _reached(rows_off), (
             f"depth {depth}: collapsing changed which entities are reachable")
@@ -589,10 +590,10 @@ class TestMultiHopTraversal:
         _disable_rewrite(monkeypatch)
         sql_off = await _sql_for(pg_conn, space_id, sparql)
 
-        quad_on = sql_on.count(f"{space_id}_rdf_quad")
-        quad_off = sql_off.count(f"{space_id}_rdf_quad")
+        quad_on = sql_on.count(f"{space_prefix(space_id)}_rdf_quad")
+        quad_off = sql_off.count(f"{space_prefix(space_id)}_rdf_quad")
         print(f"\ndepth 3 — rdf_quad references: {quad_off} -> {quad_on}, "
-              f"frame_slot joins: {sql_on.count(f'{space_id}_frame_slot')}")
+              f"frame_slot joins: {sql_on.count(f'{space_prefix(space_id)}_frame_slot')}")
         assert quad_on < quad_off, (
             f"the collapse did not reduce quad-table joins ({quad_off} -> "
             f"{quad_on}); it is meant to replace 6 tables per hop with 1")
@@ -708,7 +709,7 @@ class TestCriteriaFilteredTraversal:
         q = _filtered_chain(graph, f"{EX}c0", depth,
                             hop_filter=f'\n        ?f{{n}} <{HALEY}hasKGFrameType> <{HYPERNYM}> .')
         sql = await _sql_for(pg_conn, space_id, q)
-        assert sql.count(f"{space_id}_frame_slot") == 2 * depth, (
+        assert sql.count(f"{space_prefix(space_id)}_frame_slot") == 2 * depth, (
             "a frame-level criterion should not cost the collapse; if this "
             "fails, filtered traversal has lost the table entirely")
 
@@ -723,11 +724,11 @@ class TestCriteriaFilteredTraversal:
                             hop_filter=f'\n        ?f{{n}} <{HALEY}hasKGFrameType> <{HYPERNYM}> .')
 
         sql_on, rows_on = await _rows(pg_conn, space_id, q)
-        assert f"{space_id}_frame_slot" in sql_on
+        assert f"{space_prefix(space_id)}_frame_slot" in sql_on
 
         _disable_rewrite(monkeypatch)
         sql_off, rows_off = await _rows(pg_conn, space_id, q)
-        assert f"{space_id}_frame_slot" not in sql_off, "rewrite not disabled"
+        assert f"{space_prefix(space_id)}_frame_slot" not in sql_off, "rewrite not disabled"
 
         assert _reached(rows_on) == _reached(rows_off), (
             f"depth {depth}: the collapse changed which paths the criterion "

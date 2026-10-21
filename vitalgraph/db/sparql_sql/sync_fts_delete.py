@@ -25,6 +25,7 @@ import logging
 from typing import List
 
 from .sparql_sql_schema import SparqlSQLSchema
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ async def sync_fts_before_delete(conn, space_id: str, subject_uuids: List,
         return 0
 
     rows = await conn.fetch(
-        f"SELECT index_name FROM {space_id}_fts_index")
+        f"SELECT index_name FROM {space_prefix(space_id)}_fts_index")
     removed = 0
     for row in rows:
         table = SparqlSQLSchema.fts_table_name(space_id, row["index_name"])

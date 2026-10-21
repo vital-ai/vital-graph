@@ -56,6 +56,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("repair_grouping_self_link")
 
@@ -73,27 +74,27 @@ async def _table_exists(conn, table: str) -> bool:
 
 async def survey_space(conn, space_id: str) -> dict | None:
     """Grouping targets with no self-link, and how many carry a wrong one."""
-    if not await _table_exists(conn, f"{space_id}_rdf_quad"):
+    if not await _table_exists(conn, f"{space_prefix(space_id)}_rdf_quad"):
         return None
     pred = await conn.fetchval(
-        f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1", GRAPH_URI_PRED)
+        f"SELECT term_uuid FROM {space_prefix(space_id)}_term WHERE term_text = $1", GRAPH_URI_PRED)
     if not pred:
         return None                     # space does not use grouping URIs
 
     rows = await conn.fetch(f"""
         WITH targets AS (
             SELECT DISTINCT object_uuid AS e, context_uuid AS ctx
-            FROM {space_id}_rdf_quad WHERE predicate_uuid = $1)
+            FROM {space_prefix(space_id)}_rdf_quad WHERE predicate_uuid = $1)
         SELECT t.e, t.ctx,
-               EXISTS (SELECT 1 FROM {space_id}_rdf_quad q
+               EXISTS (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad q
                        WHERE q.predicate_uuid = $1 AND q.subject_uuid = t.e) AS has_any,
-               EXISTS (SELECT 1 FROM {space_id}_rdf_quad ty
-                       JOIN {space_id}_term typ ON typ.term_uuid = ty.predicate_uuid
+               EXISTS (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad ty
+                       JOIN {space_prefix(space_id)}_term typ ON typ.term_uuid = ty.predicate_uuid
                         AND typ.term_text = ANY($2::text[])
                        WHERE ty.subject_uuid = t.e) AS has_type
         FROM targets t
         WHERE NOT EXISTS (
-            SELECT 1 FROM {space_id}_rdf_quad q
+            SELECT 1 FROM {space_prefix(space_id)}_rdf_quad q
             WHERE q.predicate_uuid = $1 AND q.subject_uuid = t.e
               AND q.object_uuid = t.e AND q.context_uuid = t.ctx)
     """, pred, list(TYPE_PREDS))
@@ -105,10 +106,10 @@ async def survey_space(conn, space_id: str) -> dict | None:
     typeless = await conn.fetchval(f"""
         SELECT count(*) FROM (
             SELECT DISTINCT object_uuid AS e
-            FROM {space_id}_rdf_quad WHERE predicate_uuid = $1) t
+            FROM {space_prefix(space_id)}_rdf_quad WHERE predicate_uuid = $1) t
         WHERE NOT EXISTS (
-            SELECT 1 FROM {space_id}_rdf_quad ty
-            JOIN {space_id}_term typ ON typ.term_uuid = ty.predicate_uuid
+            SELECT 1 FROM {space_prefix(space_id)}_rdf_quad ty
+            JOIN {space_prefix(space_id)}_term typ ON typ.term_uuid = ty.predicate_uuid
              AND typ.term_text = ANY($2::text[])
             WHERE ty.subject_uuid = t.e)
     """, pred, list(TYPE_PREDS))
@@ -116,7 +117,7 @@ async def survey_space(conn, space_id: str) -> dict | None:
     if not rows and not typeless:
         return None
     total = await conn.fetchval(
-        f"SELECT count(DISTINCT object_uuid) FROM {space_id}_rdf_quad "
+        f"SELECT count(DISTINCT object_uuid) FROM {space_prefix(space_id)}_rdf_quad "
         f"WHERE predicate_uuid = $1", pred)
     rows = rows or []
     # A target that HAS the predicate but not pointing at itself is misdirected,
@@ -158,7 +159,7 @@ async def repair_space(conn, space_id: str, s: dict) -> int:
         from vitalgraph.vectorization.index_sync_trigger import suppress
         await suppress(conn)
         await conn.executemany(
-            f"INSERT INTO {space_id}_rdf_quad "
+            f"INSERT INTO {space_prefix(space_id)}_rdf_quad "
             f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
             f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING", written)
         # No stats sync needed. `rdf_stats` and `rdf_pred_stats` are RECOMPUTED

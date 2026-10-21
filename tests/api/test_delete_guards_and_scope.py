@@ -36,6 +36,7 @@ from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.api, pytest.mark.asyncio(loop_scope="session")]
 
@@ -100,7 +101,7 @@ async def _standalone(vg_client, space, graph, parent=None):
 
 async def _quads(pg_conn, space, *uris) -> int:
     return await pg_conn.fetchval(
-        f"SELECT count(*) FROM {space}_rdf_quad WHERE subject_uuid = ANY("
+        f"SELECT count(*) FROM {space_prefix(space)}_rdf_quad WHERE subject_uuid = ANY("
         f"ARRAY(SELECT vitalgraph_term_uuid(u, 'U') FROM unnest($1::text[]) u))",
         list(uris))
 
@@ -108,7 +109,7 @@ async def _quads(pg_conn, space, *uris) -> int:
 async def _linking_edges(pg_conn, space, frame_uri) -> int:
     """Edges of any kind whose destination is the frame."""
     return await pg_conn.fetchval(
-        f"SELECT count(*) FROM {space}_rdf_quad "
+        f"SELECT count(*) FROM {space_prefix(space)}_rdf_quad "
         f"WHERE predicate_uuid = vitalgraph_term_uuid($1, 'U') "
         f"AND object_uuid = vitalgraph_term_uuid($2, 'U')",
         "http://vital.ai/ontology/vital-core#hasEdgeDestination", frame_uri)

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class SegmentationConfigManager:
     def __init__(self, conn, space_id: str):
         self.conn = conn
         self.space_id = space_id
-        self._table = f"{space_id}_document_segmentation_config"
+        self._table = f"{space_prefix(space_id)}_document_segmentation_config"
 
     # ------------------------------------------------------------------
     # Table management

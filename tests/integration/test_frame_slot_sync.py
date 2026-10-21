@@ -17,6 +17,7 @@ import pytest
 from rdflib import URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -73,10 +74,10 @@ async def _fe_row(conn, space_id: str, frame_uri: str):
         SELECT
           max(t.term_text) FILTER (WHERE tr.term_text = $2) AS src,
           max(t.term_text) FILTER (WHERE tr.term_text = $3) AS dst
-        FROM {space_id}_frame_slot fs
-        JOIN {space_id}_term tf ON tf.term_uuid = fs.frame_uuid
-        JOIN {space_id}_term tr ON tr.term_uuid = fs.role_uuid
-        JOIN {space_id}_term t  ON t.term_uuid  = fs.entity_uuid
+        FROM {space_prefix(space_id)}_frame_slot fs
+        JOIN {space_prefix(space_id)}_term tf ON tf.term_uuid = fs.frame_uuid
+        JOIN {space_prefix(space_id)}_term tr ON tr.term_uuid = fs.role_uuid
+        JOIN {space_prefix(space_id)}_term t  ON t.term_uuid  = fs.entity_uuid
         WHERE tf.term_text = $1
         HAVING count(*) > 0
         """,

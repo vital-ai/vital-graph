@@ -41,6 +41,7 @@ import uuid
 from typing import List, Optional
 
 from .sort_value_key import bounded_text_sql
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +104,8 @@ def _select_rows(space_id: str, where: str, seed_param: str = None) -> str:
     property predicates, `$5` form-type predicate, `$6` the Assertion value,
     `$7` frame-graph predicate. `where` supplies any restriction from `$8`.
     """
-    t_quad = f"{space_id}_rdf_quad"
-    t_term = f"{space_id}_term"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
+    t_term = f"{space_prefix(space_id)}_term"
     # SEEDS THE POPULATION CTE, and without it cost tracks the SPACE rather than
     # the CHANGE. `MATERIALIZED` is what makes the Assertion test run once per
     # frame instead of once per property row -- but it also forces both CTEs to
@@ -311,7 +312,7 @@ async def sync_frame_prop_sort_after_change(
     """
     if not subject_uuids:
         return 0
-    t = f"{space_id}_frame_prop_sort"
+    t = f"{space_prefix(space_id)}_frame_prop_sort"
     if not await _table_present(conn, space_id, t):
         return 0
     if context_uuid:
@@ -335,14 +336,14 @@ async def delete_frame_prop_sort_for_context(conn, space_id: str,
                                              context_uuid: uuid.UUID) -> int:
     """Drop every row for one graph. Pairs with clear/drop graph."""
     result = await conn.execute(
-        f"DELETE FROM {space_id}_frame_prop_sort WHERE context_uuid = $1",
+        f"DELETE FROM {space_prefix(space_id)}_frame_prop_sort WHERE context_uuid = $1",
         context_uuid)
     return int(result.split()[-1]) if result else 0
 
 
 async def resync_frame_prop_sort(conn, space_id: str) -> int:
     """TRUNCATE and rebuild. For bulk loads and recovery."""
-    t = f"{space_id}_frame_prop_sort"
+    t = f"{space_prefix(space_id)}_frame_prop_sort"
     await conn.execute(f"TRUNCATE {t}")
     result = await conn.execute(
         f"INSERT INTO {t} ({_INSERT_COLS}) "
@@ -359,7 +360,7 @@ async def resync_frame_prop_sort(conn, space_id: str) -> int:
 
 async def backfill_frame_prop_sort(conn, space_id: str) -> int:
     """Insert missing rows WITHOUT truncating; takes only ROW EXCLUSIVE."""
-    t = f"{space_id}_frame_prop_sort"
+    t = f"{space_prefix(space_id)}_frame_prop_sort"
     result = await conn.execute(
         f"INSERT INTO {t} ({_INSERT_COLS}) "
         f"{_select_rows(space_id, 'TRUE')} {_ON_CONFLICT}", *_args())
@@ -394,12 +395,12 @@ async def backfill_frame_prop_sort_batch(
     nothing and the caller must stop rather than reselect them forever.
     """
     n = int(batch_size or FPS_BACKFILL_BATCH)
-    t = f"{space_id}_frame_prop_sort"
+    t = f"{space_prefix(space_id)}_frame_prop_sort"
     rows = await conn.fetch(
-        f"SELECT DISTINCT q.subject_uuid FROM {space_id}_rdf_quad q "
+        f"SELECT DISTINCT q.subject_uuid FROM {space_prefix(space_id)}_rdf_quad q "
         f" WHERE q.predicate_uuid = ANY($1) "
         # Population membership, the same test the derivation applies.
-        f"   AND EXISTS (SELECT 1 FROM {space_id}_rdf_quad v "
+        f"   AND EXISTS (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad v "
         f"                WHERE v.subject_uuid = q.subject_uuid "
         f"                  AND v.context_uuid = q.context_uuid "
         f"                  AND v.predicate_uuid = $2 "
@@ -431,7 +432,7 @@ async def frame_prop_sort_drift(conn, space_id: str,
         f"SELECT count(*) FROM ({_select_rows(space_id, 'TRUE')}) d",
         *_args(), timeout=timeout)
     actual = await conn.fetchval(
-        f"SELECT count(*) FROM {space_id}_frame_prop_sort", timeout=timeout)
+        f"SELECT count(*) FROM {space_prefix(space_id)}_frame_prop_sort", timeout=timeout)
     return int(expected or 0), int(actual or 0)
 
 
@@ -470,7 +471,7 @@ async def frame_prop_sort_coverage(conn, space_id: str, limit: int = 5,
     # All four prod tables were verified pair-complete before this changed
     # (<space> 1,214,433, lead_data 659,772, wordnet_frames 570,696,
     # lead_prod 566,283), so re-keying blocks nothing that was being served.
-    _present = (f"EXISTS (SELECT 1 FROM {space_id}_frame_prop_sort f"
+    _present = (f"EXISTS (SELECT 1 FROM {space_prefix(space_id)}_frame_prop_sort f"
                 f"  WHERE f.frame_uuid = y.frame_uuid"
                 f"    AND f.context_uuid = y.context_uuid"
                 f"    AND f.property_uuid = y.property_uuid)")
@@ -485,8 +486,8 @@ async def frame_prop_sort_coverage(conn, space_id: str, limit: int = 5,
             -- a shortfall no backfill can close.
             SELECT DISTINCT q.subject_uuid AS frame_uuid, q.context_uuid,
                    pq.predicate_uuid AS property_uuid
-              FROM {space_id}_rdf_quad q
-              JOIN {space_id}_rdf_quad pq
+              FROM {space_prefix(space_id)}_rdf_quad q
+              JOIN {space_prefix(space_id)}_rdf_quad pq
                 ON pq.subject_uuid = q.subject_uuid
                AND pq.context_uuid = q.context_uuid
                AND pq.predicate_uuid = ANY($4)
@@ -494,7 +495,7 @@ async def frame_prop_sort_coverage(conn, space_id: str, limit: int = 5,
         ),
         typed AS (
             SELECT a.frame_uuid, a.context_uuid, a.property_uuid,
-                   (SELECT ft.object_uuid FROM {space_id}_rdf_quad ft
+                   (SELECT ft.object_uuid FROM {space_prefix(space_id)}_rdf_quad ft
                      WHERE ft.subject_uuid = a.frame_uuid
                        AND ft.context_uuid = a.context_uuid
                        AND ft.predicate_uuid = $3 LIMIT 1) AS ty
@@ -505,7 +506,7 @@ async def frame_prop_sort_coverage(conn, space_id: str, limit: int = 5,
                count(*) FILTER (WHERE {_present}) AS in_table,
                count(*) AS of_type
           FROM typed y
-          LEFT JOIN {space_id}_term t ON t.term_uuid = y.ty
+          LEFT JOIN {space_prefix(space_id)}_term t ON t.term_uuid = y.ty
          GROUP BY 1, 2
         {_having}
          ORDER BY (count(*) - count(*) FILTER (WHERE {_present})) DESC

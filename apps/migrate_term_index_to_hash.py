@@ -25,6 +25,7 @@ import os
 import sys
 
 import asyncpg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 async def migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool) -> bool:
@@ -32,8 +33,8 @@ async def migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool) 
 
     Returns True if the index was migrated (or would be in dry-run mode).
     """
-    idx_name = f"idx_{space_id}_term_tt"
-    term_table = f"{space_id}_term"
+    idx_name = f"idx_{space_prefix(space_id)}_term_tt"
+    term_table = f"{space_prefix(space_id)}_term"
 
     # Check current index type
     row = await conn.fetchrow(

@@ -13,6 +13,7 @@ import uuid
 import pytest
 
 from .conftest import skip_no_infra, PROTECTED_SPACES, TEST_SPACE_PREFIX
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -44,9 +45,9 @@ class TestSpaceLifecycle:
                     f"{space_id}%",
                 )
                 table_names = [r["table_name"] for r in rows]
-                assert f"{space_id}_term" in table_names
-                assert f"{space_id}_rdf_quad" in table_names
-                assert f"{space_id}_datatype" in table_names
+                assert f"{space_prefix(space_id)}_term" in table_names
+                assert f"{space_prefix(space_id)}_rdf_quad" in table_names
+                assert f"{space_prefix(space_id)}_datatype" in table_names
         finally:
             async with pg_pool.acquire() as conn:
                 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
@@ -62,11 +63,11 @@ class TestSpaceLifecycle:
 
             # Verify core tables are gone
             core_tables = [
-                f"{space_id}_term",
-                f"{space_id}_rdf_quad",
-                f"{space_id}_datatype",
-                f"{space_id}_rdf_stats",
-                f"{space_id}_rdf_pred_stats",
+                f"{space_prefix(space_id)}_term",
+                f"{space_prefix(space_id)}_rdf_quad",
+                f"{space_prefix(space_id)}_datatype",
+                f"{space_prefix(space_id)}_rdf_stats",
+                f"{space_prefix(space_id)}_rdf_pred_stats",
             ]
             rows = await conn.fetch(
                 "SELECT table_name FROM information_schema.tables "
@@ -104,7 +105,7 @@ class TestSpaceLifecycle:
                 await SparqlSQLSchema.create_space(conn, space_id)
 
                 rows = await conn.fetch(
-                    f"SELECT datatype_uri FROM {space_id}_datatype ORDER BY datatype_uri"
+                    f"SELECT datatype_uri FROM {space_prefix(space_id)}_datatype ORDER BY datatype_uri"
                 )
                 uris = {r["datatype_uri"] for r in rows}
                 # Standard datatypes should be seeded
@@ -185,7 +186,7 @@ class TestIndexes:
                 rows = await conn.fetch(
                     "SELECT indexname FROM pg_indexes "
                     "WHERE schemaname = 'public' AND tablename = $1",
-                    f"{space_id}_rdf_quad",
+                    f"{space_prefix(space_id)}_rdf_quad",
                 )
                 index_names = {r["indexname"] for r in rows}
                 # Should have at least predicate, subject, object indexes

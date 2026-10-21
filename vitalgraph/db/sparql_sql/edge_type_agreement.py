@@ -38,6 +38,7 @@ import time as _time
 from typing import Optional
 
 from .db_provider import bounded_lock_wait
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +220,7 @@ async def _stored_verdict(conn, space_id: str, kind: str, predicate_uri: str):
                 "WHERE ta.space_id = $1 AND ta.kind = $2 AND ta.predicate_uri = $3 "
                 "  AND ta.agrees IS NOT NULL "
                 "  AND ta.change_token = t.churn || ':' || t.relfilenode",
-                space_id, kind, predicate_uri, f"{space_id}_{suffix}")
+                space_id, kind, predicate_uri, f"{space_prefix(space_id)}_{suffix}")
     except asyncpg.UndefinedTableError:
         return NOT_MIGRATED
     except Exception as exc:
@@ -264,7 +265,7 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
     if type_predicate != RDF_TYPE_URI:
         return None
 
-    t_fs = f"{space_id}_frame_slot"
+    t_fs = f"{space_prefix(space_id)}_frame_slot"
     key = (space_id, "frame", type_predicate)
 
     # THE MIGRATED PATH, and the only one that can actually answer TRUE on a
@@ -340,7 +341,7 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
     # constraint was never absorbed (`issues/178`).
     try:
         pred_uuid = await conn.fetchval(
-            f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
+            f"SELECT term_uuid FROM {space_prefix(space_id)}_term WHERE term_text = $1",
             type_predicate)
     except Exception as exc:
         logger.debug("frame-type agreement: predicate lookup failed: %s", exc)
@@ -354,7 +355,7 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
     sql = f"""
         SELECT 1 FROM (SELECT DISTINCT frame_uuid, context_uuid, frame_type_uuid
                        FROM {t_fs}) f
-        LEFT JOIN {space_id}_rdf_quad rt
+        LEFT JOIN {space_prefix(space_id)}_rdf_quad rt
                ON rt.subject_uuid = f.frame_uuid
               AND rt.context_uuid = f.context_uuid
               AND rt.predicate_uuid = $1
@@ -401,7 +402,7 @@ async def edge_type_absorbable(space_id: str, type_predicate: str,
     if type_predicate != RDF_TYPE_URI:
         return None
 
-    t_edge = f"{space_id}_edge"
+    t_edge = f"{space_prefix(space_id)}_edge"
     stored = await _stored_verdict(conn, space_id, "edge", type_predicate)
     if stored is not NOT_MIGRATED:
         return stored
@@ -423,9 +424,9 @@ async def edge_type_absorbable(space_id: str, type_predicate: str,
     # which is why this is bounded.
     sql = f"""
         SELECT 1 FROM {t_edge} e
-        LEFT JOIN {space_id}_rdf_quad rt
+        LEFT JOIN {space_prefix(space_id)}_rdf_quad rt
                ON rt.subject_uuid = e.edge_uuid
-              AND rt.predicate_uuid = (SELECT term_uuid FROM {space_id}_term
+              AND rt.predicate_uuid = (SELECT term_uuid FROM {space_prefix(space_id)}_term
                                        WHERE term_text = $1)
         WHERE rt.object_uuid IS DISTINCT FROM e.edge_type_uuid
         LIMIT 1"""
@@ -607,7 +608,7 @@ async def refresh_type_agreement(conn, space_id: str, force: bool = False) -> li
     import asyncpg
     out = []
     for kind, (suffix, col) in _SOURCES.items():
-        table = f"{space_id}_{suffix}"
+        table = f"{space_prefix(space_id)}_{suffix}"
         record = {"space_id": space_id, "kind": kind, "agrees": None}
         token = rows = started = None        # read by the timeout handler below
         try:
@@ -631,7 +632,7 @@ async def refresh_type_agreement(conn, space_id: str, force: bool = False) -> li
                 out.append(record)
                 continue
             pred_uuid = await conn.fetchval(
-                f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
+                f"SELECT term_uuid FROM {space_prefix(space_id)}_term WHERE term_text = $1",
                 RDF_TYPE_URI)
             started = _time.monotonic()
             if pred_uuid is None:
@@ -644,7 +645,7 @@ async def refresh_type_agreement(conn, space_id: str, force: bool = False) -> li
                         SELECT 1 FROM (SELECT DISTINCT frame_uuid, context_uuid,
                                               {col}
                                        FROM {table}) f
-                        LEFT JOIN {space_id}_rdf_quad rt
+                        LEFT JOIN {space_prefix(space_id)}_rdf_quad rt
                                ON rt.subject_uuid = f.frame_uuid
                               AND rt.context_uuid = f.context_uuid
                               AND rt.predicate_uuid = $1
@@ -653,7 +654,7 @@ async def refresh_type_agreement(conn, space_id: str, force: bool = False) -> li
                 else:
                     sql = f"""
                         SELECT 1 FROM {table} e
-                        LEFT JOIN {space_id}_rdf_quad rt
+                        LEFT JOIN {space_prefix(space_id)}_rdf_quad rt
                                ON rt.subject_uuid = e.edge_uuid
                               AND rt.predicate_uuid = $1
                         WHERE rt.object_uuid IS DISTINCT FROM e.{col}

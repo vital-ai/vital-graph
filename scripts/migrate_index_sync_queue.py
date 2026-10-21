@@ -44,6 +44,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_index_sync_queue")
 
@@ -53,14 +54,14 @@ def statements(space_id: str, need: list) -> list:
     from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
     from vitalgraph.vectorization.index_sync_trigger import create_sql
     schema = SparqlSQLSchema()
-    table = f"{space_id}_index_sync_queue"
+    table = f"{space_prefix(space_id)}_index_sync_queue"
     out = []
     if "table" in need:
         out += [s for s in schema.create_space_tables_sql(space_id)
                 if f"CREATE TABLE IF NOT EXISTS {table} (" in s]
     if "index" in need:
         out += [s for s in schema.create_space_indexes_sql(space_id)
-                if f"idx_{space_id}_isq_due " in s]
+                if f"idx_{space_prefix(space_id)}_isq_due " in s]
     if "trigger" in need:
         out += create_sql(space_id)
     return out
@@ -70,10 +71,10 @@ async def missing(conn, space_id: str) -> list:
     from vitalgraph.vectorization.index_sync_trigger import installed
     out = []
     if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL",
-                               f"{space_id}_index_sync_queue"):
+                               f"{space_prefix(space_id)}_index_sync_queue"):
         out.append("table")
     if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL",
-                               f"idx_{space_id}_isq_due"):
+                               f"idx_{space_prefix(space_id)}_isq_due"):
         out.append("index")
     if not await installed(conn, space_id):
         out.append("trigger")

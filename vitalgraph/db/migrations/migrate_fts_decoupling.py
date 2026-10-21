@@ -36,6 +36,7 @@ from typing import List, Optional
 import asyncpg
 
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +107,8 @@ async def _migrate_space(
 
     # ── Step 1: Copy vector_mapping → search_mapping ──────────────
 
-    vm_table = f"{space_id}_vector_mapping"
-    sm_table = f"{space_id}_search_mapping"
+    vm_table = f"{space_prefix(space_id)}_vector_mapping"
+    sm_table = f"{space_prefix(space_id)}_search_mapping"
 
     if not await _table_exists(conn, vm_table):
         logger.info("    No vector_mapping table — skipping mapping copy")
@@ -151,8 +152,8 @@ async def _migrate_space(
 
     # ── Step 2: Copy vector_mapping_property → search_mapping_property ─
 
-    vmp_table = f"{space_id}_vector_mapping_property"
-    smp_table = f"{space_id}_search_mapping_property"
+    vmp_table = f"{space_prefix(space_id)}_vector_mapping_property"
+    smp_table = f"{space_prefix(space_id)}_search_mapping_property"
 
     if (await _table_exists(conn, vmp_table)
             and await _table_exists(conn, smp_table)
@@ -182,8 +183,8 @@ async def _migrate_space(
 
     # ── Step 3: For each vector_index, create FTS index + copy data ─
 
-    vi_table = f"{space_id}_vector_index"
-    fi_table = f"{space_id}_fts_index"
+    vi_table = f"{space_prefix(space_id)}_vector_index"
+    fi_table = f"{space_prefix(space_id)}_fts_index"
 
     if not await _table_exists(conn, vi_table):
         logger.info("    No vector_index table — skipping FTS index creation")
@@ -200,8 +201,8 @@ async def _migrate_space(
 
     for row in indexes:
         index_name = row['index_name']
-        vec_table = f"{space_id}_vec_{index_name}"
-        fts_table = f"{space_id}_fts_{index_name}"
+        vec_table = f"{space_prefix(space_id)}_vec_{index_name}"
+        fts_table = f"{space_prefix(space_id)}_fts_{index_name}"
         languages = ['english']  # Default; can be updated later
 
         # 3a. Register FTS index
@@ -252,7 +253,7 @@ async def _migrate_space(
             stats['fts_rows_copied'] += count
         else:
             # Disable trigger for bulk insert performance
-            trigger_name = f"trg_{space_id}_fts_{index_name}_tsv"
+            trigger_name = f"trg_{space_prefix(space_id)}_fts_{index_name}_tsv"
             try:
                 await conn.execute(
                     f"ALTER TABLE {fts_table} DISABLE TRIGGER {trigger_name}"
@@ -288,13 +289,13 @@ async def _migrate_space(
 
     for row in indexes:
         index_name = row['index_name']
-        vec_table = f"{space_id}_vec_{index_name}"
+        vec_table = f"{space_prefix(space_id)}_vec_{index_name}"
 
         if not await _table_exists(conn, vec_table):
             continue
 
         # Drop GIN FTS index
-        fts_idx_name = f"idx_{space_id}_vec_{index_name}_fts"
+        fts_idx_name = f"idx_{space_prefix(space_id)}_vec_{index_name}_fts"
         if dry_run:
             if await _index_exists(conn, fts_idx_name):
                 logger.info("    Would drop GIN FTS index: %s", fts_idx_name)

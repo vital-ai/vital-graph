@@ -42,6 +42,7 @@ import psycopg
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import pg_kwargs  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 BLOCK = 1024 * 1024  # 1MB chunks — the block size the convert script uses
 
@@ -123,9 +124,9 @@ async def copy_file(cur, sql: str, path: str) -> float:
 async def run(space: str, quads_csv: str, terms_csv: str,
               truncate: bool, keep_indexes: bool,
               skip_resync: bool = False) -> int:
-    term_tbl = f"{space}_term"
-    quad_tbl = f"{space}_rdf_quad"
-    stage_tbl = f"stage_{space}_quads"
+    term_tbl = f"{space_prefix(space)}_term"
+    quad_tbl = f"{space_prefix(space)}_rdf_quad"
+    stage_tbl = f"stage_{space_prefix(space)}_quads"
 
     for p in (quads_csv, terms_csv):
         if not os.path.isfile(p):

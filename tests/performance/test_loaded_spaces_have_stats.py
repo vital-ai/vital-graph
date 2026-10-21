@@ -36,6 +36,7 @@ from __future__ import annotations
 import pytest
 
 from .conftest import skip_no_pg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -54,15 +55,15 @@ async def test_every_space_with_quads_has_predicate_stats(perf_conn):
     for sid in spaces:
         exists = await perf_conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
-            f"{sid}_rdf_quad")
+            f"{space_prefix(sid)}_rdf_quad")
         if not exists:
             continue
-        quads = await perf_conn.fetchval(f"SELECT count(*) FROM {sid}_rdf_quad")
+        quads = await perf_conn.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_rdf_quad")
         if not quads:
             continue
         checked += 1
         preds = await perf_conn.fetchval(
-            f"SELECT count(*) FROM {sid}_rdf_pred_stats")
+            f"SELECT count(*) FROM {space_prefix(sid)}_rdf_pred_stats")
         if not preds:
             degraded.append(f"{sid}: {quads:,} quads, 0 predicate stats")
 

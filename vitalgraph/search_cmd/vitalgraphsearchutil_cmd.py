@@ -30,6 +30,7 @@ from vitalgraph.vectorization.search_mapping_manager import SearchMappingManager
 from vitalgraph.vectorization.vector_populator import populate_index, PopulationStats
 from vitalgraph.vectorization.geo_populator import populate_geo, GeoPopulationStats
 from vitalgraph.vectorization.geo_config_manager import GeoConfigManager
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +224,7 @@ class VitalGraphSearchUtilREPL:
         try:
             rows = self._run(self.conn.fetch(
                 f"SELECT index_name, dimensions, provider, model_name, distance_metric, description "
-                f"FROM {space}_vector_index ORDER BY index_name"
+                f"FROM {space_prefix(space)}_vector_index ORDER BY index_name"
             ))
             data = [dict(r) for r in rows]
             _print_table(data, ['index_name', 'dimensions', 'provider', 'model_name', 'distance_metric'])
@@ -257,7 +258,7 @@ class VitalGraphSearchUtilREPL:
         try:
             # Insert into vector_index registry
             self._run(self.conn.execute(
-                f"INSERT INTO {space}_vector_index "
+                f"INSERT INTO {space_prefix(space)}_vector_index "
                 f"(index_name, dimensions, distance_metric, provider, model_name, description) "
                 f"VALUES ($1, $2, $3, $4, $5, $6)",
                 name, dims, metric, provider, model, description,
@@ -290,10 +291,10 @@ class VitalGraphSearchUtilREPL:
                 print("Cancelled.")
                 return True
         try:
-            vec_table = f"{space}_vec_{name}"
+            vec_table = f"{space_prefix(space)}_vec_{name}"
             self._run(self.conn.execute(f"DROP TABLE IF EXISTS {vec_table} CASCADE"))
             self._run(self.conn.execute(
-                f"DELETE FROM {space}_vector_index WHERE index_name = $1", name
+                f"DELETE FROM {space_prefix(space)}_vector_index WHERE index_name = $1", name
             ))
             print(f"✅ Deleted vector index '{name}'")
         except Exception as e:
@@ -313,7 +314,7 @@ class VitalGraphSearchUtilREPL:
             return True
         try:
             row = self._run(self.conn.fetchrow(
-                f"SELECT * FROM {space}_vector_index WHERE index_name = $1", name
+                f"SELECT * FROM {space_prefix(space)}_vector_index WHERE index_name = $1", name
             ))
             if not row:
                 print(f"Index '{name}' not found.")
@@ -325,7 +326,7 @@ class VitalGraphSearchUtilREPL:
             print(f"  Metric:     {row['distance_metric']}")
             print(f"  Created:    {row['created_time']}")
             # Row count
-            vec_table = f"{space}_vec_{name}"
+            vec_table = f"{space_prefix(space)}_vec_{name}"
             try:
                 count = self._run(self.conn.fetchval(f"SELECT COUNT(*) FROM {vec_table}"))
                 print(f"  Vectors:    {count}")
@@ -502,7 +503,7 @@ class VitalGraphSearchUtilREPL:
         """Resolve a graph URI to context_uuid, or pick the first context."""
         if graph_uri:
             context_uuid = self._run(self.conn.fetchval(
-                f"SELECT term_uuid FROM {space}_term WHERE term_text = $1 AND term_type = 'U'",
+                f"SELECT term_uuid FROM {space_prefix(space)}_term WHERE term_text = $1 AND term_type = 'U'",
                 graph_uri,
             ))
             if not context_uuid:
@@ -511,7 +512,7 @@ class VitalGraphSearchUtilREPL:
             return context_uuid
         else:
             context_uuid = self._run(self.conn.fetchval(
-                f"SELECT DISTINCT context_uuid FROM {space}_rdf_quad LIMIT 1"
+                f"SELECT DISTINCT context_uuid FROM {space_prefix(space)}_rdf_quad LIMIT 1"
             ))
             if not context_uuid:
                 print("❌ No quad data found in space.")
@@ -531,7 +532,7 @@ class VitalGraphSearchUtilREPL:
             context_uuid = None
             if graph_uri:
                 context_uuid = self._run(self.conn.fetchval(
-                    f"SELECT term_uuid FROM {space}_term WHERE term_text = $1 AND term_type = 'U'",
+                    f"SELECT term_uuid FROM {space_prefix(space)}_term WHERE term_text = $1 AND term_type = 'U'",
                     graph_uri,
                 ))
                 if not context_uuid:
@@ -539,7 +540,7 @@ class VitalGraphSearchUtilREPL:
                     return True
             else:
                 context_uuid = self._run(self.conn.fetchval(
-                    f"SELECT DISTINCT context_uuid FROM {space}_rdf_quad LIMIT 1"
+                    f"SELECT DISTINCT context_uuid FROM {space_prefix(space)}_rdf_quad LIMIT 1"
                 ))
                 if not context_uuid:
                     print("❌ No quad data found.")
@@ -571,14 +572,14 @@ class VitalGraphSearchUtilREPL:
         try:
             # Vector indexes
             indexes = self._run(self.conn.fetch(
-                f"SELECT index_name, dimensions, provider FROM {space}_vector_index ORDER BY index_name"
+                f"SELECT index_name, dimensions, provider FROM {space_prefix(space)}_vector_index ORDER BY index_name"
             ))
             print(f"\n{'='*60}")
             print(f"  Space: {space}")
             print(f"{'='*60}")
             print(f"\nVector Indexes ({len(indexes)}):")
             for idx in indexes:
-                vec_table = f"{space}_vec_{idx['index_name']}"
+                vec_table = f"{space_prefix(space)}_vec_{idx['index_name']}"
                 try:
                     count = self._run(self.conn.fetchval(f"SELECT COUNT(*) FROM {vec_table}"))
                 except Exception:
@@ -587,7 +588,7 @@ class VitalGraphSearchUtilREPL:
 
             # Geo stats
             try:
-                geo_count = self._run(self.conn.fetchval(f"SELECT COUNT(*) FROM {space}_geo"))
+                geo_count = self._run(self.conn.fetchval(f"SELECT COUNT(*) FROM {space_prefix(space)}_geo"))
                 print(f"\nGeo Points: {geo_count}")
             except Exception:
                 print(f"\nGeo: (table not available)")
@@ -595,7 +596,7 @@ class VitalGraphSearchUtilREPL:
             # Geo config
             try:
                 geo_cfg = self._run(self.conn.fetchrow(
-                    f"SELECT enabled, auto_sync FROM {space}_geo_config LIMIT 1"
+                    f"SELECT enabled, auto_sync FROM {space_prefix(space)}_geo_config LIMIT 1"
                 ))
                 if geo_cfg:
                     print(f"  Enabled:   {geo_cfg['enabled']}")
@@ -635,7 +636,7 @@ class VitalGraphSearchUtilREPL:
             # Vectorize the query text
             from vitalgraph.vectorization.registry import get_provider
             row = self._run(self.conn.fetchrow(
-                f"SELECT provider, provider_config, dimensions FROM {space}_vector_index "
+                f"SELECT provider, provider_config, dimensions FROM {space_prefix(space)}_vector_index "
                 f"WHERE index_name = $1", index_name,
             ))
             if not row:
@@ -650,7 +651,7 @@ class VitalGraphSearchUtilREPL:
             vec_literal = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
 
             # Search
-            vec_table = f"{space}_vec_{index_name}"
+            vec_table = f"{space_prefix(space)}_vec_{index_name}"
             results = self._run(self.conn.fetch(f"""
                 SELECT subject_uuid,
                        1 - (embedding <=> $1::vector) AS score,
@@ -696,22 +697,22 @@ class VitalGraphSearchUtilREPL:
             # since. It survived because the `except` below prints and returns
             # True, and nothing in tests/ covers this command.
             if index_name:
-                fts_table = f"{space}_fts_{index_name}"
+                fts_table = f"{space_prefix(space)}_fts_{index_name}"
             else:
                 first = self._run(self.conn.fetchval(
-                    f"SELECT index_name FROM {space}_fts_index ORDER BY index_name LIMIT 1"
+                    f"SELECT index_name FROM {space_prefix(space)}_fts_index ORDER BY index_name LIMIT 1"
                 ))
                 if not first:
                     print("❌ No FTS indexes found in space.")
                     return True
-                fts_table = f"{space}_fts_{first}"
+                fts_table = f"{space_prefix(space)}_fts_{first}"
                 index_name = first
 
             # Match the stemmers the index was BUILT with, or a query can fail
             # to match text the index does contain. `||` on tsquery is OR, so
             # a hit through any configured language counts.
             languages = self._run(self.conn.fetchval(
-                f"SELECT languages FROM {space}_fts_index WHERE index_name = $1",
+                f"SELECT languages FROM {space_prefix(space)}_fts_index WHERE index_name = $1",
                 index_name,
             )) or ['english']
             tsq = " || ".join(
@@ -767,7 +768,7 @@ class VitalGraphSearchUtilREPL:
 
         try:
             # Use pg_trgm similarity on term_text
-            term_table = f"{space}_term"
+            term_table = f"{space_prefix(space)}_term"
             results = self._run(self.conn.fetch(f"""
                 SELECT term_text,
                        similarity(term_text, $1) AS sim,
@@ -811,7 +812,7 @@ class VitalGraphSearchUtilREPL:
             return True
 
         try:
-            geo_table = f"{space}_geo"
+            geo_table = f"{space_prefix(space)}_geo"
             results = self._run(self.conn.fetch(f"""
                 SELECT subject_uuid,
                        latitude, longitude,
@@ -859,14 +860,14 @@ class VitalGraphSearchUtilREPL:
             from vitalgraph.vectorization.registry import get_provider
             if not index_name:
                 index_name = self._run(self.conn.fetchval(
-                    f"SELECT index_name FROM {space}_vector_index ORDER BY index_name LIMIT 1"
+                    f"SELECT index_name FROM {space_prefix(space)}_vector_index ORDER BY index_name LIMIT 1"
                 ))
             if not index_name:
                 print("❌ No vector index found.")
                 return True
 
             row = self._run(self.conn.fetchrow(
-                f"SELECT provider, provider_config FROM {space}_vector_index WHERE index_name = $1",
+                f"SELECT provider, provider_config FROM {space_prefix(space)}_vector_index WHERE index_name = $1",
                 index_name,
             ))
             if not row:
@@ -879,7 +880,7 @@ class VitalGraphSearchUtilREPL:
             )
             embedding = self._run(provider.vectorize_text(query_text))
             vec_literal = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
-            vec_table = f"{space}_vec_{index_name}"
+            vec_table = f"{space_prefix(space)}_vec_{index_name}"
 
             # Expand search pool for geo filtering
             pool_limit = limit * 5 if has_geo else limit
@@ -909,7 +910,7 @@ class VitalGraphSearchUtilREPL:
                 print("(no vector results)")
                 return True
 
-            geo_table = f"{space}_geo"
+            geo_table = f"{space_prefix(space)}_geo"
             geo_results = self._run(self.conn.fetch(f"""
                 SELECT subject_uuid,
                        ST_Distance(location, ST_MakePoint($2, $1)::geography) AS distance_m

@@ -35,6 +35,7 @@ import pytest
 
 from .conftest import skip_no_pg
 from .lead_fixtures import ALL, DUP
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 # loop_scope="session" to match the session-scoped perf_conn fixture — without
 # it asyncpg's connection belongs to a different event loop than the test.
@@ -116,7 +117,7 @@ async def test_benched_space_indexes_match_schema(perf_conn, space):
 
     exists = await perf_conn.fetchval(
         "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
-        f"{space}_rdf_quad")
+        f"{space_prefix(space)}_rdf_quad")
     if not exists:
         pytest.skip(f"space {space} not present in this environment")
 
@@ -183,8 +184,8 @@ async def test_benched_space_indexes_match_schema(perf_conn, space):
     # the fixture had the right columns, under the wrong name, so every
     # by-name check passed while the schema index was absent entirely.
     strays = [n for n in actual
-              if n.startswith(f"idx_{space}_quad_ctx_pred")
-              and n != f"idx_{space}_quad_ctx_pred"]
+              if n.startswith(f"idx_{space_prefix(space)}_quad_ctx_pred")
+              and n != f"idx_{space_prefix(space)}_quad_ctx_pred"]
     if strays:
         mismatched.append(f"non-schema index(es) present: {sorted(strays)}")
 

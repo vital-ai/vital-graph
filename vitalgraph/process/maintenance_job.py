@@ -38,6 +38,7 @@ from typing import Dict, List, Optional, Tuple
 
 import asyncpg
 from ..db.connection_config import require
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix, space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -541,7 +542,7 @@ async def probe_data_changed(conn, space_id: str, probe: str) -> bool:
             "SELECT COALESCE(n_tup_ins,0) + COALESCE(n_tup_upd,0) "
             "     + COALESCE(n_tup_del,0) "
             "FROM pg_stat_user_tables WHERE relname = $1",
-            f"{space_id}_rdf_quad")
+            f"{space_prefix(space_id)}_rdf_quad")
     except Exception:
         return True  # cannot tell -> do the work
     if wm is None:
@@ -1118,9 +1119,9 @@ class MaintenanceJob:
         for row in rows:
             relname = row["relname"]
             if relname.endswith("_rdf_quad"):
-                sid = relname[: -len("_rdf_quad")]
+                sid = space_id_for_prefix(relname[: -len("_rdf_quad")])
             elif relname.endswith("_term"):
-                sid = relname[: -len("_term")]
+                sid = space_id_for_prefix(relname[: -len("_term")])
             else:
                 continue
 
@@ -1398,11 +1399,11 @@ class MaintenanceJob:
                                 n = await conn.fetchval(f"""
                                     SELECT count(*) FROM (
                                         SELECT subject_uuid, context_uuid
-                                          FROM {space_id}_rdf_quad
+                                          FROM {space_prefix(space_id)}_rdf_quad
                                          WHERE predicate_uuid = $1
                                          GROUP BY 1, 2 HAVING count(*) > 1) d
                                      WHERE EXISTS (
-                                         SELECT 1 FROM {space_id}_rdf_quad vt
+                                         SELECT 1 FROM {space_prefix(space_id)}_rdf_quad vt
                                           WHERE vt.subject_uuid = d.subject_uuid
                                             AND vt.predicate_uuid = $2)
                                 """, p_uuid, self._vitaltype_uuid(space_id),
@@ -1455,8 +1456,8 @@ class MaintenanceJob:
         try:
             rows = await conn.fetch(
                 f"SELECT s.predicate_uuid, t.term_text"
-                f"  FROM {space_id}_rdf_pred_stats s"
-                f"  JOIN {space_id}_term t ON t.term_uuid = s.predicate_uuid")
+                f"  FROM {space_prefix(space_id)}_rdf_pred_stats s"
+                f"  JOIN {space_prefix(space_id)}_term t ON t.term_uuid = s.predicate_uuid")
         except Exception:
             return []
         out = []
@@ -1505,16 +1506,16 @@ class MaintenanceJob:
             try:
                 async with self._pool.acquire() as conn:
                     pred = await conn.fetchval(
-                        f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
+                        f"SELECT term_uuid FROM {space_prefix(space_id)}_term WHERE term_text = $1",
                         GRAPH_URI_PRED)
                     if not pred:
                         continue
                     broken = await conn.fetchval(f"""
                         WITH targets AS (
                             SELECT DISTINCT object_uuid AS e, context_uuid AS ctx
-                            FROM {space_id}_rdf_quad WHERE predicate_uuid = $1)
+                            FROM {space_prefix(space_id)}_rdf_quad WHERE predicate_uuid = $1)
                         SELECT count(*) FROM targets t WHERE NOT EXISTS (
-                            SELECT 1 FROM {space_id}_rdf_quad q
+                            SELECT 1 FROM {space_prefix(space_id)}_rdf_quad q
                             WHERE q.predicate_uuid = $1 AND q.subject_uuid = t.e
                               AND q.object_uuid = t.e AND q.context_uuid = t.ctx)
                     """, pred)
@@ -1532,10 +1533,10 @@ class MaintenanceJob:
                     typeless = await conn.fetchval(f"""
                         WITH targets AS (
                             SELECT DISTINCT object_uuid AS e
-                            FROM {space_id}_rdf_quad WHERE predicate_uuid = $1)
+                            FROM {space_prefix(space_id)}_rdf_quad WHERE predicate_uuid = $1)
                         SELECT count(*) FROM targets t WHERE NOT EXISTS (
-                            SELECT 1 FROM {space_id}_rdf_quad q
-                            JOIN {space_id}_term p ON p.term_uuid = q.predicate_uuid
+                            SELECT 1 FROM {space_prefix(space_id)}_rdf_quad q
+                            JOIN {space_prefix(space_id)}_term p ON p.term_uuid = q.predicate_uuid
                             WHERE q.subject_uuid = t.e
                               AND p.term_text IN (
                                 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
@@ -1602,8 +1603,8 @@ class MaintenanceJob:
                         f"""
                         SELECT t.term_text
                         FROM (SELECT DISTINCT context_uuid
-                              FROM {space_id}_rdf_quad) c
-                        JOIN {space_id}_term t ON t.term_uuid = c.context_uuid
+                              FROM {space_prefix(space_id)}_rdf_quad) c
+                        JOIN {space_prefix(space_id)}_term t ON t.term_uuid = c.context_uuid
                         WHERE NOT EXISTS (
                             SELECT 1 FROM graph g
                             WHERE g.space_id = $1 AND g.graph_uri = t.term_text)
@@ -1715,7 +1716,7 @@ class MaintenanceJob:
                 async with self._pool.acquire() as conn:
                     try:
                         empty = not await conn.fetchval(
-                            f"SELECT 1 FROM {sid}_edge_fanout LIMIT 1")
+                            f"SELECT 1 FROM {space_prefix(sid)}_edge_fanout LIMIT 1")
                         # Only asked when the table is EMPTY, and that ordering
                         # is not cosmetic. `edge_type_uuid` need not be indexed,
                         # so on a space whose edges are ALL untyped this stops
@@ -1727,7 +1728,7 @@ class MaintenanceJob:
                         # and zero rows is the right answer, so flagging it
                         # would queue a rebuild that can never converge.
                         has_edges = bool(empty) and bool(await conn.fetchval(
-                            f"SELECT 1 FROM {sid}_edge "
+                            f"SELECT 1 FROM {space_prefix(sid)}_edge "
                             f"WHERE edge_type_uuid IS NOT NULL LIMIT 1"))
                     except asyncpg.UndefinedTableError:
                         continue            # no edge/fanout table (non-KG space)
@@ -1902,7 +1903,7 @@ class MaintenanceJob:
             try:
                 async with self._pool.acquire() as conn:
                     empty = not await conn.fetchval(
-                        f"SELECT EXISTS(SELECT 1 FROM {sid}_rdf_stats)")
+                        f"SELECT EXISTS(SELECT 1 FROM {space_prefix(sid)}_rdf_stats)")
             except asyncpg.UndefinedTableError:
                 mark_stats_recompute_done(sid)
                 continue
@@ -2024,8 +2025,8 @@ class MaintenanceJob:
                     row = await conn.fetchrow(f"""
                         SELECT count(*) AS n,
                                max(abs(ps.row_count::float8 / vs.pred_rows - 1)) AS d
-                        FROM {space_id}_rdf_value_stats vs
-                        JOIN {space_id}_rdf_pred_stats ps
+                        FROM {space_prefix(space_id)}_rdf_value_stats vs
+                        JOIN {space_prefix(space_id)}_rdf_pred_stats ps
                           ON ps.predicate_uuid = vs.predicate_uuid
                         WHERE vs.pred_rows IS NOT NULL AND vs.pred_rows > 0
                           AND abs(ps.row_count::float8 / vs.pred_rows - 1)
@@ -2270,8 +2271,8 @@ class MaintenanceJob:
                 async with self._pool.acquire() as probe_conn:
                     has_vitaltype = await probe_conn.fetchval(f"""
                         SELECT EXISTS (
-                            SELECT 1 FROM {space_id}_rdf_quad q
-                            JOIN {space_id}_term t
+                            SELECT 1 FROM {space_prefix(space_id)}_rdf_quad q
+                            JOIN {space_prefix(space_id)}_term t
                               ON t.term_uuid = q.predicate_uuid
                             WHERE t.term_text = $1 LIMIT 1)
                     """, VITALTYPE_URI)
@@ -3386,7 +3387,7 @@ class MaintenanceJob:
             )
             await self._tracker.mark_running(process_id, self._instance_id)
 
-        hnsw_index_name = f"idx_{best_space}_vec_{best_index}_hnsw"
+        hnsw_index_name = f"idx_{space_prefix(best_space)}_vec_{best_index}_hnsw"
         try:
             if self._pg_config:
                 await asyncio.to_thread(self._sync_reindex_concurrently, hnsw_index_name)
@@ -3436,7 +3437,7 @@ class MaintenanceJob:
         import psycopg.rows
         candidates = []
         # Build LIKE patterns for vector tables
-        patterns = [f"{sid}_vec_%" for sid in space_ids]
+        patterns = [f"{space_prefix(sid)}_vec_%" for sid in space_ids]
         if not patterns:
             return candidates
 
@@ -3463,7 +3464,7 @@ class MaintenanceJob:
     ) -> List[Dict]:
         """Scan for vector table candidates using asyncpg connection."""
         candidates = []
-        patterns = [f"{sid}_vec_%" for sid in space_ids]
+        patterns = [f"{space_prefix(sid)}_vec_%" for sid in space_ids]
         if not patterns:
             return candidates
 
@@ -3502,7 +3503,7 @@ class MaintenanceJob:
         space_id = None
         index_name = None
         for sid in space_ids:
-            prefix = f"{sid}_vec_"
+            prefix = f"{space_prefix(sid)}_vec_"
             if relname.startswith(prefix):
                 space_id = sid
                 index_name = relname[len(prefix):]
@@ -3592,11 +3593,11 @@ class MaintenanceJob:
     def _space_tables(space_id: str) -> List[str]:
         """Return the list of tables for a space (sparql_sql backend)."""
         return [
-            f"{space_id}_term",
-            f"{space_id}_rdf_quad",
-            f"{space_id}_datatype",
-            f"{space_id}_rdf_pred_stats",
-            f"{space_id}_rdf_stats",
-            f"{space_id}_edge",
-            f"{space_id}_frame_slot",
+            f"{space_prefix(space_id)}_term",
+            f"{space_prefix(space_id)}_rdf_quad",
+            f"{space_prefix(space_id)}_datatype",
+            f"{space_prefix(space_id)}_rdf_pred_stats",
+            f"{space_prefix(space_id)}_rdf_stats",
+            f"{space_prefix(space_id)}_edge",
+            f"{space_prefix(space_id)}_frame_slot",
         ]

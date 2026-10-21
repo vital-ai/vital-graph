@@ -108,6 +108,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import List, Optional
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -196,8 +197,8 @@ def _walk_select(trav: Traversal, space_id: str, context_uuid: str) -> str:
     column each hop needs a join back to a 24 GB quad table, measured at 42s
     against 1.5s.
     """
-    t_quad = f"{space_id}_rdf_quad"
-    t_edge = f"{space_id}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
+    t_edge = f"{space_prefix(space_id)}_edge"
 
     if not trav.hops:
         # No hops: the correlated node IS the leaf's subject, so the excluded
@@ -532,8 +533,8 @@ def emit_candidate_ctes(trav: Traversal, levels, space_id: str,
     walked and the anchor is never scanned. A filter still has to visit each
     anchor row to discover that none qualify.
     """
-    t_quad = f"{space_id}_rdf_quad"
-    t_edge = f"{space_id}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
+    t_edge = f"{space_prefix(space_id)}_edge"
     ctx = context_uuid
     parts = []
 

@@ -13,6 +13,7 @@ os.chdir(str(Path(__file__).parent.parent))
 logging.basicConfig(level=logging.WARNING, format="%(name)s - %(message)s")
 
 from dotenv import load_dotenv
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 
@@ -67,10 +68,10 @@ async def main():
         entity_row = await conn.fetchrow(
             f"SELECT st.term_text AS subject, pt.term_text AS predicate, "
             f"ot.term_text AS object_val, ot.datatype_id "
-            f"FROM {space_id}_rdf_quad q "
-            f"JOIN {space_id}_term st ON q.subject_uuid = st.term_uuid "
-            f"JOIN {space_id}_term pt ON q.predicate_uuid = pt.term_uuid "
-            f"JOIN {space_id}_term ot ON q.object_uuid = ot.term_uuid "
+            f"FROM {space_prefix(space_id)}_rdf_quad q "
+            f"JOIN {space_prefix(space_id)}_term st ON q.subject_uuid = st.term_uuid "
+            f"JOIN {space_prefix(space_id)}_term pt ON q.predicate_uuid = pt.term_uuid "
+            f"JOIN {space_prefix(space_id)}_term ot ON q.object_uuid = ot.term_uuid "
             f"WHERE pt.term_text LIKE '%ObjectModificationDateTime' "
             f"LIMIT 1"
         )
@@ -90,9 +91,9 @@ async def main():
     async with pool.acquire() as conn:
         graph_row = await conn.fetchrow(
             f"SELECT ct.term_text AS graph_uri "
-            f"FROM {space_id}_rdf_quad q "
-            f"JOIN {space_id}_term st ON q.subject_uuid = st.term_uuid "
-            f"JOIN {space_id}_term ct ON q.context_uuid = ct.term_uuid "
+            f"FROM {space_prefix(space_id)}_rdf_quad q "
+            f"JOIN {space_prefix(space_id)}_term st ON q.subject_uuid = st.term_uuid "
+            f"JOIN {space_prefix(space_id)}_term ct ON q.context_uuid = ct.term_uuid "
             f"WHERE st.term_text = $1 LIMIT 1", entity_uri
         )
     graph_id = graph_row["graph_uri"] if graph_row else None

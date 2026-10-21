@@ -50,6 +50,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_term_datetime_column")
 
@@ -64,7 +65,7 @@ async def migrate_space(conn, space_id: str, dry_run: bool = True) -> dict:
     from vitalgraph.db.sparql_sql.sparql_sql_schema import (
         DATETIME_TERM_COLUMN, datetime_term_column)
 
-    t_term = f"{space_id}_term"
+    t_term = f"{space_prefix(space_id)}_term"
     if not await conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
             t_term):
@@ -88,7 +89,7 @@ async def migrate_space(conn, space_id: str, dry_run: bool = True) -> dict:
     # create_space_indexes_sql rather than restated — a second definition of
     # either is how the ensure_* modules drifted from the schema.
     await conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_dt "
+        f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_term_dt "
         f"ON {t_term} ({DATETIME_TERM_COLUMN})")
     # Sparse column: the default statistics target samples ~30,000 rows and on a
     # table that is 99.99% NULL catches about two non-NULL values, which is not

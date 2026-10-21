@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from ..auth.role_dependencies import require_space_read
 from ..model.geo_model import GeoPointOut, GeoPointsResponse
 from ..model.result_status import OperationStatus
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +88,8 @@ class GeoPointsEndpoint:
 
         conn = await self._acquire_conn()
         try:
-            geo_table = f"{space_id}_geo"
-            term_table = f"{space_id}_term"
+            geo_table = f"{space_prefix(space_id)}_geo"
+            term_table = f"{space_prefix(space_id)}_term"
 
             # Check geo table exists
             exists = await conn.fetchval(

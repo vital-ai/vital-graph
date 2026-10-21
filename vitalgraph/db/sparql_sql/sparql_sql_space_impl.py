@@ -31,6 +31,7 @@ from .compile_cache import SparqlCompileCache
 from .generator import invalidate_datatype_cache
 from . import db_provider
 from .uri_limit import check_uri
+from .space_names import space_id_for_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -3297,7 +3298,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         if row:
             return row['datatype_id']
         # Insert new datatype — invalidate cache so gen picks up the new mapping
-        space_id = tables['datatype'].rsplit("_datatype", 1)[0]
+        space_id = space_id_for_prefix(tables['datatype'].rsplit("_datatype", 1)[0])
         invalidate_datatype_cache(space_id)
         result = await conn.fetchval(
             f"INSERT INTO {tables['datatype']} (datatype_uri) "

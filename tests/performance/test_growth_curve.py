@@ -15,6 +15,7 @@ from test_scripts.data.generate_scale_data import (
     load_scale_space, VITALTYPE, KGENTITY)
 from .conftest import skip_no_pg
 from .harness import explain_json, total_shared_buffers, assert_growth_class
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, pytest.mark.slow, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -35,11 +36,11 @@ KGENTITY_TYPES = [
 def _fast_page_sql(space_id: str) -> str:
     return (
         f"SELECT tt.term_text AS uri "
-        f"FROM (SELECT DISTINCT subject_uuid FROM {space_id}_rdf_quad "
+        f"FROM (SELECT DISTINCT subject_uuid FROM {space_prefix(space_id)}_rdf_quad "
         f"      WHERE predicate_uuid = $1 AND object_uuid = ANY($2::uuid[]) "
         f"      AND context_uuid = $3 "
         f"      ORDER BY subject_uuid LIMIT $4 OFFSET $5) sub "
-        f"JOIN {space_id}_term tt ON tt.term_uuid = sub.subject_uuid "
+        f"JOIN {space_prefix(space_id)}_term tt ON tt.term_uuid = sub.subject_uuid "
         f"ORDER BY sub.subject_uuid"
     )
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence, Tuple
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 NOTIFY_CHANNEL = "vg_index_sync"
 
@@ -40,7 +41,7 @@ _BACKOFF_MAX_SECONDS = 600
 
 
 def queue_table(space_id: str) -> str:
-    return f"{space_id}_index_sync_queue"
+    return f"{space_prefix(space_id)}_index_sync_queue"
 
 
 @dataclass(frozen=True)
@@ -79,7 +80,9 @@ async def enqueue(conn, space_id: str, context_uuid: uuid.UUID,
         f"  generation = q.generation + 1, operation = EXCLUDED.operation, "
         f"  attempts = 0, next_attempt_at = NOW(), last_error = NULL",
         ctxs, subs, operation)
-    await conn.execute("SELECT pg_notify($1, $2)", NOTIFY_CHANNEL, space_id)
+    # The payload is the space's name PREFIX, as the trigger sends it.
+    await conn.execute("SELECT pg_notify($1, $2)", NOTIFY_CHANNEL,
+                       space_prefix(space_id))
     return len(subs)
 
 

@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 
 import asyncpg
 from typing import Dict, List, Literal, Optional, Set
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ async def _plan_vectors(
     # Discover all vector indexes for this space
     try:
         rows = await conn.fetch(
-            f"SELECT index_name, provider, provider_config FROM {space_id}_vector_index"
+            f"SELECT index_name, provider, provider_config FROM {space_prefix(space_id)}_vector_index"
         )
     except asyncpg.exceptions.UndefinedTableError:
         # No vector indexes configured for this space. Narrow on purpose: a
@@ -188,7 +189,7 @@ async def _plan_vectors(
             logger.warning("auto_sync vector %s/%s skipped: provider %s "
                            "unavailable: %s", space_id, idx_name, row["provider"], e)
             continue
-        vec_table = f"{space_id}_vec_{idx_name}"
+        vec_table = f"{space_prefix(space_id)}_vec_{idx_name}"
         upsert_sql = UPSERT_VECTOR_SQL.format(vec_table=vec_table)
 
         # Phase 2: Build search texts and identify subjects to embed
@@ -419,7 +420,7 @@ async def _sync_fuzzy_for_subjects(
     # Quick check: does this space have any fuzzy mappings?
     try:
         count = await conn.fetchval(
-            f"SELECT COUNT(*) FROM {space_id}_fuzzy_mapping WHERE enabled = TRUE"
+            f"SELECT COUNT(*) FROM {space_prefix(space_id)}_fuzzy_mapping WHERE enabled = TRUE"
         )
     except asyncpg.exceptions.UndefinedTableError:
         # No fuzzy mappings configured for this space.
@@ -458,7 +459,7 @@ async def _sync_fts_for_subjects(
     # Quick check: does this space have any FTS indexes?
     try:
         rows = await conn.fetch(
-            f"SELECT index_name FROM {space_id}_fts_index"
+            f"SELECT index_name FROM {space_prefix(space_id)}_fts_index"
         )
     except asyncpg.exceptions.UndefinedTableError:
         # No FTS indexes configured for this space.
@@ -568,8 +569,8 @@ async def _subject_scopes(conn, space_id: str, subject_uuids, context_uuid):
     """
     HALEY = "http://vital.ai/ontology/haley-ai-kg#"
     rows = await conn.fetch(
-        _SCOPE_SQL.format(rdf_quad=f"{space_id}_rdf_quad",
-                          term=f"{space_id}_term"),
+        _SCOPE_SQL.format(rdf_quad=f"{space_prefix(space_id)}_rdf_quad",
+                          term=f"{space_prefix(space_id)}_term"),
         list(subject_uuids), context_uuid,
         f"{HALEY}hasKGSlotType", f"{HALEY}hasKGEntityType",
         "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",

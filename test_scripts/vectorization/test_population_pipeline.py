@@ -17,6 +17,7 @@ import sys
 import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 DB_NAME = os.environ.get("VITALGRAPH_DB", "sparql_sql_graph")
 DB_USER = os.environ.get("VITALGRAPH_DB_USER", "postgres")
@@ -48,7 +49,7 @@ KG_ENTITY_TYPE = "http://vital.ai/ontology/haley-ai-kg#KGEntity"
 
 async def _term_uuid(conn, space_id: str, text: str, term_type: str = 'U') -> str:
     """Generate a term UUID using the DB function and insert the term."""
-    term_table = f"{space_id}_term"
+    term_table = f"{space_prefix(space_id)}_term"
     # Use vitalgraph_term_uuid function
     term_uuid = await conn.fetchval(
         "SELECT vitalgraph_term_uuid($1, $2, NULL, NULL)",
@@ -65,7 +66,7 @@ async def _term_uuid(conn, space_id: str, text: str, term_type: str = 'U') -> st
 async def _add_quad(conn, space_id: str, s_uuid, p_uuid, o_uuid, g_uuid):
     """Insert a quad."""
     await conn.execute(
-        f"INSERT INTO {space_id}_rdf_quad (subject_uuid, predicate_uuid, object_uuid, context_uuid) "
+        f"INSERT INTO {space_prefix(space_id)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid, context_uuid) "
         f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
         s_uuid, p_uuid, o_uuid, g_uuid,
     )

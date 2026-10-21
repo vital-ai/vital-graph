@@ -26,6 +26,7 @@ import pytest
 from rdflib import Literal, URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -42,11 +43,11 @@ O = URIRef("urn:test:setsem:object")
 async def _count(conn, space_id, s, p, o, g) -> int:
     return await conn.fetchval(
         f"""
-        SELECT count(*) FROM {space_id}_rdf_quad q
-        JOIN {space_id}_term ts ON ts.term_uuid = q.subject_uuid   AND ts.term_text = $1
-        JOIN {space_id}_term tp ON tp.term_uuid = q.predicate_uuid AND tp.term_text = $2
-        JOIN {space_id}_term to_ ON to_.term_uuid = q.object_uuid  AND to_.term_text = $3
-        JOIN {space_id}_term tg ON tg.term_uuid = q.context_uuid   AND tg.term_text = $4
+        SELECT count(*) FROM {space_prefix(space_id)}_rdf_quad q
+        JOIN {space_prefix(space_id)}_term ts ON ts.term_uuid = q.subject_uuid   AND ts.term_text = $1
+        JOIN {space_prefix(space_id)}_term tp ON tp.term_uuid = q.predicate_uuid AND tp.term_text = $2
+        JOIN {space_prefix(space_id)}_term to_ ON to_.term_uuid = q.object_uuid  AND to_.term_text = $3
+        JOIN {space_prefix(space_id)}_term tg ON tg.term_uuid = q.context_uuid   AND tg.term_text = $4
         """, str(s), str(p), str(o), str(g))
 
 

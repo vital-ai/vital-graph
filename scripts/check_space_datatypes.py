@@ -35,6 +35,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import pg_kwargs  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 _XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
 
@@ -71,7 +72,7 @@ async def _has_positional_consumer(conn, space: str) -> bool:
         "ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname = 'public' AND c.relname = $1 "
         "AND a.attgenerated <> '' AND a.attname IN ('num_val', 'dt_val'))",
-        f"{space}_term"))
+        f"{space_prefix(space)}_term"))
 
 
 async def check_space(conn, space: str):
@@ -84,7 +85,7 @@ async def check_space(conn, space: str):
 
     expected = {uri: i for i, (uri, _n) in enumerate(STANDARD_DATATYPES, start=1)}
     rows = await conn.fetch(
-        f"SELECT datatype_id, datatype_uri FROM {space}_datatype ORDER BY datatype_id")
+        f"SELECT datatype_id, datatype_uri FROM {space_prefix(space)}_datatype ORDER BY datatype_id")
     exposed = await _has_positional_consumer(conn, space)
     if not rows:
         return (EMPTY if exposed else NOT_EXPOSED), (

@@ -32,6 +32,7 @@ from .conftest import skip_no_infra
 
 from vitalgraph.kg_impl.kg_backend_utils import create_backend_adapter
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -113,8 +114,8 @@ async def _xmins(pool, space: str) -> dict:
     """subject uri -> the set of writing transactions of its quad rows."""
     async with pool.acquire() as c:
         rows = await c.fetch(
-            f"SELECT t.term_text, q.xmin::text AS x FROM {space}_rdf_quad q "
-            f"JOIN {space}_term t ON t.term_uuid = q.subject_uuid "
+            f"SELECT t.term_text, q.xmin::text AS x FROM {space_prefix(space)}_rdf_quad q "
+            f"JOIN {space_prefix(space)}_term t ON t.term_uuid = q.subject_uuid "
             f"WHERE q.context_uuid = $1", _generate_term_uuid(GRAPH, 'U'))
     out: dict = {}
     for r in rows:
@@ -124,7 +125,7 @@ async def _xmins(pool, space: str) -> dict:
 
 async def _snapshot(conn, space: str) -> dict:
     return {name: sorted(r[0] for r in await conn.fetch(
-                f"SELECT to_jsonb(x)::text FROM {space}_{name} x"))
+                f"SELECT to_jsonb(x)::text FROM {space_prefix(space)}_{name} x"))
             for name in DERIVED}
 
 
@@ -151,7 +152,7 @@ async def _assert_derived_exact(pool, space: str):
             await tr.rollback()
     for name in DERIVED:
         assert live[name] == rebuilt[name], (
-            f"{space}_{name} differs from a rebuild of the same quads after the "
+            f"{space_prefix(space)}_{name} differs from a rebuild of the same quads after the "
             f"upsert:\n  live    {live[name]}\n  rebuilt {rebuilt[name]}")
     assert any(live[n] for n in DERIVED), "the fixture derived nothing at all"
 

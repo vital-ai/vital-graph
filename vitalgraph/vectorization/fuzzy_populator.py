@@ -29,6 +29,7 @@ from .fuzzy_mapping_manager import (
     FuzzyMappingRule,
     resolve_fuzzy_mapping,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +88,8 @@ async def populate_fuzzy_index(
         logger.warning("Fuzzy mapping %s has no properties configured", rule.mapping_id)
         return 0
 
-    band_table = f"{space_id}_fuzzy_band"
-    phonetic_table = f"{space_id}_fuzzy_phonetic_band"
+    band_table = f"{space_prefix(space_id)}_fuzzy_band"
+    phonetic_table = f"{space_prefix(space_id)}_fuzzy_phonetic_band"
 
     if truncate_first:
         await conn.execute(f"TRUNCATE {band_table}")
@@ -183,8 +184,8 @@ async def update_subject_fuzzy(
     # Check if subject matches the expected RDF type for this mapping
     rdf_type_uri = _MAPPING_TYPE_RDF_TYPES.get(rule.mapping_type) if rule.mapping_type else None
     if rdf_type_uri:
-        quad_table = f"{space_id}_rdf_quad"
-        term_table = f"{space_id}_term"
+        quad_table = f"{space_prefix(space_id)}_rdf_quad"
+        term_table = f"{space_prefix(space_id)}_term"
         type_check = await conn.fetchval(f"""
             SELECT 1 FROM {quad_table} q
             JOIN {term_table} tp ON tp.term_uuid = q.predicate_uuid
@@ -197,8 +198,8 @@ async def update_subject_fuzzy(
         if not type_check:
             return False  # subject doesn't match the mapping type
 
-    band_table = f"{space_id}_fuzzy_band"
-    phonetic_table = f"{space_id}_fuzzy_phonetic_band"
+    band_table = f"{space_prefix(space_id)}_fuzzy_band"
+    phonetic_table = f"{space_prefix(space_id)}_fuzzy_phonetic_band"
     subject_str = str(subject_uuid)
 
     # Remove existing bands for this subject
@@ -254,8 +255,8 @@ async def remove_subject_fuzzy(
 
     Called by auto_sync when an entity is deleted.
     """
-    band_table = f"{space_id}_fuzzy_band"
-    phonetic_table = f"{space_id}_fuzzy_phonetic_band"
+    band_table = f"{space_prefix(space_id)}_fuzzy_band"
+    phonetic_table = f"{space_prefix(space_id)}_fuzzy_phonetic_band"
     subject_str = str(subject_uuid)
 
     await conn.execute(
@@ -284,8 +285,8 @@ async def _fetch_subject_names(
 
     Returns dict of subject_uuid → list of name strings.
     """
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
 
     if rdf_type_uri:
         # Only fetch subjects that have the specified rdf:type
@@ -334,8 +335,8 @@ async def _fetch_single_subject_names(
     property_uris: List[str],
 ) -> List[str]:
     """Fetch literal values for a single subject's mapped properties."""
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
 
     sql = f"""
         SELECT obj_t.term_text

@@ -33,6 +33,7 @@ from __future__ import annotations
 import pytest
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -158,7 +159,7 @@ async def test_the_page_does_not_materialise_the_projected_text(space_impl, make
         }} }} LIMIT 25""")
     sql = res.get("sql") or ""
     assert sql, "the impl no longer reports the SQL it ran"
-    joins = sql.count(f"{space_id}_term")
+    joins = sql.count(f"{space_prefix(space_id)}_term")
     assert joins == 1, (
         f"expected ONE term join (outside the LIMIT), found {joins} — the "
         f"projected variable's text is being resolved inside the page again")

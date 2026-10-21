@@ -19,6 +19,7 @@ from ..jena_sparql.jena_types import (
     Expr, ExprVar, ExprValue, ExprFunction, ExprAggregator,
     LiteralNode, URINode, GroupVar,
 )
+from .space_names import space_prefix
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +54,7 @@ def term_identity_expr(alias: Optional[str], sql_name: str, space_id: str) -> st
     """
     q = f"{alias}." if alias else ""
     text = f"{q}{sql_name}"
-    dt_table = f"{space_id}_datatype"
+    dt_table = f"{space_prefix(space_id)}_datatype"
     derived = (
         f"vitalgraph_term_uuid(CAST({text} AS text), "
         f"CAST({q}{sql_name}__type AS char(1)), "

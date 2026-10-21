@@ -50,6 +50,7 @@ from vitalgraph.utils.quad_format_utils import (
 from ..kg_impl.kgdocuments_read_impl import KGDocumentsReadProcessor
 from ..kg_impl.kg_backend_utils import create_backend_adapter
 from ..auth.role_dependencies import require_space_read, require_space_write
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -1860,7 +1861,7 @@ class KGDocumentsEndpoint:
         try:
             if not await conn.fetchval(
                     "SELECT to_regclass($1) IS NOT NULL",
-                    f"{space_id}_document_segmentation_config"):
+                    f"{space_prefix(space_id)}_document_segmentation_config"):
                 return 0
             configs = {}
             for _uri, doc_type in docs:
@@ -2072,7 +2073,7 @@ class KGDocumentsEndpoint:
                 try:
                     if await conn.fetchval(
                             "SELECT to_regclass($1) IS NOT NULL",
-                            f"{space_id}_document_segmentation_config"):
+                            f"{space_prefix(space_id)}_document_segmentation_config"):
                         for t in types:
                             configs[t] = await manager.get_config_for_document_type(t)
                 finally:

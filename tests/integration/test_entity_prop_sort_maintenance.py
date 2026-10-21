@@ -24,6 +24,7 @@ from __future__ import annotations
 import pytest
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -69,9 +70,9 @@ async def _rows(pg_pool, space: str, prop: str) -> dict[str, str]:
     async with pg_pool.acquire() as conn:
         recs = await conn.fetch(f"""
             SELECT et.term_text AS entity, s.value_text
-            FROM {space}_entity_prop_sort s
-            JOIN {space}_term et ON et.term_uuid = s.entity_uuid
-            JOIN {space}_term pt ON pt.term_uuid = s.property_uuid
+            FROM {space_prefix(space)}_entity_prop_sort s
+            JOIN {space_prefix(space)}_term et ON et.term_uuid = s.entity_uuid
+            JOIN {space_prefix(space)}_term pt ON pt.term_uuid = s.property_uuid
             WHERE pt.term_text = $1""", prop)
     return {r["entity"].rsplit("/", 1)[-1]: r["value_text"] for r in recs}
 
@@ -80,9 +81,9 @@ async def _all_values(pg_pool, space: str, entity: str, prop: str) -> list[str]:
     async with pg_pool.acquire() as conn:
         return await conn.fetchval(f"""
             SELECT s.value_all
-            FROM {space}_entity_prop_sort s
-            JOIN {space}_term et ON et.term_uuid = s.entity_uuid
-            JOIN {space}_term pt ON pt.term_uuid = s.property_uuid
+            FROM {space_prefix(space)}_entity_prop_sort s
+            JOIN {space_prefix(space)}_term et ON et.term_uuid = s.entity_uuid
+            JOIN {space_prefix(space)}_term pt ON pt.term_uuid = s.property_uuid
             WHERE et.term_text = $1 AND pt.term_text = $2""",
             f"{EX}{entity}", prop)
 

@@ -21,6 +21,7 @@ from typing import Dict, List, Tuple
 
 from .sort_value_key import VALUE_KEY_COLUMN, value_key_column_sql
 from .uri_limit import uri_limit_constraint_sql
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +187,7 @@ def numeric_term_index_sql(space_id: str, term_table: str) -> str:
     """
     from .sql_type_generation import numeric_term_expr
     expr = numeric_term_expr(numeric_datatype_ids())
-    return (f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_num "
+    return (f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_term_num "
             f"ON {term_table} (({expr}))")
 
 
@@ -834,7 +835,7 @@ class SparqlSQLSchema:
     @staticmethod
     def retired_table_sql(space_id: str) -> List[str]:
         """DROP statements for every table this schema has retired."""
-        return [f"DROP TABLE IF EXISTS {space_id}_{suffix} CASCADE"
+        return [f"DROP TABLE IF EXISTS {space_prefix(space_id)}_{suffix} CASCADE"
                 for suffix in SparqlSQLSchema._RETIRED_TABLE_SUFFIXES]
 
     @staticmethod
@@ -852,16 +853,17 @@ class SparqlSQLSchema:
         an ordinary schema table — as unrecognised. A drop keyed off that is a
         step away from removing a live table of another space.
         """
-        owner = None
+        owner = owner_prefix = None
         for sid in space_ids:
-            if table_name.startswith(sid + "_"):
-                if owner is None or len(sid) > len(owner):
-                    owner = sid
+            p = space_prefix(sid)
+            if table_name.startswith(p + "_"):
+                if owner is None or len(p) > len(owner_prefix):
+                    owner, owner_prefix = sid, p
         if owner is None:
             return {"space_id": None, "suffix": None, "role": "foreign",
                     "reason": "no known space id is a prefix of this name"}
 
-        suffix = table_name[len(owner) + 1:]
+        suffix = table_name[len(owner_prefix) + 1:]
         # Partition children are `<table>_p<N>`; attribute them to the parent.
         base = suffix
         head, _, tail = suffix.rpartition("_p")
@@ -884,33 +886,33 @@ class SparqlSQLSchema:
     def get_table_names(space_id: str) -> Dict[str, str]:
         """Return all per-space table names."""
         return {
-            'term': f'{space_id}_term',
-            'rdf_quad': f'{space_id}_rdf_quad',
-            'datatype': f'{space_id}_datatype',
-            'rdf_pred_stats': f'{space_id}_rdf_pred_stats',
-            'rdf_stats': f'{space_id}_rdf_stats',
-            'rdf_value_stats': f'{space_id}_rdf_value_stats',
-            'edge': f'{space_id}_edge',
-            'edge_fanout': f'{space_id}_edge_fanout',
-            'entity_fanout': f'{space_id}_entity_fanout',
-            'frame_slot': f'{space_id}_frame_slot',
-            'entity_slot_sort': f'{space_id}_entity_slot_sort',
-            'entity_prop_sort': f'{space_id}_entity_prop_sort',
-            'frame_prop_sort': f'{space_id}_frame_prop_sort',
-            'vector_index': f'{space_id}_vector_index',
-            'geo': f'{space_id}_geo',
-            'geo_config': f'{space_id}_geo_config',
-            'fuzzy_mapping': f'{space_id}_fuzzy_mapping',
-            'fuzzy_mapping_property': f'{space_id}_fuzzy_mapping_property',
-            'fuzzy_band': f'{space_id}_fuzzy_band',
-            'fuzzy_phonetic_band': f'{space_id}_fuzzy_phonetic_band',
-            'search_mapping': f'{space_id}_search_mapping',
-            'search_mapping_index': f'{space_id}_search_mapping_index',
-            'search_mapping_property': f'{space_id}_search_mapping_property',
-            'fts_index': f'{space_id}_fts_index',
-            'segmentation_jobs': f'{space_id}_segmentation_jobs',
-            'document_segmentation_config': f'{space_id}_document_segmentation_config',
-            'index_sync_queue': f'{space_id}_index_sync_queue',
+            'term': f'{space_prefix(space_id)}_term',
+            'rdf_quad': f'{space_prefix(space_id)}_rdf_quad',
+            'datatype': f'{space_prefix(space_id)}_datatype',
+            'rdf_pred_stats': f'{space_prefix(space_id)}_rdf_pred_stats',
+            'rdf_stats': f'{space_prefix(space_id)}_rdf_stats',
+            'rdf_value_stats': f'{space_prefix(space_id)}_rdf_value_stats',
+            'edge': f'{space_prefix(space_id)}_edge',
+            'edge_fanout': f'{space_prefix(space_id)}_edge_fanout',
+            'entity_fanout': f'{space_prefix(space_id)}_entity_fanout',
+            'frame_slot': f'{space_prefix(space_id)}_frame_slot',
+            'entity_slot_sort': f'{space_prefix(space_id)}_entity_slot_sort',
+            'entity_prop_sort': f'{space_prefix(space_id)}_entity_prop_sort',
+            'frame_prop_sort': f'{space_prefix(space_id)}_frame_prop_sort',
+            'vector_index': f'{space_prefix(space_id)}_vector_index',
+            'geo': f'{space_prefix(space_id)}_geo',
+            'geo_config': f'{space_prefix(space_id)}_geo_config',
+            'fuzzy_mapping': f'{space_prefix(space_id)}_fuzzy_mapping',
+            'fuzzy_mapping_property': f'{space_prefix(space_id)}_fuzzy_mapping_property',
+            'fuzzy_band': f'{space_prefix(space_id)}_fuzzy_band',
+            'fuzzy_phonetic_band': f'{space_prefix(space_id)}_fuzzy_phonetic_band',
+            'search_mapping': f'{space_prefix(space_id)}_search_mapping',
+            'search_mapping_index': f'{space_prefix(space_id)}_search_mapping_index',
+            'search_mapping_property': f'{space_prefix(space_id)}_search_mapping_property',
+            'fts_index': f'{space_prefix(space_id)}_fts_index',
+            'segmentation_jobs': f'{space_prefix(space_id)}_segmentation_jobs',
+            'document_segmentation_config': f'{space_prefix(space_id)}_document_segmentation_config',
+            'index_sync_queue': f'{space_prefix(space_id)}_index_sync_queue',
         }
 
     # ------------------------------------------------------------------
@@ -1696,18 +1698,18 @@ class SparqlSQLSchema:
 
         _idx = [
             # Term table indexes
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_tt ON {t['term']} USING hash (term_text)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_type ON {t['term']} (term_type)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_term_tt ON {t['term']} USING hash (term_text)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_term_type ON {t['term']} (term_type)",
             # GIN trigram index for REGEX/CONTAINS/LIKE text filters (requires pg_trgm)
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_trgm ON {t['term']} USING gin (term_text gin_trgm_ops)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_term_trgm ON {t['term']} USING gin (term_text gin_trgm_ops)",
             # Numeric range push-down support (issues/040 W2/W4). A plain
             # index on the generated column, NOT an expression index — see
             # numeric_term_column for why that distinction decides everything.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_num "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_term_num "
             f"ON {t['term']} ({NUMERIC_TERM_COLUMN})",
             # Same rationale as idx_*_term_num: without it the datetime
             # push-down's semi-join scans the term table by value.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_dt "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_term_dt "
             f"ON {t['term']} ({DATETIME_TERM_COLUMN})",
 
             # Quad table indexes — essential for V2 SQL generation.
@@ -1723,10 +1725,10 @@ class SparqlSQLSchema:
             # the query-tier perf suite kept its buffer counts; the planner used
             # `quad_ps` where it had used `quad_pred`. Existing spaces drop them
             # with `scripts/migrate_drop_redundant_quad_indexes.py`.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_subj ON {t['rdf_quad']} (subject_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_obj ON {t['rdf_quad']} (object_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_po ON {t['rdf_quad']} (predicate_uuid, object_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ps ON {t['rdf_quad']} (predicate_uuid, subject_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_quad_subj ON {t['rdf_quad']} (subject_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_quad_obj ON {t['rdf_quad']} (object_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_quad_po ON {t['rdf_quad']} (predicate_uuid, object_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_quad_ps ON {t['rdf_quad']} (predicate_uuid, subject_uuid)",
             # No `quad_sp (subject_uuid, predicate_uuid)` (`issues/271`): it is
             # the leading prefix of the primary key (s, p, o, c), which serves
             # every lookup it did. 5.0 GB on production's main KG space, one
@@ -1769,10 +1771,10 @@ class SparqlSQLSchema:
             # 047 fence (SET LOCAL enable_sort = off) turns out not to need it,
             # holding at every page size on both anchors with this form. The
             # ordering it wanted is available from the primary key.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ctx_pred ON {t['rdf_quad']} (context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_quad_ctx_pred ON {t['rdf_quad']} (context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)",
 
             # Stats: support the capped stats load (ORDER BY row_count LIMIT).
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_rdf_stats_rc ON {t['rdf_stats']} (row_count)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_rdf_stats_rc ON {t['rdf_stats']} (row_count)",
 
             # Planner statistics (Tier 0 — high_cardinality_slot_value_query_plan.md).
             # predicate_uuid and object_uuid are strongly correlated for slot-value
@@ -1782,9 +1784,9 @@ class SparqlSQLSchema:
             # and picks all nested loops -> 60s timeouts. Extended (mcv, ndistinct)
             # stats at a raised target teach it the correlation -> correct estimate ->
             # hash joins. Stats-only, non-destructive; takes effect on ANALYZE.
-            f"CREATE STATISTICS IF NOT EXISTS stat_{space_id}_quad_po (mcv, ndistinct) "
+            f"CREATE STATISTICS IF NOT EXISTS stat_{space_prefix(space_id)}_quad_po (mcv, ndistinct) "
             f"ON predicate_uuid, object_uuid FROM {t['rdf_quad']}",
-            f"ALTER STATISTICS stat_{space_id}_quad_po SET STATISTICS 1000",
+            f"ALTER STATISTICS stat_{space_prefix(space_id)}_quad_po SET STATISTICS 1000",
             # Per-column targets for the heavily-skewed UUID columns (mitigation §5).
             f"ALTER TABLE {t['rdf_quad']} "
             f"ALTER COLUMN predicate_uuid SET STATISTICS 1000, "
@@ -1813,21 +1815,21 @@ class SparqlSQLSchema:
             f"ALTER COLUMN {DATETIME_TERM_COLUMN} SET STATISTICS 10000",
 
             # Datatype lookup index
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_datatype_uri ON {t['datatype']} (datatype_uri)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_datatype_uri ON {t['datatype']} (datatype_uri)",
 
             # Edge table indexes
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_src_dst ON {t['edge']} (source_node_uuid, dest_node_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_dst_src ON {t['edge']} (dest_node_uuid, source_node_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_edge ON {t['edge']} (edge_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_edge_src_dst ON {t['edge']} (source_node_uuid, dest_node_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_edge_dst_src ON {t['edge']} (dest_node_uuid, source_node_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_edge_edge ON {t['edge']} (edge_uuid)",
             # Typed traversal in each direction. A hop is normally "these
             # destinations, of this edge type", so the type leads and the
             # endpoint follows; without these the type predicate is a filter
             # applied after the endpoint lookup rather than part of the seek.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_type_dst "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_edge_type_dst "
             f"ON {t['edge']} (edge_type_uuid, dest_node_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_type_src "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_edge_type_src "
             f"ON {t['edge']} (edge_type_uuid, source_node_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_ctx ON {t['edge']} (context_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_edge_ctx ON {t['edge']} (context_uuid)",
 
             # Frame-entity table indexes
             # frame_slot: driven from either end, and from the role.
@@ -1835,12 +1837,12 @@ class SparqlSQLSchema:
             # (context, role, frame) and reads slot_uuid + entity_uuid; without
             # the INCLUDE the reference CONSTRUCT measured 2,032,883 buffers
             # against `frame_entity`'s 903,218, and with it 902,869 — parity.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_cover ON {t['frame_slot']} (context_uuid, role_uuid, frame_uuid) INCLUDE (slot_uuid, entity_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_role_entity ON {t['frame_slot']} (role_uuid, entity_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_entity_role ON {t['frame_slot']} (entity_uuid, role_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_frame_role ON {t['frame_slot']} (frame_uuid, role_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_slot ON {t['frame_slot']} (slot_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_ctx ON {t['frame_slot']} (context_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fs_cover ON {t['frame_slot']} (context_uuid, role_uuid, frame_uuid) INCLUDE (slot_uuid, entity_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fs_role_entity ON {t['frame_slot']} (role_uuid, entity_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fs_entity_role ON {t['frame_slot']} (entity_uuid, role_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fs_frame_role ON {t['frame_slot']} (frame_uuid, role_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fs_slot ON {t['frame_slot']} (slot_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fs_ctx ON {t['frame_slot']} (context_uuid)",
             # Type-leading, mirroring idx_*_edge_type_src/_dst. A typed
             # traversal filters on the type and then walks by source or dest,
             # so the type has to lead for the scan to start there.
@@ -1862,7 +1864,7 @@ class SparqlSQLSchema:
             # on the two prop-sort tables below. A btree entry is capped at
             # 2,704 bytes and `value_text` is unbounded, so one long slot value
             # failed the write that carried it (issues/283).
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_text "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_ess_text "
             f"ON {t['entity_slot_sort']} (context_uuid, entity_type_uuid, "
             f"frame_type_path, slot_type_uuid, {VALUE_KEY_COLUMN} COLLATE \"C\", entity_uuid)",
             # PARTIAL, and that is load-bearing twice over. Every row has a
@@ -1877,21 +1879,21 @@ class SparqlSQLSchema:
             # with heap fetches: 58 buffers became 2,918 and 4 ms became 15 ms.
             # A partial index cannot be chosen unless the query implies its
             # predicate, which is what keeps a text sort on the text index.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_num "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_ess_num "
             f"ON {t['entity_slot_sort']} (context_uuid, entity_type_uuid, "
             f"frame_type_path, slot_type_uuid, value_num, entity_uuid) "
             f"WHERE value_num IS NOT NULL",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_dt "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_ess_dt "
             f"ON {t['entity_slot_sort']} (context_uuid, entity_type_uuid, "
             f"frame_type_path, slot_type_uuid, value_dt, entity_uuid) "
             f"WHERE value_dt IS NOT NULL",
             # Incremental maintenance walks up from a touched entity or frame;
             # without these the per-write DELETE is a seq scan of the table.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_entity "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_ess_entity "
             f"ON {t['entity_slot_sort']} (entity_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_frame "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_ess_frame "
             f"ON {t['entity_slot_sort']} (frame_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_ctx "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_ess_ctx "
             f"ON {t['entity_slot_sort']} (context_uuid)",
             # `entity_prop_sort`, mirroring the `ess` indexes above -- including
             # the two details that cost measurement to learn there and would cost
@@ -1902,13 +1904,13 @@ class SparqlSQLSchema:
             # text sort: unrestricted, they share its leading columns, are cheaper
             # to scan, and lack `value_text`, which turned an index-only scan into
             # an Index Scan with heap fetches (58 buffers -> 2,918, 4ms -> 15ms).
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_text "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_eps_text "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
             f"property_uuid, {VALUE_KEY_COLUMN} COLLATE \"C\", entity_uri)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_num "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_eps_num "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
             f"property_uuid, value_num, entity_uri) WHERE value_num IS NOT NULL",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_dt "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_eps_dt "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
             f"property_uuid, value_dt, entity_uri) WHERE value_dt IS NOT NULL",
             # THE SAME TWO SORTS WITHOUT THE TYPE COLUMN, because a listing may
@@ -1923,10 +1925,10 @@ class SparqlSQLSchema:
             # reads -- of the seven sortable properties, five are `string`/`uri`
             # (which order as text) and two are `dateTime`. None is numeric, so
             # `value_num` has no untyped twin.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_any_text "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_eps_any_text "
             f"ON {t['entity_prop_sort']} (context_uuid, property_uuid, "
             f"{VALUE_KEY_COLUMN} COLLATE \"C\", entity_uri)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_any_dt "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_eps_any_dt "
             f"ON {t['entity_prop_sort']} (context_uuid, property_uuid, "
             f"value_dt, entity_uri) WHERE value_dt IS NOT NULL",
             # DESCENDING SORTS NEED THEIR OWN INDEXES, because the ordering
@@ -1948,10 +1950,10 @@ class SparqlSQLSchema:
             # the query still sorted at 56 ms while an unused index sat beside
             # it. The ordering spec has to match exactly, NULL placement
             # included -- even for the partial index, which can hold no NULLs.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_text_desc "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_eps_text_desc "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
             f"property_uuid, {VALUE_KEY_COLUMN} COLLATE \"C\" DESC NULLS LAST, entity_uri)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_dt_desc "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_eps_dt_desc "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
             f"property_uuid, value_dt DESC NULLS LAST, entity_uri) "
             f"WHERE value_dt IS NOT NULL",
@@ -1967,60 +1969,60 @@ class SparqlSQLSchema:
             # rather than a hash. The `_eps_text` family cannot serve it —
             # `value_text` sits ahead of `entity_uri` there, so the same query
             # would sort the type's whole population.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_type_uri "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_eps_type_uri "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, entity_uri)",
             # Membership for the filter gate: `value_all @> ARRAY[x]`. GIN
             # because the operators are containment, not ordering -- a btree on
             # the MIN lanes cannot answer them at all.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_all "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_eps_all "
             f"ON {t['entity_prop_sort']} USING GIN (value_all)",
             # Incremental maintenance re-derives every property of one touched
             # entity; without this that per-write DELETE is a seq scan.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_entity "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_eps_entity "
             f"ON {t['entity_prop_sort']} (entity_uuid)",
             # `frame_prop_sort`, the same five shapes plus the untyped pair.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_text "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fps_text "
             f"ON {t['frame_prop_sort']} (context_uuid, frame_type_uuid, "
             f"property_uuid, {VALUE_KEY_COLUMN} COLLATE \"C\", frame_uri)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_num "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fps_num "
             f"ON {t['frame_prop_sort']} (context_uuid, frame_type_uuid, "
             f"property_uuid, value_num, frame_uri) WHERE value_num IS NOT NULL",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_dt "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fps_dt "
             f"ON {t['frame_prop_sort']} (context_uuid, frame_type_uuid, "
             f"property_uuid, value_dt, frame_uri) WHERE value_dt IS NOT NULL",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_any_text "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fps_any_text "
             f"ON {t['frame_prop_sort']} (context_uuid, property_uuid, "
             f"{VALUE_KEY_COLUMN} COLLATE \"C\", frame_uri)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_any_num "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fps_any_num "
             f"ON {t['frame_prop_sort']} (context_uuid, property_uuid, "
             f"value_num, frame_uri) WHERE value_num IS NOT NULL",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_any_dt "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fps_any_dt "
             f"ON {t['frame_prop_sort']} (context_uuid, property_uuid, "
             f"value_dt, frame_uri) WHERE value_dt IS NOT NULL",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_all "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fps_all "
             f"ON {t['frame_prop_sort']} USING GIN (value_all)",
             # Form-type-scoped ordering: what the Assertion and Aspect tabs
             # sort by. The `_any_` pair above serves the All tab, and the
             # parent-scoped hop needs neither — it arrives as an INTERSECT on
             # frame_uuid from the edge table.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_form_text "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fps_form_text "
             f"ON {t['frame_prop_sort']} (context_uuid, form_type_uuid, "
             f"property_uuid, {VALUE_KEY_COLUMN} COLLATE \"C\", frame_uri)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_form_num "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fps_form_num "
             f"ON {t['frame_prop_sort']} (context_uuid, form_type_uuid, "
             f"property_uuid, value_num, frame_uri) WHERE value_num IS NOT NULL",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_frame "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fps_frame "
             f"ON {t['frame_prop_sort']} (frame_uuid)",
             # Document segmentation job queue and config. These indexes lived in
             # SegmentationJobManager / SegmentationConfigManager and were created
             # on demand with their tables, so a space had them only if the
             # feature had run against it. Schema comes from one place now.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_sj_status "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_sj_status "
             f"ON {t['segmentation_jobs']} (status, created_at) "
             f"WHERE status IN ('pending', 'failed', 'vectorizing')",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_sj_doc "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_sj_doc "
             f"ON {t['segmentation_jobs']} (document_uri, created_at DESC)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_sj_space "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_sj_space "
             f"ON {t['segmentation_jobs']} (space_id, status)",
             # ONE ACTIVE JOB PER DOCUMENT (`issues/174` item 3).
             #
@@ -2045,31 +2047,31 @@ class SparqlSQLSchema:
             # for production's shorter ids, which is exactly why only the test
             # caught it.
             f"CREATE UNIQUE INDEX IF NOT EXISTS "
-            f"idx_{space_id}_sj_active_uq "
+            f"idx_{space_prefix(space_id)}_sj_active_uq "
             f"ON {t['segmentation_jobs']} (document_uri) "
             f"WHERE status IN ('pending', 'in_progress')",
             f"CREATE INDEX IF NOT EXISTS "
-            f"idx_{space_id}_dsc_doctype "
+            f"idx_{space_prefix(space_id)}_dsc_doctype "
             f"ON {t['document_segmentation_config']} (document_type_uri) "
             f"WHERE enabled = TRUE",
             # The claim's order: the next row due (`issues/291`).
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_isq_due "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_isq_due "
             f"ON {t['index_sync_queue']} (next_attempt_at)",
 
             # Geo table indexes
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_gist ON {t['geo']} USING gist (location)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_subj ON {t['geo']} (subject_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_slot ON {t['geo']} (source_slot_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_ctx ON {t['geo']} (context_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_geo_gist ON {t['geo']} USING gist (location)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_geo_subj ON {t['geo']} (subject_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_geo_slot ON {t['geo']} (source_slot_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_geo_ctx ON {t['geo']} (context_uuid)",
 
             # Fuzzy band table indexes
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fuzzy_band_lookup ON {t['fuzzy_band']} (band_id, band_hash)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fuzzy_band_entity ON {t['fuzzy_band']} (entity_key)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fuzzy_pband_lookup ON {t['fuzzy_phonetic_band']} (band_id, band_hash)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fuzzy_pband_entity ON {t['fuzzy_phonetic_band']} (entity_key)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fuzzy_band_lookup ON {t['fuzzy_band']} (band_id, band_hash)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fuzzy_band_entity ON {t['fuzzy_band']} (entity_key)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fuzzy_pband_lookup ON {t['fuzzy_phonetic_band']} (band_id, band_hash)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fuzzy_pband_entity ON {t['fuzzy_phonetic_band']} (entity_key)",
 
             # "who are the hubs, widest first" — the only query this table has.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_entity_fanout_top ON {t['entity_fanout']} (direction, fanout DESC)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_entity_fanout_top ON {t['entity_fanout']} (direction, fanout DESC)",
         ]
         # Refuse the statements that do not fit, not the whole space. One
         # over-long name used to deny every index here (`issues/196`).
@@ -2122,32 +2124,32 @@ class SparqlSQLSchema:
             f"DROP TABLE IF EXISTS {t['search_mapping_property']} CASCADE",
             f"DROP TABLE IF EXISTS {t['search_mapping']} CASCADE",
             f"DROP TABLE IF EXISTS {t['index_sync_queue']} CASCADE",
-            f"DROP FUNCTION IF EXISTS {space_id}_isq_capture() CASCADE",
+            f"DROP FUNCTION IF EXISTS {space_prefix(space_id)}_isq_capture() CASCADE",
         ]
 
     def drop_space_indexes_sql(self, space_id: str) -> List[str]:
         """Return SQL to drop per-space indexes (for bulk load optimization)."""
         t = self.get_table_names(space_id)
         return [
-            f"DROP INDEX IF EXISTS idx_{space_id}_term_tt",
-            f"DROP INDEX IF EXISTS idx_{space_id}_term_type",
-            f"DROP INDEX IF EXISTS idx_{space_id}_term_trgm",
-            f"DROP INDEX IF EXISTS idx_{space_id}_term_num",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_term_tt",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_term_type",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_term_trgm",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_term_num",
             # Kept although the schema no longer builds quad_pred / quad_ctx
             # (`issues/270`) or quad_sp (`issues/271`): a bulk load on an older
             # space then removes them and rebuilds only what the schema lists.
-            f"DROP INDEX IF EXISTS idx_{space_id}_quad_pred",
-            f"DROP INDEX IF EXISTS idx_{space_id}_quad_subj",
-            f"DROP INDEX IF EXISTS idx_{space_id}_quad_obj",
-            f"DROP INDEX IF EXISTS idx_{space_id}_quad_ctx",
-            f"DROP INDEX IF EXISTS idx_{space_id}_quad_po",
-            f"DROP INDEX IF EXISTS idx_{space_id}_quad_ps",
-            f"DROP INDEX IF EXISTS idx_{space_id}_quad_sp",
-            f"DROP INDEX IF EXISTS idx_{space_id}_datatype_uri",
-            f"DROP INDEX IF EXISTS idx_{space_id}_fuzzy_band_lookup",
-            f"DROP INDEX IF EXISTS idx_{space_id}_fuzzy_band_entity",
-            f"DROP INDEX IF EXISTS idx_{space_id}_fuzzy_pband_lookup",
-            f"DROP INDEX IF EXISTS idx_{space_id}_fuzzy_pband_entity",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_quad_pred",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_quad_subj",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_quad_obj",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_quad_ctx",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_quad_po",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_quad_ps",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_quad_sp",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_datatype_uri",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_fuzzy_band_lookup",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_fuzzy_band_entity",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_fuzzy_pband_lookup",
+            f"DROP INDEX IF EXISTS idx_{space_prefix(space_id)}_fuzzy_pband_entity",
         ]
 
     # ------------------------------------------------------------------
@@ -2254,7 +2256,7 @@ class SparqlSQLSchema:
         # Bootstrap FTS indexes for any registered vector indexes
         try:
             from vitalgraph.vectorization.fts_index_lifecycle import ensure_fts_index
-            vi_table = f"{space_id}_vector_index"
+            vi_table = f"{space_prefix(space_id)}_vector_index"
             rows = await conn.fetch(
                 f"SELECT index_name FROM {vi_table}"
             )
@@ -2281,13 +2283,13 @@ class SparqlSQLSchema:
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = 'public' "
             "  AND (table_name LIKE $1 OR table_name LIKE $2)",
-            f"{space_id}_vec_%",
-            f"{space_id}_fts_%",
+            f"{space_prefix(space_id)}_vec_%",
+            f"{space_prefix(space_id)}_fts_%",
         )
         for row in dynamic_rows:
             tbl = row["table_name"]
             # Skip the registry table (handled by drop_space_tables_sql)
-            if tbl == f"{space_id}_fts_index":
+            if tbl == f"{space_prefix(space_id)}_fts_index":
                 continue
             await conn.execute(f"DROP TABLE IF EXISTS {tbl} CASCADE")
             logger.debug("Dropped dynamic table: %s", tbl)
@@ -2296,7 +2298,7 @@ class SparqlSQLSchema:
         # (not by create_space_tables_sql), so it is not in the static drop
         # list and would otherwise be left behind on every drop.
         await conn.execute(
-            f"DROP TABLE IF EXISTS {space_id}_segmentation_jobs CASCADE"
+            f"DROP TABLE IF EXISTS {space_prefix(space_id)}_segmentation_jobs CASCADE"
         )
 
         # Same for document_segmentation_config, created on demand by
@@ -2304,7 +2306,7 @@ class SparqlSQLSchema:
         # missed here, so every space ever created left one behind: a local test
         # stack had 116 orphans (7.4 MB) belonging to spaces long deleted.
         await conn.execute(
-            f"DROP TABLE IF EXISTS {space_id}_document_segmentation_config CASCADE"
+            f"DROP TABLE IF EXISTS {space_prefix(space_id)}_document_segmentation_config CASCADE"
         )
 
         # Also drop any trigger functions left by FTS data tables
@@ -2312,7 +2314,7 @@ class SparqlSQLSchema:
             "SELECT routine_name FROM information_schema.routines "
             "WHERE routine_schema = 'public' "
             "  AND routine_name LIKE $1",
-            f"{space_id}_fts_%_tsv_trigger",
+            f"{space_prefix(space_id)}_fts_%_tsv_trigger",
         )
         for row in fn_rows:
             await conn.execute(f"DROP FUNCTION IF EXISTS {row['routine_name']}() CASCADE")
@@ -2373,17 +2375,17 @@ class SparqlSQLSchema:
         another — dropping ``e2e_test`` must never take ``e2e_test_extra``'s
         tables with it — so any table belonging to a longer space id is excluded.
         """
-        prefix = f"{space_id}_"
-        # Space ids that would themselves match our prefix, longest first.
+        prefix = f"{space_prefix(space_id)}_"
+        # Other spaces' prefixes that would themselves match ours, longest first.
         shadowing = sorted(
-            (sid for sid in other_space_ids if sid.startswith(prefix)),
+            (p for p in map(space_prefix, other_space_ids) if p.startswith(prefix)),
             key=len, reverse=True,
         )
         out = []
         for tbl in all_tables:
             if not tbl.startswith(prefix):
                 continue
-            if any(tbl.startswith(f"{sid}_") or tbl == sid for sid in shadowing):
+            if any(tbl.startswith(f"{p}_") or tbl == p for p in shadowing):
                 continue  # belongs to a different, longer-named space
             out.append(tbl)
         return out
@@ -2406,7 +2408,7 @@ class SparqlSQLSchema:
     @staticmethod
     def vec_table_name(space_id: str, index_name: str) -> str:
         """Return the table name for a specific vector index."""
-        return f"{space_id}_vec_{index_name}"
+        return f"{space_prefix(space_id)}_vec_{index_name}"
 
     def create_vector_data_table_sql(
         self, space_id: str, index_name: str, dimensions: int,
@@ -2436,15 +2438,15 @@ class SparqlSQLSchema:
                 PRIMARY KEY (subject_uuid, context_uuid)
             )''',
             # HNSW index for ANN vector search
-            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_vec_{index_name}_hnsw
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_vec_{index_name}_hnsw
                 ON {table}
                 USING hnsw (embedding {ops_class})
                 WITH (m = 16, ef_construction = 200)''',
             # Context index for graph-scoped queries
-            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_vec_{index_name}_ctx
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_vec_{index_name}_ctx
                 ON {table} (context_uuid)''',
             # Subject index for joins to rdf_quad
-            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_vec_{index_name}_subj
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_vec_{index_name}_subj
                 ON {table} (subject_uuid)''',
         ]
 
@@ -2462,7 +2464,7 @@ class SparqlSQLSchema:
     @staticmethod
     def fts_table_name(space_id: str, index_name: str) -> str:
         """Return the table name for a specific FTS index."""
-        return f"{space_id}_fts_{index_name}"
+        return f"{space_prefix(space_id)}_fts_{index_name}"
 
     def create_fts_data_table_sql(
         self, space_id: str, index_name: str, languages: List[str],
@@ -2473,8 +2475,8 @@ class SparqlSQLSchema:
         ``to_tsvector(lang, search_text)`` for each configured language.
         """
         table = self.fts_table_name(space_id, index_name)
-        trigger_fn = f"{space_id}_fts_{index_name}_tsv_trigger"
-        trigger_name = f"trg_{space_id}_fts_{index_name}_tsv"
+        trigger_fn = f"{space_prefix(space_id)}_fts_{index_name}_tsv_trigger"
+        trigger_name = f"trg_{space_prefix(space_id)}_fts_{index_name}_tsv"
 
         stmts = [
             # Data table
@@ -2487,13 +2489,13 @@ class SparqlSQLSchema:
                 PRIMARY KEY (subject_uuid, context_uuid)
             )''',
             # GIN index for full-text search
-            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_fts_{index_name}_tsv
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fts_{index_name}_tsv
                 ON {table} USING gin (tsv)''',
             # Context index for graph-scoped queries
-            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_fts_{index_name}_ctx
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fts_{index_name}_ctx
                 ON {table} (context_uuid)''',
             # Subject index for joins
-            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_fts_{index_name}_subj
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fts_{index_name}_subj
                 ON {table} (subject_uuid)''',
         ]
 
@@ -2520,7 +2522,7 @@ $$ LANGUAGE plpgsql''')
     def drop_fts_data_table_sql(self, space_id: str, index_name: str) -> List[str]:
         """Return SQL to drop an FTS data table and its trigger function."""
         table = self.fts_table_name(space_id, index_name)
-        trigger_fn = f"{space_id}_fts_{index_name}_tsv_trigger"
+        trigger_fn = f"{space_prefix(space_id)}_fts_{index_name}_tsv_trigger"
         return [
             f"DROP TABLE IF EXISTS {table} CASCADE",
             f"DROP FUNCTION IF EXISTS {trigger_fn}() CASCADE",

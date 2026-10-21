@@ -25,6 +25,7 @@ from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 from .declines import Rule
 from .ir import PlanV2, TableRef, AliasGenerator, KIND_BGP, KIND_PROJECT
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -298,9 +299,9 @@ def rewrite_frame_slot_table(plan: PlanV2, aliases: AliasGenerator,
                                                           needed_vars)
         return plan
 
-    fs_table_name = f"{space_id}_frame_slot"
-    edge_table_name = f"{space_id}_edge"
-    quad_table_name = f"{space_id}_rdf_quad"
+    fs_table_name = f"{space_prefix(space_id)}_frame_slot"
+    edge_table_name = f"{space_prefix(space_id)}_edge"
+    quad_table_name = f"{space_prefix(space_id)}_rdf_quad"
 
     # --- Step 1: Build constant reverse map ---
     const_to_uri: Dict[str, str] = {}

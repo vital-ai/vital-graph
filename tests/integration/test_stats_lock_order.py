@@ -36,6 +36,7 @@ import pytest_asyncio
 from rdflib import Literal, URIRef
 
 from .conftest import skip_no_infra, TEST_SPACE_PREFIX
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
@@ -98,12 +99,12 @@ async def test_the_write_path_does_not_touch_the_stats_tables(
     applying deltas.
     """
     sid = lock_space
-    await pg_conn.execute(f"TRUNCATE {sid}_rdf_stats, {sid}_rdf_pred_stats")
+    await pg_conn.execute(f"TRUNCATE {space_prefix(sid)}_rdf_stats, {space_prefix(sid)}_rdf_pred_stats")
 
     await space_impl.add_rdf_quads_batch(sid, [
         (URIRef("urn:lockorder:probe"), PREDS[0], Literal("v"), GRAPH)])
 
-    for table in (f"{sid}_rdf_stats", f"{sid}_rdf_pred_stats"):
+    for table in (f"{space_prefix(sid)}_rdf_stats", f"{space_prefix(sid)}_rdf_pred_stats"):
         assert 0 == await pg_conn.fetchval(f"SELECT count(*) FROM {table}"), (
             f"{table} gained rows from an insert. rdf_stats has exactly one "
             f"writer — recompute_stats_tables — and a second one reintroduces "
@@ -149,8 +150,8 @@ async def test_a_recompute_reconciles_what_the_write_path_left_alone(
     drift = await pg_conn.fetch(f"""
         SELECT COALESCE(t.rc, 0) AS truth, COALESCE(s.row_count, 0) AS stored
           FROM (SELECT predicate_uuid, object_uuid, count(*) AS rc
-                  FROM {sid}_rdf_quad GROUP BY 1, 2 HAVING count(*) >= 2) t
-          FULL JOIN {sid}_rdf_stats s USING (predicate_uuid, object_uuid)
+                  FROM {space_prefix(sid)}_rdf_quad GROUP BY 1, 2 HAVING count(*) >= 2) t
+          FULL JOIN {space_prefix(sid)}_rdf_stats s USING (predicate_uuid, object_uuid)
          WHERE COALESCE(t.rc, 0) IS DISTINCT FROM COALESCE(s.row_count, 0)""")
     assert not drift, (
         f"recompute did not reconcile an update: {len(drift)} pair(s) differ, "

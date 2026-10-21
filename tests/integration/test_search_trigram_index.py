@@ -20,6 +20,7 @@ from .conftest import skip_no_infra, TEST_SPACE_PREFIX
 from tests.performance.harness import (
     explain_json, uses_index, has_seq_scan_on, node_types)
 from vitalgraph.db.sparql_sql.collect import _esc, _like_escape
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
@@ -47,18 +48,18 @@ async def trgm_space(pg_pool, make_space):
             (uuid.uuid4(), "beta ends with suffixtoken", "L"),     # STRENDS target
         ]
         await conn.copy_records_to_table(
-            f"{sid}_term", records=rows,
+            f"{space_prefix(sid)}_term", records=rows,
             columns=["term_uuid", "term_text", "term_type"])
-        await conn.execute(f"ANALYZE {sid}_term")
+        await conn.execute(f"ANALYZE {space_prefix(sid)}_term")
     yield sid
 
 
 async def _assert_uses_trgm(conn, sid, pattern):
-    idx = f"idx_{sid}_term_trgm"
-    sql = f"SELECT term_uuid FROM {sid}_term WHERE term_text LIKE '{pattern}'"
+    idx = f"idx_{space_prefix(sid)}_term_trgm"
+    sql = f"SELECT term_uuid FROM {space_prefix(sid)}_term WHERE term_text LIKE '{pattern}'"
     plan = await explain_json(conn, sql, analyze=True)
     assert uses_index(plan, idx), f"trgm index not used; nodes={node_types(plan)}\n{sql}"
-    assert has_seq_scan_on(plan, [f"{sid}_term"]) is None, (
+    assert has_seq_scan_on(plan, [f"{space_prefix(sid)}_term"]) is None, (
         f"seq scan on term table; nodes={node_types(plan)}\n{sql}")
     return plan
 
@@ -72,7 +73,7 @@ async def test_contains_escaped_uses_trigram_index_and_is_correct(pg_pool, trgm_
         # which the old unescaped '%save50%off%' would have wrongly matched, is
         # excluded.
         texts = [r["term_text"] for r in await conn.fetch(
-            f"SELECT term_text FROM {sid}_term WHERE term_text LIKE '{pattern}'")]
+            f"SELECT term_text FROM {space_prefix(sid)}_term WHERE term_text LIKE '{pattern}'")]
     assert texts == ["promo save50%off today only"], texts
 
 

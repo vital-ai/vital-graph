@@ -15,6 +15,7 @@ from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.api, pytest.mark.asyncio(loop_scope="session")]
 
@@ -36,8 +37,8 @@ def _frame(value="v", frame_uri=None, slot_uri=None):
 
 async def _slot_value(pg_conn, space, slot_uri):
     return await pg_conn.fetchval(
-        f"SELECT tt.term_text FROM {space}_rdf_quad q "
-        f"JOIN {space}_term tt ON tt.term_uuid = q.object_uuid "
+        f"SELECT tt.term_text FROM {space_prefix(space)}_rdf_quad q "
+        f"JOIN {space_prefix(space)}_term tt ON tt.term_uuid = q.object_uuid "
         f"WHERE q.subject_uuid = vitalgraph_term_uuid($1, 'U') "
         f"AND q.predicate_uuid = vitalgraph_term_uuid($2, 'U')",
         slot_uri, "http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue")

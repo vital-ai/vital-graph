@@ -23,6 +23,7 @@ from ..model.sparql_model import (
 from ..model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read, require_space_write
 from ..cache.count_cache import _count_cache
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix, space_prefix
 
 
 class SPARQLGraphEndpoint:
@@ -524,17 +525,18 @@ class SPARQLGraphEndpoint:
             graphs_by_space = {r["space_id"]: int(r["n"]) for r in graph_rows}
 
             # One query for every space's quad estimate. `relname` is the quad
-            # table, so the space id is recovered by stripping the suffix.
+            # table, so the space is recovered by stripping the suffix.
             est_rows = await db_impl.execute_query(
                 "SELECT relname, reltuples::bigint AS est FROM pg_class "
                 "WHERE relkind = 'r' AND relname = ANY($1)",
-                [[f"{s}_rdf_quad" for s in ids]])
+                [[f"{space_prefix(s)}_rdf_quad" for s in ids]])
             est_by_space = {}
             for r in est_rows:
                 name = r["relname"]
                 est = r["est"]
                 # -1 means "never analysed" on PG14+; report 0 rather than -1.
-                est_by_space[name[: -len("_rdf_quad")]] = max(int(est or 0), 0)
+                est_by_space[space_id_for_prefix(name[: -len("_rdf_quad")])] = \
+                    max(int(est or 0), 0)
 
             summaries, total_graphs, total_triples = [], 0, 0
             for sid, name in visible:

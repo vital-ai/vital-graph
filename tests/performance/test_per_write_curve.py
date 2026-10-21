@@ -32,6 +32,7 @@ from vitalgraph.db.sparql_sql.sync_frame_slot_table import (
 from test_scripts.data.generate_scale_data import load_scale_space, HASNAME
 from .conftest import skip_no_pg
 from .harness import explain_json, has_seq_scan_on, assert_growth_class, node_types
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, pytest.mark.slow, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -106,14 +107,14 @@ async def test_per_write_cost_stays_flat(perf_pool, perf_record):
         async with perf_pool.acquire() as conn:
             plan = await explain_json(conn, f"""
                 SELECT src.subject_uuid, src.object_uuid, dst.object_uuid, src.context_uuid
-                FROM {sid}_rdf_quad src
-                JOIN {sid}_rdf_quad dst
+                FROM {space_prefix(sid)}_rdf_quad src
+                JOIN {space_prefix(sid)}_rdf_quad dst
                   ON dst.subject_uuid = src.subject_uuid
                   AND dst.context_uuid = src.context_uuid
                 WHERE src.predicate_uuid = $1 AND dst.predicate_uuid = $2
                   AND src.subject_uuid = ANY($3)
             """, _EDGE_SRC_UUID, _EDGE_DST_UUID, subjects, analyze=False)
-        assert has_seq_scan_on(plan, [f"{sid}_rdf_quad"]) is None, node_types(plan)
+        assert has_seq_scan_on(plan, [f"{space_prefix(sid)}_rdf_quad"]) is None, node_types(plan)
 
         print(f"\nper-write latency vs table size: "
               + "  ".join(f"{n:,}q={ms*1000:.1f}ms" for n, ms in sorted(points.items())))

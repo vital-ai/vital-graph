@@ -71,6 +71,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_sort_value_key")
 
@@ -104,7 +105,7 @@ async def plan_space(conn, space_id: str) -> dict:
     plan = {"space": space_id, "add_column": [], "bound_value_all": {},
             "rebuild_index": [], "sizes": {}}
     for name in TABLES:
-        t = f"{space_id}_{name}"
+        t = f"{space_prefix(space_id)}_{name}"
         if not await _table_exists(conn, t):
             continue
         if not await _has_column(conn, t, VALUE_KEY_COLUMN):
@@ -119,7 +120,7 @@ async def plan_space(conn, space_id: str) -> dict:
             if n:
                 plan["bound_value_all"][t] = n
     for suffix in TEXT_INDEXES:
-        idx = f"idx_{space_id}_{suffix}"
+        idx = f"idx_{space_prefix(space_id)}_{suffix}"
         d = await conn.fetchval(
             "SELECT indexdef FROM pg_indexes WHERE schemaname='public' "
             "AND indexname=$1", idx)
@@ -171,7 +172,7 @@ async def apply_plan(conn, plan: dict) -> float:
             await conn.execute(f"ALTER INDEX {idx} RENAME TO {idx}{OLD_SUFFIX}")
             await conn.execute(create[idx])
     for name in TABLES:
-        t = f"{space_id}_{name}"
+        t = f"{space_prefix(space_id)}_{name}"
         if await _table_exists(conn, t):
             await conn.execute(f"ANALYZE {t}")
     return time.monotonic() - t0
@@ -179,7 +180,7 @@ async def apply_plan(conn, plan: dict) -> float:
 
 async def old_indexes(conn, space_id: str) -> list:
     """The `_pre283` indexes phase one left behind on this space."""
-    names = [f"idx_{space_id}_{s}{OLD_SUFFIX}" for s in TEXT_INDEXES]
+    names = [f"idx_{space_prefix(space_id)}_{s}{OLD_SUFFIX}" for s in TEXT_INDEXES]
     return [r["indexname"] for r in await conn.fetch(
         "SELECT indexname FROM pg_indexes WHERE schemaname='public' "
         "AND indexname = ANY($1::text[]) ORDER BY 1", names)]

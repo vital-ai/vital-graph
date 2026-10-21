@@ -60,6 +60,7 @@ import re
 from typing import Dict, List, Optional, Set
 
 from .sort_value_key import fits_value_key
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +167,7 @@ def component_intersect_constraints(bgp, aliases, space_id: str,
     if anchor is None or entity_type_token is None:
         return []
 
-    ess = f"{space_id}_entity_slot_sort"
+    ess = f"{space_prefix(space_id)}_entity_slot_sort"
     out = []
     for comp in comps:
         value_alias = slot_var = None

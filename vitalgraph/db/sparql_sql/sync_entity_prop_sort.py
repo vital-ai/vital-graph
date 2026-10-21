@@ -51,6 +51,7 @@ import uuid
 from typing import List, Optional
 
 from .sort_value_key import bounded_text_sql
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -116,8 +117,8 @@ def _select_rows(space_id: str, where: str) -> str:
     entity-type predicate, `$4` the sortable property predicates. `where`
     supplies any incremental restriction and its own parameters from `$5`.
     """
-    t_quad = f"{space_id}_rdf_quad"
-    t_term = f"{space_id}_term"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
+    t_term = f"{space_prefix(space_id)}_term"
     return f"""
         SELECT
             q.subject_uuid    AS entity_uuid,
@@ -287,7 +288,7 @@ async def sync_entity_prop_sort_after_change(
     """
     if not subject_uuids:
         return 0
-    t = f"{space_id}_entity_prop_sort"
+    t = f"{space_prefix(space_id)}_entity_prop_sort"
     if not await _table_present(conn, space_id, t):
         return 0
     if context_uuid:
@@ -310,7 +311,7 @@ async def sync_entity_prop_sort_after_change(
 async def delete_entity_prop_sort_for_context(conn, space_id: str,
                                               context_uuid: uuid.UUID) -> int:
     """Drop every row for one graph. Pairs with clear/drop graph."""
-    t = f"{space_id}_entity_prop_sort"
+    t = f"{space_prefix(space_id)}_entity_prop_sort"
     result = await conn.execute(
         f"DELETE FROM {t} WHERE context_uuid = $1", context_uuid)
     return int(result.split()[-1]) if result else 0
@@ -322,7 +323,7 @@ async def delete_entity_prop_sort_for_context(conn, space_id: str,
 
 async def resync_entity_prop_sort(conn, space_id: str) -> int:
     """TRUNCATE and rebuild from the graph. For bulk loads and recovery."""
-    t = f"{space_id}_entity_prop_sort"
+    t = f"{space_prefix(space_id)}_entity_prop_sort"
     await conn.execute(f"TRUNCATE {t}")
     result = await conn.execute(
         f"INSERT INTO {t} ({_INSERT_COLS}) "
@@ -344,7 +345,7 @@ async def backfill_entity_prop_sort(conn, space_id: str) -> int:
     keep reading -- the same reason `backfill_edge_table` exists rather than
     everything going through the resync.
     """
-    t = f"{space_id}_entity_prop_sort"
+    t = f"{space_prefix(space_id)}_entity_prop_sort"
     result = await conn.execute(
         f"INSERT INTO {t} ({_INSERT_COLS}) "
         f"{_select_rows(space_id, 'TRUE')} {_ON_CONFLICT}", *_args())
@@ -393,19 +394,19 @@ async def backfill_entity_prop_sort_batch(
     UPDATE; it is progress made, not strictly new pairs.
     """
     n = int(batch_size or EPS_BACKFILL_BATCH)
-    t = f"{space_id}_entity_prop_sort"
+    t = f"{space_prefix(space_id)}_entity_prop_sort"
     # PAIR-KEYED, and `context_uuid` is part of the key because the table's
     # unique index is (entity, context, property) -- the same property in a
     # second graph is a different row.
     rows = await conn.fetch(
-        f"SELECT DISTINCT q.subject_uuid FROM {space_id}_rdf_quad q "
+        f"SELECT DISTINCT q.subject_uuid FROM {space_prefix(space_id)}_rdf_quad q "
         f" WHERE q.predicate_uuid = ANY($1) "
         # POPULATION MEMBERSHIP, the same test the derivation and the probe
         # apply. Seeding on `hasKGEntityType` alone would be BROADER than the
         # derivation, so a subject carrying that predicate without being a
         # KGEntity would be selected every cycle, derive nothing, and make the
         # caller report "cannot converge" forever.
-        f"   AND EXISTS (SELECT 1 FROM {space_id}_rdf_quad v "
+        f"   AND EXISTS (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad v "
         f"                WHERE v.subject_uuid = q.subject_uuid "
         f"                  AND v.context_uuid = q.context_uuid "
         f"                  AND v.predicate_uuid = $2 "
@@ -458,7 +459,7 @@ async def entity_prop_sort_drift(conn, space_id: str,
         f"SELECT count(*) FROM ({_select_rows(space_id, 'TRUE')}) d",
         *_args(), timeout=timeout)
     actual = await conn.fetchval(
-        f"SELECT count(*) FROM {space_id}_entity_prop_sort", timeout=timeout)
+        f"SELECT count(*) FROM {space_prefix(space_id)}_entity_prop_sort", timeout=timeout)
     return int(expected or 0), int(actual or 0)
 
 
@@ -510,7 +511,7 @@ async def entity_prop_sort_coverage(conn, space_id: str, limit: int = 5,
     # COUNTED IN (entity, context, property) PAIRS SINCE `issues/194`, not in
     # entities: the per-entity form reported 0 gaps and every type COMPLETE on a
     # table missing 329,235 rows.
-    _present = (f"EXISTS (SELECT 1 FROM {space_id}_entity_prop_sort f"
+    _present = (f"EXISTS (SELECT 1 FROM {space_prefix(space_id)}_entity_prop_sort f"
                 f"  WHERE f.entity_uuid = p.entity_uuid"
                 f"    AND f.context_uuid = p.context_uuid"
                 f"    AND f.property_uuid = p.property_uuid)")
@@ -522,11 +523,11 @@ async def entity_prop_sort_coverage(conn, space_id: str, limit: int = 5,
                    q.subject_uuid   AS entity_uuid,
                    q.context_uuid   AS context_uuid,
                    q.predicate_uuid AS property_uuid
-              FROM {space_id}_rdf_quad q
+              FROM {space_prefix(space_id)}_rdf_quad q
               -- The type comes from the entity's own `hasKGEntityType`, which is
               -- itself one of the indexed properties, so every entity in the
               -- denominator has at least one pair due.
-              JOIN {space_id}_rdf_quad et
+              JOIN {space_prefix(space_id)}_rdf_quad et
                 ON et.subject_uuid = q.subject_uuid
                AND et.predicate_uuid = $1
              WHERE q.predicate_uuid = ANY($4)
@@ -534,7 +535,7 @@ async def entity_prop_sort_coverage(conn, space_id: str, limit: int = 5,
                -- sortable predicate would inflate the denominator and report a
                -- permanent shortfall the backfill can never close.
                AND EXISTS (
-                   SELECT 1 FROM {space_id}_rdf_quad v
+                   SELECT 1 FROM {space_prefix(space_id)}_rdf_quad v
                     WHERE v.subject_uuid = q.subject_uuid
                       AND v.context_uuid = q.context_uuid
                       AND v.predicate_uuid = $2
@@ -544,7 +545,7 @@ async def entity_prop_sort_coverage(conn, space_id: str, limit: int = 5,
                count(*) FILTER (WHERE {_present}) AS in_table,
                count(*) AS of_type
           FROM pairs p
-          JOIN {space_id}_term t ON t.term_uuid = p.ty
+          JOIN {space_prefix(space_id)}_term t ON t.term_uuid = p.ty
          GROUP BY 1, 2
         {_having}
          ORDER BY (count(*) - count(*) FILTER (WHERE {_present})) DESC

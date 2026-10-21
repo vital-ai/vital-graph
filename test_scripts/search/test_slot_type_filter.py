@@ -30,6 +30,7 @@ from vitalgraph.vectorization.fts_populator import (  # noqa: E402
     SLOT_TYPED_SUBJECTS_SQL,
     TYPED_SUBJECTS_SQL,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 KG_TEXT_SLOT = "http://vital.ai/ontology/haley-ai-kg#KGTextSlot"
 
@@ -52,7 +53,7 @@ def main() -> int:
         return 2
 
     slot_msg = f"{ns}:slot:MsgContent"
-    tables = {"rdf_quad": f"{space}_rdf_quad", "term": f"{space}_term"}
+    tables = {"rdf_quad": f"{space_prefix(space)}_rdf_quad", "term": f"{space_prefix(space)}_term"}
 
     import psycopg
 
@@ -64,7 +65,7 @@ def main() -> int:
 
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT DISTINCT context_uuid FROM {space}_rdf_quad LIMIT 2")
+            cur.execute(f"SELECT DISTINCT context_uuid FROM {space_prefix(space)}_rdf_quad LIMIT 2")
             ctxs = [r[0] for r in cur.fetchall()]
         if len(ctxs) != 1:
             print(f"  expected one context in {space}, found {len(ctxs)} — "
@@ -114,9 +115,9 @@ def main() -> int:
                 f"""
                 SELECT count(*) FROM ({pg(SLOT_TYPED_SUBJECTS_SQL)}) s
                 WHERE NOT EXISTS (
-                  SELECT 1 FROM {space}_rdf_quad q
-                  JOIN {space}_term tp ON tp.term_uuid = q.predicate_uuid
-                  JOIN {space}_term to_ ON to_.term_uuid = q.object_uuid
+                  SELECT 1 FROM {space_prefix(space)}_rdf_quad q
+                  JOIN {space_prefix(space)}_term tp ON tp.term_uuid = q.predicate_uuid
+                  JOIN {space_prefix(space)}_term to_ ON to_.term_uuid = q.object_uuid
                   WHERE q.subject_uuid = s.subject_uuid
                     AND tp.term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType'
                     AND to_.term_text = %s)

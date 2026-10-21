@@ -42,6 +42,7 @@ import logging
 from typing import Optional
 
 from .db_provider import bounded_lock_wait
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ async def _anti_join(space_id: str, type_uri: str, roles: tuple,
             if uri in ids:
                 continue
             ids[uri] = await conn.fetchval(
-                f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
+                f"SELECT term_uuid FROM {space_prefix(space_id)}_term WHERE term_text = $1",
                 uri)
     except Exception as exc:
         logger.debug("slot-type tautology: term resolution failed: %s", exc)
@@ -141,11 +142,11 @@ async def _anti_join(space_id: str, type_uri: str, roles: tuple,
 
     placeholders = ", ".join(f"${i + 3}" for i in range(len(role_ids)))
     sql = f"""SELECT count(*) FROM (
-                  SELECT 1 FROM {space_id}_rdf_quad q
+                  SELECT 1 FROM {space_prefix(space_id)}_rdf_quad q
                   WHERE q.predicate_uuid = $1
                     AND q.object_uuid IN ({placeholders})
                     AND NOT EXISTS (
-                      SELECT 1 FROM {space_id}_rdf_quad ty
+                      SELECT 1 FROM {space_prefix(space_id)}_rdf_quad ty
                       WHERE ty.subject_uuid = q.subject_uuid
                         AND ty.predicate_uuid = $2
                         AND ty.object_uuid = ${len(role_ids) + 3})
@@ -206,8 +207,8 @@ async def excludes_nothing(space_id: str, type_uri: str, roles: tuple,
     try:
         async with bounded_lock_wait(conn):
             pred_rows = await conn.fetchval(
-                f"""SELECT s.row_count FROM {space_id}_rdf_pred_stats s
-                    JOIN {space_id}_term t ON t.term_uuid = s.predicate_uuid
+                f"""SELECT s.row_count FROM {space_prefix(space_id)}_rdf_pred_stats s
+                    JOIN {space_prefix(space_id)}_term t ON t.term_uuid = s.predicate_uuid
                     WHERE t.term_text = $1""", SLOT_TYPE_URI)
     except Exception as exc:
         logger.debug("slot-type tautology: pred stat lookup failed: %s", exc)

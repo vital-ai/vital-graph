@@ -48,6 +48,7 @@ import logging
 from typing import Any, Dict, List
 
 from .sparql_sql_schema import SparqlSQLSchema
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +91,11 @@ async def enumerate_space_objects(conn, space_id: str) -> Dict[str, Any]:
                                          that only renamed tables
     """
     other_ids = [s for s in await _all_space_ids(conn) if s != space_id]
-    prefix = f"{space_id}_"
+    prefix = f"{space_prefix(space_id)}_"
     result: Dict[str, Any] = {
         "space_id": space_id,
-        "shadowed_by": sorted(s for s in other_ids if s.startswith(prefix)),
+        "shadowed_by": sorted(s for s in other_ids
+                              if space_prefix(s).startswith(prefix)),
         "shadowing_unknown": not other_ids,
     }
 

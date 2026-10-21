@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from db_connect import get_prod_db_impl, print_connection_info
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 async def main():
@@ -46,7 +47,7 @@ async def main():
             for row in rows:
                 term_table = row['table_name']
                 space_id = term_table.rsplit('_term', 1)[0]
-                quad_table = f"{space_id}_rdf_quad"
+                quad_table = f"{space_prefix(space_id)}_rdf_quad"
 
                 # Verify quad table exists
                 exists = await conn.fetchval("""
@@ -76,8 +77,8 @@ async def main():
                     continue
 
                 space_id = s['space_id']
-                quad_table = f"{space_id}_rdf_quad"
-                term_table = f"{space_id}_term"
+                quad_table = f"{space_prefix(space_id)}_rdf_quad"
+                term_table = f"{space_prefix(space_id)}_term"
 
                 print(f"\n{'=' * 70}")
                 print(f"Space: {space_id}  ({s['quad_count']:,} quads, {s['term_count']:,} terms)")
@@ -124,7 +125,7 @@ async def main():
 
                 # Edge / frame_entity table presence
                 for aux in ('edge', 'frame_entity', 'datatype', 'rdf_pred_stats'):
-                    aux_table = f"{space_id}_{aux}"
+                    aux_table = f"{space_prefix(space_id)}_{aux}"
                     exists = await conn.fetchval("""
                         SELECT 1 FROM information_schema.tables
                         WHERE table_schema = 'public' AND table_name = $1

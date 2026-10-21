@@ -25,8 +25,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import sys
 
-import asyncpg
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import asyncpg  # noqa: E402
+
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 # (old suffix on the TABLE name, new short name after the space id)
 RENAMES = [
@@ -56,7 +61,7 @@ async def spaces_with_old_names(conn) -> dict:
             space = name[:idx]
             if not name.startswith(space + suffix[:len(name) - idx]):
                 continue
-            new = f"idx_{space}_{short}"
+            new = f"idx_{space_prefix(space)}_{short}"
             if len(new.encode()) > PG_MAX or new in have:
                 continue
             out.setdefault(space, []).append((name, new))

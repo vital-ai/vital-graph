@@ -23,6 +23,7 @@ import pytest
 import pytest_asyncio
 
 from ai_haley_kg_domain.model.KGDocument import KGDocument
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.api,
@@ -57,8 +58,8 @@ def _doc(doc_type: str, name: str) -> KGDocument:
 
 async def _status(pg_conn, space, uri):
     return await pg_conn.fetchval(
-        f"SELECT t.term_text FROM {space}_rdf_quad q "
-        f"JOIN {space}_term t ON t.term_uuid = q.object_uuid "
+        f"SELECT t.term_text FROM {space_prefix(space)}_rdf_quad q "
+        f"JOIN {space_prefix(space)}_term t ON t.term_uuid = q.object_uuid "
         f"WHERE q.subject_uuid = vitalgraph_term_uuid($1, 'U') "
         f"AND q.predicate_uuid = vitalgraph_term_uuid($2, 'U')",
         uri, f"{HALEY}hasKGIndexStatusURI")
@@ -69,7 +70,7 @@ async def _segments(pg_conn, space, original_uri):
     `<original>_parent_<method>`, and so are the edges between them -- which
     are not documents and are never embedded, so they are excluded."""
     rows = await pg_conn.fetch(
-        f"SELECT term_text FROM {space}_term WHERE term_text LIKE $1 "
+        f"SELECT term_text FROM {space_prefix(space)}_term WHERE term_text LIKE $1 "
         f"AND term_text NOT LIKE '%\\_edge\\_%'",
         original_uri.replace("_", r"\_") + r"\_parent\_%")
     return [r["term_text"] for r in rows]
@@ -79,7 +80,7 @@ async def _vectors(pg_conn, space, uris):
     if not uris:
         return 0
     return await pg_conn.fetchval(
-        f"SELECT count(*) FROM {space}_vec_{INDEX_NAME} "
+        f"SELECT count(*) FROM {space_prefix(space)}_vec_{INDEX_NAME} "
         f"WHERE subject_uuid = ANY(SELECT vitalgraph_term_uuid(u, 'U') "
         f"FROM unnest($1::text[]) u)", list(uris))
 
@@ -299,15 +300,15 @@ async def _live(pg_conn, space, uris):
         return []
     rows = await pg_conn.fetch(
         f"SELECT DISTINCT u FROM unnest($1::text[]) u WHERE EXISTS ("
-        f"SELECT 1 FROM {space}_rdf_quad q "
+        f"SELECT 1 FROM {space_prefix(space)}_rdf_quad q "
         f"WHERE q.subject_uuid = vitalgraph_term_uuid(u, 'U'))", list(uris))
     return sorted(r["u"] for r in rows)
 
 
 async def _values(pg_conn, space, uri, prop):
     rows = await pg_conn.fetch(
-        f"SELECT t.term_text FROM {space}_rdf_quad q "
-        f"JOIN {space}_term t ON t.term_uuid = q.object_uuid "
+        f"SELECT t.term_text FROM {space_prefix(space)}_rdf_quad q "
+        f"JOIN {space_prefix(space)}_term t ON t.term_uuid = q.object_uuid "
         f"WHERE q.subject_uuid = vitalgraph_term_uuid($1, 'U') "
         f"AND q.predicate_uuid = vitalgraph_term_uuid($2, 'U')", uri, prop)
     return sorted(r["term_text"] for r in rows)
@@ -316,7 +317,7 @@ async def _values(pg_conn, space, uri, prop):
 async def _completed_jobs(pg_conn, space, uri) -> int:
     """From the job table: the status endpoint returns a document's LATEST job."""
     return await pg_conn.fetchval(
-        f"SELECT count(*) FROM {space}_segmentation_jobs "
+        f"SELECT count(*) FROM {space_prefix(space)}_segmentation_jobs "
         f"WHERE document_uri = $1 AND status = 'completed'", uri)
 
 

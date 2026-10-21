@@ -14,6 +14,7 @@ import uuid
 import pytest
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -41,11 +42,11 @@ def _entity(name: str, extra=()):
 
 async def _queued(conn, space):
     return {(r["context_uuid"], r["subject_uuid"]): r["generation"]
-            for r in await conn.fetch(f"SELECT * FROM {space}_index_sync_queue")}
+            for r in await conn.fetch(f"SELECT * FROM {space_prefix(space)}_index_sync_queue")}
 
 
 async def _clear(conn, space):
-    await conn.execute(f"DELETE FROM {space}_index_sync_queue")
+    await conn.execute(f"DELETE FROM {space_prefix(space)}_index_sync_queue")
 
 
 async def test_new_spaces_have_the_trigger(test_space, pg_conn):

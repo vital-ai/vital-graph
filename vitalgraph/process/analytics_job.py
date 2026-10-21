@@ -14,6 +14,7 @@ import logging
 import os
 import time
 from typing import Any, Dict, List, Optional
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +158,7 @@ class AnalyticsJob:
                 # Verify space tables exist
                 table_exists = await conn.fetchval(
                     "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
-                    f"{space_id}_rdf_quad"
+                    f"{space_prefix(space_id)}_rdf_quad"
                 )
                 if not table_exists:
                     logger.warning("AnalyticsJob: space tables not found for %s, skipping", space_id)
@@ -187,7 +188,7 @@ class AnalyticsJob:
                     if known is None:
                         return {"space_id": space_id, "error": f"Graph not found: {graph_uri}"}
                     graph_ctx = await conn.fetchval(
-                        f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
+                        f"SELECT term_uuid FROM {space_prefix(space_id)}_term WHERE term_text = $1",
                         graph_uri
                     )
                     if graph_ctx is None:
@@ -240,8 +241,8 @@ class AnalyticsJob:
 
     async def _compute_entity_analytics(self, conn, space_id: str, graph_ctx=None) -> Dict[str, Any]:
         """Compute entity type distribution and frame relationship stats."""
-        t_quad = f"{space_id}_rdf_quad"
-        t_term = f"{space_id}_term"
+        t_quad = f"{space_prefix(space_id)}_rdf_quad"
+        t_term = f"{space_prefix(space_id)}_term"
         gf = self._graph_filter(graph_ctx)
 
         # Type distribution. `rdf_stats` ALREADY HOLDS THIS EXACTLY.
@@ -289,7 +290,7 @@ class AnalyticsJob:
         try:
             type_rows = await conn.fetch(f"""
                 SELECT o.term_text AS type_uri, sum(s.row_count)::bigint AS cnt
-                FROM {space_id}_rdf_stats s
+                FROM {space_prefix(space_id)}_rdf_stats s
                 JOIN {t_term} p ON p.term_uuid = s.predicate_uuid
                 JOIN {t_term} o ON o.term_uuid = s.object_uuid
                 WHERE p.term_text = $1 AND o.term_text LIKE '%Entity%'{sf}
@@ -349,7 +350,7 @@ class AnalyticsJob:
             if _ef is not None:
                 with_frames_count = await conn.fetchval(
                     f"SELECT COUNT(DISTINCT source_node_uuid) "
-                    f"  FROM {space_id}_edge WHERE edge_type_uuid = $1{ef_gf}",
+                    f"  FROM {space_prefix(space_id)}_edge WHERE edge_type_uuid = $1{ef_gf}",
                     _ef) or 0
         except Exception as exc:
             logger.debug("analytics: edge-table frame count unavailable for "
@@ -385,7 +386,7 @@ class AnalyticsJob:
                     f" AND term_type = 'U' LIMIT 1", _EDGE_HAS_ENTITY_KG_FRAME)
                 if _ef2 is not None:
                     total_frame_edges = await conn.fetchval(
-                        f"SELECT COUNT(*) FROM {space_id}_edge "
+                        f"SELECT COUNT(*) FROM {space_prefix(space_id)}_edge "
                         f" WHERE edge_type_uuid = $1{ef_gf}", _ef2) or 0
             except Exception:
                 total_frame_edges = 0
@@ -414,8 +415,8 @@ class AnalyticsJob:
 
     async def _compute_frame_analytics(self, conn, space_id: str, graph_ctx=None) -> Dict[str, Any]:
         """Compute frame and slot type distributions."""
-        t_quad = f"{space_id}_rdf_quad"
-        t_term = f"{space_id}_term"
+        t_quad = f"{space_prefix(space_id)}_rdf_quad"
+        t_term = f"{space_prefix(space_id)}_term"
         gf = self._graph_filter(graph_ctx)
 
         # SIZE GUARD, checked before anything expensive runs.
@@ -536,8 +537,8 @@ class AnalyticsJob:
 
     async def _compute_relation_analytics(self, conn, space_id: str, graph_ctx=None) -> Dict[str, Any]:
         """Compute edge type distribution and classification."""
-        t_quad = f"{space_id}_rdf_quad"
-        t_term = f"{space_id}_term"
+        t_quad = f"{space_prefix(space_id)}_rdf_quad"
+        t_term = f"{space_prefix(space_id)}_term"
         gf = self._graph_filter(graph_ctx)
         # `rdf_stats` is aliased `s` in the edge-type query below; the graph
         # filter has to name that alias rather than the quad table's default.
@@ -558,7 +559,7 @@ class AnalyticsJob:
         try:
             edge_rows = await conn.fetch(f"""
                 SELECT o.term_text AS type_uri, sum(s.row_count)::bigint AS cnt
-                FROM {space_id}_rdf_stats s
+                FROM {space_prefix(space_id)}_rdf_stats s
                 JOIN {t_term} p ON p.term_uuid = s.predicate_uuid
                 JOIN {t_term} o ON o.term_uuid = s.object_uuid
                 WHERE p.term_text = $1 AND o.term_text LIKE '%Edge\\_%'{sf}
@@ -599,7 +600,7 @@ class AnalyticsJob:
         # Most connected entities (top 10 by total edge count from edge table)
         most_connected = []
         try:
-            t_edge = f"{space_id}_edge"
+            t_edge = f"{space_prefix(space_id)}_edge"
             connected_rows = await conn.fetch(f"""
                 SELECT term.term_text AS entity_uri, edge_count
                 FROM (
@@ -643,8 +644,8 @@ class AnalyticsJob:
         For large spaces (>5M quads), skips the expensive GROUP BY queries
         and returns only the distinct predicate count (which uses an index scan).
         """
-        t_quad = f"{space_id}_rdf_quad"
-        t_term = f"{space_id}_term"
+        t_quad = f"{space_prefix(space_id)}_rdf_quad"
+        t_term = f"{space_prefix(space_id)}_term"
         gf = self._graph_filter(graph_ctx)
 
         # Quick row estimate to decide whether full analytics is feasible
@@ -677,7 +678,7 @@ class AnalyticsJob:
         if not gf and quad_estimate > _FRAME_ANALYTICS_MAX_QUADS:
             try:
                 n = await conn.fetchval(
-                    f"SELECT count(*) FROM {space_id}_rdf_pred_stats WHERE row_count > 0")
+                    f"SELECT count(*) FROM {space_prefix(space_id)}_rdf_pred_stats WHERE row_count > 0")
                 if n:
                     distinct_pred_count, pred_count_source = n, "rdf_pred_stats"
             except Exception as exc:
@@ -735,7 +736,7 @@ class AnalyticsJob:
                 COALESCE(dt.datatype_uri, 'xsd:string') AS type_uri,
                 COUNT(*) AS cnt
             FROM {t_term} t
-            LEFT JOIN {space_id}_datatype dt ON t.datatype_id = dt.datatype_id
+            LEFT JOIN {space_prefix(space_id)}_datatype dt ON t.datatype_id = dt.datatype_id
             WHERE t.term_type = 'L'
             GROUP BY dt.datatype_uri
             ORDER BY cnt DESC
@@ -767,17 +768,15 @@ class AnalyticsJob:
         explicitly managed and removing one is an operator's decision, not a
         background job's.
 
-        Filtered in the same query rather than by probing each space, so this
-        stays one round trip.
+        Two round trips, not one per space: the quad table's name comes from
+        `space_prefix`, so it is computed here rather than in SQL.
         """
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT s.space_id FROM space s
-                WHERE EXISTS (
-                    SELECT 1 FROM pg_tables t
-                    WHERE t.schemaname = 'public'
-                      AND t.tablename = s.space_id || '_rdf_quad')
-                ORDER BY s.space_id
-                """)
-        return [row["space_id"] for row in rows]
+            ids = [r["space_id"] for r in await conn.fetch(
+                "SELECT space_id FROM space ORDER BY space_id")]
+            quad = {sid: f"{space_prefix(sid)}_rdf_quad" for sid in ids}
+            present = {r["tablename"] for r in await conn.fetch(
+                "SELECT tablename FROM pg_tables "
+                "WHERE schemaname = 'public' AND tablename = ANY($1::text[])",
+                list(quad.values()))}
+        return [sid for sid in ids if quad[sid] in present]

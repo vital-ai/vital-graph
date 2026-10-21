@@ -31,13 +31,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_drop_frame_entity")
 
 
 async def drop_space(conn, space_id: str, apply: bool, force: bool) -> dict:
-    t_fe = f"{space_id}_frame_entity"
-    t_fs = f"{space_id}_frame_slot"
+    t_fe = f"{space_prefix(space_id)}_frame_entity"
+    t_fs = f"{space_prefix(space_id)}_frame_slot"
 
     if not await conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1", t_fe):

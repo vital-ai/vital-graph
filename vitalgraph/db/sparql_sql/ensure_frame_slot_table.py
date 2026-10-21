@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ async def ensure_frame_slot_table(space_id: str, conn=None,
 
     from . import db_provider as db
 
-    table_name = f"{space_id}_frame_slot"
+    table_name = f"{space_prefix(space_id)}_frame_slot"
     try:
         exists = await db.execute_query(
             "SELECT 1 FROM information_schema.tables "

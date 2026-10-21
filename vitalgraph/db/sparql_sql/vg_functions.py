@@ -40,6 +40,7 @@ from typing import List, Optional, Tuple
 from ..jena_sparql.jena_types import (
     ExprFunction, ExprVar, ExprValue, LiteralNode,
 )
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -591,7 +592,7 @@ def _context_clause(ctx) -> str:
     if not graph_uri:
         return ""
     # Resolve graph URI to its UUID via a scalar subquery on term table
-    term_table = f"{ctx.space_id}_term"
+    term_table = f"{space_prefix(ctx.space_id)}_term"
     return (
         f" AND context_uuid = (SELECT term_uuid FROM {term_table} "
         f"WHERE term_text = '{graph_uri}' AND term_type = 'U' LIMIT 1)"
@@ -632,7 +633,7 @@ def vector_similarity_sql(
         return None, None
 
     resolved_vec_index = _resolve_index_name(vargs.index_name, 'vector', ctx)
-    vec_table = f"{ctx.space_id}_vec_{resolved_vec_index}"
+    vec_table = f"{space_prefix(ctx.space_id)}_vec_{resolved_vec_index}"
     vec_request = None
 
     if vargs.vector_literal is not None:
@@ -729,7 +730,7 @@ def vector_top_k_driving_sql(
         return None
 
     resolved_vec_index = _resolve_index_name(vargs.index_name, 'vector', ctx)
-    vec_table = f"{ctx.space_id}_vec_{resolved_vec_index}"
+    vec_table = f"{space_prefix(ctx.space_id)}_vec_{resolved_vec_index}"
     vec_request = None
 
     if vargs.vector_literal is not None:
@@ -810,7 +811,7 @@ def text_match_sql(expr: ExprFunction, ctx) -> Optional[str]:
     if uuid_col is None:
         return None
     resolved = _resolve_index_name(targs.index_name, 'fts', ctx)
-    fts_table = f"{ctx.space_id}_fts_{resolved}"
+    fts_table = f"{space_prefix(ctx.space_id)}_fts_{resolved}"
     languages = _resolve_fts_languages(resolved, ctx)
     safe_text = targs.search_text.replace("'", "''")
     tsquery = _build_tsquery_expr(languages, safe_text)
@@ -865,7 +866,7 @@ def text_top_k_driving_sql(
         return None
 
     resolved_fts_index = _resolve_index_name(targs.index_name, 'fts', ctx)
-    fts_table = f"{ctx.space_id}_fts_{resolved_fts_index}"
+    fts_table = f"{space_prefix(ctx.space_id)}_fts_{resolved_fts_index}"
     uuid_col = _resolve_uuid_col(targs.entity_var, ctx)
     if uuid_col is None:
         return None
@@ -1032,7 +1033,7 @@ def text_search_sql(
         return None
 
     resolved_fts_index = _resolve_index_name(targs.index_name, 'fts', ctx)
-    fts_table = f"{ctx.space_id}_fts_{resolved_fts_index}"
+    fts_table = f"{space_prefix(ctx.space_id)}_fts_{resolved_fts_index}"
     ctx_clause = _context_clause(ctx)
     safe_text = targs.search_text.replace("'", "''")
     languages = _resolve_fts_languages(resolved_fts_index, ctx)
@@ -1098,8 +1099,8 @@ def hybrid_search_sql(
 
     resolved_fts_index = _resolve_index_name(targs.index_name, 'fts', ctx)
     resolved_vec_index = _resolve_index_name(targs.index_name, 'vector', ctx)
-    fts_table = f"{ctx.space_id}_fts_{resolved_fts_index}"
-    vec_table = f"{ctx.space_id}_vec_{resolved_vec_index}"
+    fts_table = f"{space_prefix(ctx.space_id)}_fts_{resolved_fts_index}"
+    vec_table = f"{space_prefix(ctx.space_id)}_vec_{resolved_vec_index}"
     ctx_clause = _context_clause(ctx)
     # Build context clause variants for the two table aliases
     ctx_clause_f = ctx_clause.replace('context_uuid', 'f.context_uuid') if ctx_clause else ''
@@ -1178,7 +1179,7 @@ def geo_distance_sql(expr: ExprFunction, ctx) -> Optional[str]:
     if uuid_col is None:
         return None
 
-    geo_table = f"{ctx.space_id}_geo"
+    geo_table = f"{space_prefix(ctx.space_id)}_geo"
 
     # ST_Distance with geography type returns meters
     # Use MIN to return closest distance when subject has multiple geo rows
@@ -1206,7 +1207,7 @@ def within_radius_sql(expr: ExprFunction, ctx) -> Optional[str]:
     if uuid_col is None:
         return None
 
-    geo_table = f"{ctx.space_id}_geo"
+    geo_table = f"{space_prefix(ctx.space_id)}_geo"
 
     # ST_DWithin uses the GiST index for efficient spatial filtering
     ctx_clause = _context_clause(ctx)
@@ -1236,7 +1237,7 @@ def within_bounds_sql(expr: ExprFunction, ctx) -> Optional[str]:
     if uuid_col is None:
         return None
 
-    geo_table = f"{ctx.space_id}_geo"
+    geo_table = f"{space_prefix(ctx.space_id)}_geo"
     ctx_clause = _context_clause(ctx)
 
     # ST_MakeEnvelope(xmin, ymin, xmax, ymax, srid)
@@ -1267,7 +1268,7 @@ def within_polygon_sql(expr: ExprFunction, ctx) -> Optional[str]:
     if uuid_col is None:
         return None
 
-    geo_table = f"{ctx.space_id}_geo"
+    geo_table = f"{space_prefix(ctx.space_id)}_geo"
     ctx_clause = _context_clause(ctx)
     safe_geom = pargs.wkt_or_geojson.replace("'", "''")
 
@@ -1423,7 +1424,7 @@ def multi_vector_similarity_sql(
     cte_parts: List[str] = []
     n = len(mvargs.triplets)
     for i, triplet in enumerate(mvargs.triplets):
-        vec_table = f"{ctx.space_id}_vec_{resolved_triplet_indexes[i]}"
+        vec_table = f"{space_prefix(ctx.space_id)}_vec_{resolved_triplet_indexes[i]}"
         emb = embedding_sqls[i]
         cte_parts.append(
             f"__mv_v{i} AS (\n"

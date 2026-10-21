@@ -58,6 +58,7 @@ from .sort_value_key import VALUE_KEY_CHARS, fits_value_key
 # of which values this store considers dates, and the two paths must agree about
 # that or the fast one is not answering the same question.
 from .filter_pushdown import _ISO_RE, _TZ_RE, _TZ_SQL_RE
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +302,7 @@ def _build(space_id: str, graph_uri: str, criteria):
     if parsed is None:
         return None
     args = [_term_uuid(graph_uri), _term_uuid(criteria.entity_type)]
-    t = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
     arms = []
     for i, (path, slot_type, lane, val) in enumerate(parsed):
         # `val` is already the driver argument: `_eq_criteria` puts every value
@@ -370,7 +371,7 @@ async def fast_slot_filter_page(
         return None
     body, args = built
     n = len(args)
-    t_term = f"{space_id}_term"
+    t_term = f"{space_prefix(space_id)}_term"
     try:
         rows = await conn.fetch(f"""
             SELECT tm.term_text
@@ -449,7 +450,7 @@ async def _space_has_no_slots(conn, space_id: str) -> bool:
     from .sync_entity_slot_sort import _SLOT_TYPE as slot_type
     try:
         found = await conn.fetchval(
-            f"SELECT EXISTS (SELECT 1 FROM {space_id}_rdf_quad "
+            f"SELECT EXISTS (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad "
             f" WHERE predicate_uuid = $1)", slot_type)
         return not found
     except Exception as exc:

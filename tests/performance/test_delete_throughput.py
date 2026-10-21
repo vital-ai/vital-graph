@@ -38,6 +38,7 @@ import pytest_asyncio
 from rdflib import URIRef
 
 from .conftest import skip_no_pg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 # Mutates: creates a space, writes quads, deletes them. Ingest tier.
 pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, skip_no_pg,
@@ -109,17 +110,17 @@ def _edges(graph, tag, n):
 
 
 async def _edge_rows(conn, sid):
-    return await conn.fetchval(f"SELECT count(*) FROM {sid}_edge")
+    return await conn.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_edge")
 
 
 async def _orphans(conn, sid):
     """Edge rows whose defining quads are gone. Referential, never by count —
     an orphan is an EXTRA row, so a count check reads it as healthy."""
     return await conn.fetchval(f"""
-        SELECT count(*) FROM {sid}_edge e
+        SELECT count(*) FROM {space_prefix(sid)}_edge e
         WHERE NOT EXISTS (
-            SELECT 1 FROM {sid}_rdf_quad q
-            JOIN {sid}_term p ON p.term_uuid = q.predicate_uuid
+            SELECT 1 FROM {space_prefix(sid)}_rdf_quad q
+            JOIN {space_prefix(sid)}_term p ON p.term_uuid = q.predicate_uuid
             WHERE q.subject_uuid = e.edge_uuid
               AND q.context_uuid = e.context_uuid
               AND p.term_text = '{CORE}hasEdgeSource')""")

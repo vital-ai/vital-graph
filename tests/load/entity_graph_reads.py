@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from itertools import cycle
 from typing import Iterator, List, Optional
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 async def sample_entity_uris(conn, space_id: str, limit: int = 20) -> List[str]:
@@ -33,8 +34,8 @@ async def sample_entity_uris(conn, space_id: str, limit: int = 20) -> List[str]:
     """
     rows = await conn.fetch(
         f"SELECT DISTINCT t.term_text"
-        f"  FROM {space_id}_entity_slot_sort s"
-        f"  JOIN {space_id}_term t ON t.term_uuid = s.entity_uuid"
+        f"  FROM {space_prefix(space_id)}_entity_slot_sort s"
+        f"  JOIN {space_prefix(space_id)}_term t ON t.term_uuid = s.entity_uuid"
         f" LIMIT {int(limit)}")
     return [r[0] for r in rows]
 

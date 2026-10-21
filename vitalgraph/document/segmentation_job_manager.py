@@ -15,6 +15,7 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class SegmentationJobManager:
     def __init__(self, conn, space_id: str):
         self.conn = conn
         self.space_id = space_id
-        self._table = f"{space_id}_segmentation_jobs"
+        self._table = f"{space_prefix(space_id)}_segmentation_jobs"
 
     # ------------------------------------------------------------------
     # Table management
@@ -173,7 +174,7 @@ class SegmentationJobManager:
     @property
     def _notify_channel(self) -> str:
         """PostgreSQL NOTIFY channel name for this space's jobs."""
-        return f"{self.space_id}_seg_jobs"
+        return f"{space_prefix(self.space_id)}_seg_jobs"
 
     @staticmethod
     def compute_content_hash(doc_properties: dict) -> str:

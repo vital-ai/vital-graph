@@ -35,6 +35,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import pg_kwargs  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 
 def pg_env() -> dict:
@@ -46,7 +47,7 @@ def pg_env() -> dict:
 async def migrate_space(conn, space: str, dry_run: bool) -> dict:
     from vitalgraph.db.sparql_sql.sync_edge_table import _VITALTYPE_UUID
 
-    t_edge, t_quad = f"{space}_edge", f"{space}_rdf_quad"
+    t_edge, t_quad = f"{space_prefix(space)}_edge", f"{space_prefix(space)}_rdf_quad"
 
     exists = await conn.fetchval(
         "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
@@ -80,9 +81,9 @@ async def migrate_space(conn, space: str, dry_run: bool) -> dict:
     """, _VITALTYPE_UUID)
 
     for stmt in (
-        f"CREATE INDEX IF NOT EXISTS idx_{space}_edge_type_dst "
+        f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space)}_edge_type_dst "
         f"ON {t_edge} (edge_type_uuid, dest_node_uuid)",
-        f"CREATE INDEX IF NOT EXISTS idx_{space}_edge_type_src "
+        f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space)}_edge_type_src "
         f"ON {t_edge} (edge_type_uuid, source_node_uuid)",
     ):
         await conn.execute(stmt)

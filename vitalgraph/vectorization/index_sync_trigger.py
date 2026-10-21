@@ -30,16 +30,17 @@ from __future__ import annotations
 import time
 from contextlib import asynccontextmanager
 from typing import Dict, List, Tuple
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 GUC = "vitalgraph.index_sync"
 
 
 def function_name(space_id: str) -> str:
-    return f"{space_id}_isq_capture"
+    return f"{space_prefix(space_id)}_isq_capture"
 
 
 def trigger_names(space_id: str) -> Tuple[str, str]:
-    return f"trg_{space_id}_isq_ins", f"trg_{space_id}_isq_del"
+    return f"trg_{space_prefix(space_id)}_isq_ins", f"trg_{space_prefix(space_id)}_isq_del"
 
 
 def create_sql(space_id: str) -> List[str]:
@@ -54,7 +55,7 @@ def create_sql(space_id: str) -> List[str]:
     """
     fn = function_name(space_id)
     ins, dele = trigger_names(space_id)
-    quad = f"{space_id}_rdf_quad"
+    quad = f"{space_prefix(space_id)}_rdf_quad"
     return [
         f"""CREATE OR REPLACE FUNCTION {fn}() RETURNS trigger
             LANGUAGE plpgsql AS $isq$

@@ -19,6 +19,7 @@ from .conftest import skip_no_infra, TEST_SPACE_PREFIX
 from vitalgraph.db.sparql_sql.bulk_export import (
     export_space, import_space, export_space_to_nquads, read_export_manifest)
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
@@ -43,7 +44,7 @@ async def _counts(conn, sid):
 
 async def _quad_uuids(conn, sid):
     return {r["quad_uuid"] for r in
-            await conn.fetch(f"SELECT quad_uuid FROM {sid}_rdf_quad")}
+            await conn.fetch(f"SELECT quad_uuid FROM {space_prefix(sid)}_rdf_quad")}
 
 
 async def test_export_import_round_trip(space_impl, two_spaces, tmp_path):

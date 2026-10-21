@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse, asyncio, os, statistics, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 MOD_DT = "http://vital.ai/ontology/vital#hasObjectModificationDateTime"
 
@@ -41,11 +42,11 @@ SHAPES = {
 
 
 def build(shape: str, space: str, prop_uuid: str) -> str:
-    sql = SHAPES[shape].format(fts=f"{space}_fts_message_content", ess=f"{space}_entity_slot_sort")
+    sql = SHAPES[shape].format(fts=f"{space_prefix(space)}_fts_message_content", ess=f"{space_prefix(space)}_entity_slot_sort")
     if shape == "C_entity_dt":
         sql = sql.replace(
             "WHERE f.tsv",
-            f"JOIN {space}_entity_prop_sort ps ON ps.entity_uuid = ess.entity_uuid "
+            f"JOIN {space_prefix(space)}_entity_prop_sort ps ON ps.entity_uuid = ess.entity_uuid "
             f"AND ps.context_uuid = ess.context_uuid AND ps.property_uuid = '{prop_uuid}'::uuid "
             "WHERE f.tsv")
     return sql

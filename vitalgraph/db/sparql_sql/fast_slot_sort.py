@@ -45,6 +45,7 @@ from __future__ import annotations
 import logging
 import uuid
 from typing import List, Optional
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -342,7 +343,7 @@ def _prop_filter_exists(space_id: str, props, args: list) -> str:
     which are opaque at plan time; as bound parameters the estimate is 8,666
     against 8,755 actual.
     """
-    q = f"{space_id}_rdf_quad"
+    q = f"{space_prefix(space_id)}_rdf_quad"
     out = []
     for i, (prop_uri, val) in enumerate(props):
         # INLINED AS LITERALS, NOT BOUND AS PARAMETERS -- deliberately, and it is
@@ -372,7 +373,7 @@ def _prop_filter_exists(space_id: str, props, args: list) -> str:
         a = f"p{i}"
         out.append(
             f"AND EXISTS (SELECT 1 FROM {q} {a}"
-            f" WHERE {a}.subject_uuid = {space_id}_entity_slot_sort.entity_uuid"
+            f" WHERE {a}.subject_uuid = {space_prefix(space_id)}_entity_slot_sort.entity_uuid"
             f"   AND {a}.context_uuid = $1"
             f"   AND {a}.predicate_uuid = '{prop_u}'::uuid"
             f"   AND {a}.object_uuid = '{val_u}'::uuid)")
@@ -411,8 +412,8 @@ def _grouped_prop(space_id: str, graph_uri: str, criteria, keys):
     """
     from .fast_prop_sort import _DATATYPES, _SORT_LANE
 
-    t = f"{space_id}_entity_prop_sort"
-    ess = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_prop_sort"
+    ess = f"{space_prefix(space_id)}_entity_slot_sort"
     args = [_term_uuid(graph_uri), _term_uuid(criteria.entity_type)]
     prop_ph = []
     for k in keys:
@@ -460,7 +461,7 @@ def _grouped(space_id: str, graph_uri: str, criteria, keys):
     pipeline drops such an entity too. An outer join here would return rows the
     query being imitated does not.
     """
-    t = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
     args = [_term_uuid(graph_uri), _term_uuid(criteria.entity_type),
             [_term_uuid(u) for u in keys[0].frame_path]]
     slot_ph = []
@@ -510,7 +511,7 @@ async def fast_slot_sort_page(
     build = _grouped_prop if is_prop_sort(keys) else _grouped
     t, args, sel, where, having, order = build(
         space_id, graph_uri, criteria, keys)
-    t_term = f"{space_id}_term"
+    t_term = f"{space_prefix(space_id)}_term"
     n = len(args)
     tail = ", ".join(order)
 

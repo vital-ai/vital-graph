@@ -16,6 +16,7 @@ import time
 from typing import Any, Dict, List, Optional
 from ..connection_config import require
 from ...utils.background import BackgroundTasks
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -128,13 +129,13 @@ async def maybe_analyze(
         return False
 
     tables = [
-        f"{space_id}_rdf_quad",
-        f"{space_id}_term",
-        f"{space_id}_edge",
-        f"{space_id}_frame_slot",
-        f"{space_id}_rdf_pred_stats",
-        f"{space_id}_rdf_stats",
-        f"{space_id}_datatype",
+        f"{space_prefix(space_id)}_rdf_quad",
+        f"{space_prefix(space_id)}_term",
+        f"{space_prefix(space_id)}_edge",
+        f"{space_prefix(space_id)}_frame_slot",
+        f"{space_prefix(space_id)}_rdf_pred_stats",
+        f"{space_prefix(space_id)}_rdf_stats",
+        f"{space_prefix(space_id)}_datatype",
     ]
     # NON-BLOCKING EXCLUSION, AND SKIP RATHER THAN QUEUE (`issues/230`).
     #

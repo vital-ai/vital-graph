@@ -34,6 +34,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from .sort_value_key import fits_value_key
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ async def frame_prop_sort_table_present(conn, space_id: str) -> bool:
     if _frame_prop_sort_present.get(space_id):
         return True
     present = await conn.fetchval(
-        "SELECT to_regclass($1)", f"public.{space_id}_frame_prop_sort") is not None
+        "SELECT to_regclass($1)", f"public.{space_prefix(space_id)}_frame_prop_sort") is not None
     if present:
         _frame_prop_sort_present[space_id] = True
     return present
@@ -176,7 +177,7 @@ def build_frame_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[st
     the same index the traversal planner uses. It INTERSECTs with the property
     criteria like any other conjunct.
     """
-    t = f"{space_id}_frame_prop_sort"
+    t = f"{space_prefix(space_id)}_frame_prop_sort"
     params: List[Any] = []
     fixed = 2 if typed else 1
     def p(v):
@@ -224,7 +225,7 @@ def build_frame_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[st
         # any special case downstream.
         pe = p(_u(CHILD_FRAME_EDGE_URI))
         ps = p(_u(parent_uri))
-        parts.append(f"SELECT dest_node_uuid AS frame_uuid FROM {space_id}_edge "
+        parts.append(f"SELECT dest_node_uuid AS frame_uuid FROM {space_prefix(space_id)}_edge "
                      f"WHERE edge_type_uuid = {pe} AND source_node_uuid = {ps} "
                      f"AND context_uuid = $1")
 

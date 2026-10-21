@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -97,9 +98,9 @@ class SearchMappingManager:
     def __init__(self, conn, space_id: str):
         self.conn = conn
         self.space_id = space_id
-        self._mapping_table = f"{space_id}_search_mapping"
-        self._index_table = f"{space_id}_search_mapping_index"
-        self._property_table = f"{space_id}_search_mapping_property"
+        self._mapping_table = f"{space_prefix(space_id)}_search_mapping"
+        self._index_table = f"{space_prefix(space_id)}_search_mapping_index"
+        self._property_table = f"{space_prefix(space_id)}_search_mapping_property"
 
     # ------------------------------------------------------------------
     # Mapping CRUD

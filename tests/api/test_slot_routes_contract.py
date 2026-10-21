@@ -27,6 +27,7 @@ from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.api, pytest.mark.asyncio(loop_scope="session")]
 
@@ -75,14 +76,14 @@ async def _standalone_frame(vg_client, space, graph):
 
 async def _quads(pg_conn, space, *uris):
     return await pg_conn.fetchval(
-        f"SELECT count(*) FROM {space}_rdf_quad WHERE subject_uuid = ANY("
+        f"SELECT count(*) FROM {space_prefix(space)}_rdf_quad WHERE subject_uuid = ANY("
         f"ARRAY(SELECT vitalgraph_term_uuid(u, 'U') FROM unnest($1::text[]) u))",
         list(uris))
 
 
 async def _edges_into(pg_conn, space, uri):
     return await pg_conn.fetchval(
-        f"SELECT count(*) FROM {space}_rdf_quad "
+        f"SELECT count(*) FROM {space_prefix(space)}_rdf_quad "
         f"WHERE predicate_uuid = vitalgraph_term_uuid($1, 'U') "
         f"AND object_uuid = vitalgraph_term_uuid($2, 'U')",
         "http://vital.ai/ontology/vital-core#hasEdgeDestination", uri)
@@ -90,8 +91,8 @@ async def _edges_into(pg_conn, space, uri):
 
 async def _value(pg_conn, space, slot_uri):
     return await pg_conn.fetchval(
-        f"SELECT tt.term_text FROM {space}_rdf_quad q "
-        f"JOIN {space}_term tt ON tt.term_uuid = q.object_uuid "
+        f"SELECT tt.term_text FROM {space_prefix(space)}_rdf_quad q "
+        f"JOIN {space_prefix(space)}_term tt ON tt.term_uuid = q.object_uuid "
         f"WHERE q.subject_uuid = vitalgraph_term_uuid($1, 'U') "
         f"AND q.predicate_uuid = vitalgraph_term_uuid($2, 'U')",
         slot_uri, "http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue")

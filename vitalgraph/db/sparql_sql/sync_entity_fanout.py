@@ -151,6 +151,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -185,8 +186,8 @@ async def resync_entity_fanout(conn, space_id: str,
     entities are one step of a walk, not two, and it is the walk this exists to
     describe.
     """
-    t_fe = f"{space_id}_entity_fanout"
-    t_src = f"{space_id}_frame_slot"
+    t_fe = f"{space_prefix(space_id)}_entity_fanout"
+    t_src = f"{space_prefix(space_id)}_frame_slot"
 
     exists = await conn.fetchval(
         "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1", t_fe)
@@ -238,7 +239,7 @@ async def entity_fanout(conn, space_id: str, entity_uuid, direction: str = "forw
     caller may treat None as "small" here, unlike every other statistic in this
     package, because absence from the list is a positive statement.
     """
-    t_fe = f"{space_id}_entity_fanout"
+    t_fe = f"{space_prefix(space_id)}_entity_fanout"
     try:
         return await conn.fetchval(
             f"SELECT max(fanout) FROM {t_fe} "

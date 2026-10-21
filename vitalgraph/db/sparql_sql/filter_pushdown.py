@@ -45,6 +45,7 @@ from .collect import _esc, _like_escape
 from .declines import Rule
 from .text_needle import (UnindexableTextSearch, bgp_is_unbounded, is_servable,
                           unbounded_scan_error)
+from .space_names import space_prefix
 
 # A text search the trigram index cannot serve is not pushed. `push_filters` is
 # the stage; the rule reads only the lexical form and the BGP's other
@@ -164,7 +165,7 @@ def push_filters(plan: PlanV2, space_id: str, ctx=None) -> None:
     if plan.kind != KIND_FILTER or not plan.filter_exprs:
         return
 
-    term_table = f"{space_id}_term"
+    term_table = f"{space_prefix(space_id)}_term"
 
     # Every push-down here emits an UNCORRELATED `IN (SELECT term_uuid FROM
     # term WHERE ...)`. PostgreSQL does not hoist one of those out of a
@@ -1363,7 +1364,7 @@ def _fts_index_and_query(expr, ctx) -> Optional[Tuple[str, str]]:
     if targs is None or not targs.entity_var:
         return None
     idx = _resolve_index_name(targs.index_name, 'fts', ctx)
-    table = f"{ctx.space_id}_fts_{idx}"
+    table = f"{space_prefix(ctx.space_id)}_fts_{idx}"
     languages = _resolve_fts_languages(idx, ctx)
     # Same escaping and the same tsquery builder the scorer uses. If these ever
     # diverge the push would narrow to a different set than the filter keeps.

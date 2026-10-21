@@ -65,6 +65,7 @@ import logging
 import os
 import re
 from typing import Optional, Tuple
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -323,7 +324,7 @@ def slot_range_constraint(bgp, aliases, space_id: str, value_var: str,
         return None
     alias, col = anchor
 
-    ess = f"{space_id}_entity_slot_sort"
+    ess = f"{space_prefix(space_id)}_entity_slot_sort"
     sql = (f"{alias}.{col} IN (SELECT slot_uuid FROM {ess} "
            f"WHERE slot_type_uuid = {type_token} "
            f"AND {lane} {op} {value_sql if value_sql is not None else literal})")
@@ -409,7 +410,7 @@ def entity_range_constraint(bgp, aliases, space_id: str, value_var: str,
         return None
     alias, col = anchor_pos
 
-    ess = f"{space_id}_entity_slot_sort"
+    ess = f"{space_prefix(space_id)}_entity_slot_sort"
     sql = (f"{alias}.{col} IN (SELECT entity_uuid FROM {ess} "
            f"WHERE slot_type_uuid = {type_token} "
            f"AND {lane} {op} {value_sql if value_sql is not None else literal})")

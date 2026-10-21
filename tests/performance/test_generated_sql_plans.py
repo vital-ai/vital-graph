@@ -34,6 +34,7 @@ import pytest
 from .conftest import skip_no_pg, space_exists
 from .harness import (assert_plan, explain_json, node_types,
                       total_shared_buffers, has_seq_scan_on)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -145,7 +146,7 @@ async def test_generated_sql_plan_shape(perf_conn, perf_record, suffix,
     # arbitrary across the others.
     plan = await assert_plan(
         perf_conn, sql,
-        no_seq_scan_on=[f"{space_id}_rdf_quad"],
+        no_seq_scan_on=[f"{space_prefix(space_id)}_rdf_quad"],
         no_spill=True,
         min_actual_rows=1,
     )

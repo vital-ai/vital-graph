@@ -29,6 +29,7 @@ import sys
 from typing import Optional, List
 
 import asyncpg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
     missing = []
 
     # --- 1. Vector index registry ---
-    tbl = f"{space_id}_vector_index"
+    tbl = f"{space_prefix(space_id)}_vector_index"
     if not await _table_exists(conn, tbl):
         missing.append(tbl)
         if dry_run:
@@ -83,7 +84,7 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
             created.append(tbl)
 
     # --- 2. Vector mapping ---
-    tbl = f"{space_id}_vector_mapping"
+    tbl = f"{space_prefix(space_id)}_vector_mapping"
     if not await _table_exists(conn, tbl):
         missing.append(tbl)
         if not dry_run:
@@ -98,13 +99,13 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
                     include_pred_name   BOOLEAN DEFAULT FALSE,
                     include_type_desc   BOOLEAN DEFAULT TRUE,
                     created_time        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (index_name) REFERENCES {space_id}_vector_index(index_name)
+                    FOREIGN KEY (index_name) REFERENCES {space_prefix(space_id)}_vector_index(index_name)
                 )
             ''')
             created.append(tbl)
 
     # --- 3. Vector mapping property ---
-    tbl = f"{space_id}_vector_mapping_property"
+    tbl = f"{space_prefix(space_id)}_vector_mapping_property"
     if not await _table_exists(conn, tbl):
         missing.append(tbl)
         if not dry_run:
@@ -116,13 +117,13 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
                     property_role   VARCHAR(20) NOT NULL DEFAULT 'include',
                     ordinal         INTEGER DEFAULT 0,
                     UNIQUE (mapping_id, property_uri),
-                    FOREIGN KEY (mapping_id) REFERENCES {space_id}_vector_mapping(mapping_id) ON DELETE CASCADE
+                    FOREIGN KEY (mapping_id) REFERENCES {space_prefix(space_id)}_vector_mapping(mapping_id) ON DELETE CASCADE
                 )
             ''')
             created.append(tbl)
 
     # --- 4. Geo config ---
-    tbl = f"{space_id}_geo_config"
+    tbl = f"{space_prefix(space_id)}_geo_config"
     if not await _table_exists(conn, tbl):
         missing.append(tbl)
         if not dry_run:
@@ -165,7 +166,7 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
                 pass  # Column may already exist
 
     # --- 5. Geo side-table ---
-    tbl = f"{space_id}_geo"
+    tbl = f"{space_prefix(space_id)}_geo"
     if not await _table_exists(conn, tbl):
         missing.append(tbl)
         if not dry_run:
@@ -183,18 +184,18 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
             ''')
             # Geo indexes
             await conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_gist ON {space_id}_geo USING gist (location)"
+                f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_geo_gist ON {space_prefix(space_id)}_geo USING gist (location)"
             )
             await conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_subj ON {space_id}_geo (subject_uuid)"
+                f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_geo_subj ON {space_prefix(space_id)}_geo (subject_uuid)"
             )
             await conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_ctx ON {space_id}_geo (context_uuid)"
+                f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_geo_ctx ON {space_prefix(space_id)}_geo (context_uuid)"
             )
             created.append(tbl)
 
     # --- 6. Seed geo datatypes into the datatype table ---
-    dt_tbl = f"{space_id}_datatype"
+    dt_tbl = f"{space_prefix(space_id)}_datatype"
     if await _table_exists(conn, dt_tbl) and not dry_run:
         geo_datatypes = [
             ('http://www.opengis.net/ont/geosparql#wktLiteral', 'wktLiteral'),
@@ -207,7 +208,7 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
         )
 
     # --- 7. Shared search mapping ---
-    tbl = f"{space_id}_search_mapping"
+    tbl = f"{space_prefix(space_id)}_search_mapping"
     if not await _table_exists(conn, tbl):
         missing.append(tbl)
         if not dry_run:
@@ -228,7 +229,7 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
             created.append(tbl)
 
     # --- 8. Shared search mapping property ---
-    tbl = f"{space_id}_search_mapping_property"
+    tbl = f"{space_prefix(space_id)}_search_mapping_property"
     if not await _table_exists(conn, tbl):
         missing.append(tbl)
         if not dry_run:
@@ -240,13 +241,13 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
                     property_role   VARCHAR(20) NOT NULL DEFAULT 'include',
                     ordinal         INTEGER DEFAULT 0,
                     UNIQUE (mapping_id, property_uri),
-                    FOREIGN KEY (mapping_id) REFERENCES {space_id}_search_mapping(mapping_id) ON DELETE CASCADE
+                    FOREIGN KEY (mapping_id) REFERENCES {space_prefix(space_id)}_search_mapping(mapping_id) ON DELETE CASCADE
                 )
             ''')
             created.append(tbl)
 
     # --- 9. FTS index registry ---
-    tbl = f"{space_id}_fts_index"
+    tbl = f"{space_prefix(space_id)}_fts_index"
     if not await _table_exists(conn, tbl):
         missing.append(tbl)
         if not dry_run:
@@ -261,7 +262,7 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
             created.append(tbl)
 
     # --- 10. Fuzzy mapping ---
-    tbl = f"{space_id}_fuzzy_mapping"
+    tbl = f"{space_prefix(space_id)}_fuzzy_mapping"
     if not await _table_exists(conn, tbl):
         missing.append(tbl)
         if not dry_run:
@@ -282,7 +283,7 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
             created.append(tbl)
 
     # --- 11. Fuzzy mapping property ---
-    tbl = f"{space_id}_fuzzy_mapping_property"
+    tbl = f"{space_prefix(space_id)}_fuzzy_mapping_property"
     if not await _table_exists(conn, tbl):
         missing.append(tbl)
         if not dry_run:
@@ -294,7 +295,7 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
                     property_role   VARCHAR(20) NOT NULL DEFAULT 'include',
                     ordinal         INTEGER DEFAULT 0,
                     UNIQUE (mapping_id, property_uri),
-                    FOREIGN KEY (mapping_id) REFERENCES {space_id}_fuzzy_mapping(mapping_id) ON DELETE CASCADE
+                    FOREIGN KEY (mapping_id) REFERENCES {space_prefix(space_id)}_fuzzy_mapping(mapping_id) ON DELETE CASCADE
                 )
             ''')
             created.append(tbl)

@@ -33,6 +33,7 @@ import pytest_asyncio
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
@@ -53,7 +54,7 @@ async def fresh_space(make_space):
 async def _tables(conn, space_id):
     rows = await conn.fetch(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' "
-        "AND tablename LIKE $1", f"{space_id}\\_%")
+        "AND tablename LIKE $1", f"{space_prefix(space_id)}\\_%")
     return {r["tablename"] for r in rows}
 
 

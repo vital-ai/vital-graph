@@ -29,6 +29,7 @@ import sys
 from typing import List
 
 import asyncpg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +68,8 @@ async def _migrate_space(
         'fts_associations': 0,
     }
 
-    sm_table = f"{space_id}_search_mapping"
-    smi_table = f"{space_id}_search_mapping_index"
+    sm_table = f"{space_prefix(space_id)}_search_mapping"
+    smi_table = f"{space_prefix(space_id)}_search_mapping_index"
 
     # Check if search_mapping table exists
     if not await _table_exists(conn, sm_table):
@@ -106,7 +107,7 @@ async def _migrate_space(
         index_name = row['index_name']
 
         # Check if vector data table exists
-        vec_table = f"{space_id}_vec_{index_name}"
+        vec_table = f"{space_prefix(space_id)}_vec_{index_name}"
         if await _table_exists(conn, vec_table):
             if dry_run:
                 logger.info("    [%s] Would associate mapping %d → vector/%s",
@@ -120,7 +121,7 @@ async def _migrate_space(
             stats['vector_associations'] += 1
 
         # Check if FTS data table exists
-        fts_table = f"{space_id}_fts_{index_name}"
+        fts_table = f"{space_prefix(space_id)}_fts_{index_name}"
         if await _table_exists(conn, fts_table):
             if dry_run:
                 logger.info("    [%s] Would associate mapping %d → fts/%s",

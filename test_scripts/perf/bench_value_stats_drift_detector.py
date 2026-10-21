@@ -9,6 +9,7 @@ sys.path.insert(0, "/Users/hadfield/Local/vital-git/vital-graph")
 os.chdir("/Users/hadfield/Local/vital-git/vital-graph")
 import asyncpg
 from vitalgraph.process.maintenance_job import VALUE_STATS_DRIFT_THRESHOLD
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 SPACE = "sp_graph_synth_10k"
 
@@ -16,8 +17,8 @@ async def drift_count(conn, space):
     return await conn.fetchrow(f"""
         SELECT count(*) AS n,
                max(abs(ps.row_count::float8 / vs.pred_rows - 1)) AS d
-        FROM {space}_rdf_value_stats vs
-        JOIN {space}_rdf_pred_stats ps ON ps.predicate_uuid = vs.predicate_uuid
+        FROM {space_prefix(space)}_rdf_value_stats vs
+        JOIN {space_prefix(space)}_rdf_pred_stats ps ON ps.predicate_uuid = vs.predicate_uuid
         WHERE vs.pred_rows IS NOT NULL AND vs.pred_rows > 0
           AND abs(ps.row_count::float8 / vs.pred_rows - 1)
               > {VALUE_STATS_DRIFT_THRESHOLD}""")

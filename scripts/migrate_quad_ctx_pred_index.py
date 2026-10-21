@@ -57,6 +57,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncpg  # noqa: E402
 from devtools.target import dsn  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 OLD_KEYS = "(context_uuid, predicate_uuid)"
 NEW_COLS = "(context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)"
@@ -171,7 +172,7 @@ async def run(dsn: str, only_space: str | None, dry_run: bool,
             print(f"  ⏭️  {space}: already has object_uuid as a key column")
 
         for space, idx, _, _ in todo:
-            table = f"{space}_rdf_quad"
+            table = f"{space_prefix(space)}_rdf_quad"
             exists = await conn.fetchval(
                 "SELECT 1 FROM pg_tables WHERE tablename = $1", table)
             if not exists:
@@ -191,7 +192,7 @@ async def run(dsn: str, only_space: str | None, dry_run: bool,
             for space, _, n in skipped:
                 print(f"  ⏭️  {space}: {n:,} quads, below threshold")
             for space, table, n in build:
-                idx = f"idx_{space}_quad_ctx_pred"
+                idx = f"idx_{space_prefix(space)}_quad_ctx_pred"
                 print(f"  ➕ {space}: creating {idx} ({n:,} quads)")
                 if dry_run:
                     print(f"    would run: CREATE INDEX CONCURRENTLY "

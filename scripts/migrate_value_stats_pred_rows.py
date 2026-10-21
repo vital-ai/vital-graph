@@ -42,6 +42,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_value_stats_pred_rows")
 
@@ -54,7 +55,7 @@ async def _has_column(conn, table: str, column: str) -> bool:
 
 async def migrate_space(conn, space_id: str, dry_run: bool = True,
                         resync: bool = False) -> dict:
-    t_vs = f"{space_id}_rdf_value_stats"
+    t_vs = f"{space_prefix(space_id)}_rdf_value_stats"
     if not await conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
             t_vs):
@@ -83,7 +84,7 @@ async def migrate_space(conn, space_id: str, dry_run: bool = True,
     else:
         await conn.execute(f"""
             UPDATE {t_vs} vs SET pred_rows = ps.row_count
-            FROM {space_id}_rdf_pred_stats ps
+            FROM {space_prefix(space_id)}_rdf_pred_stats ps
             WHERE ps.predicate_uuid = vs.predicate_uuid
               AND vs.pred_rows IS DISTINCT FROM ps.row_count
         """)

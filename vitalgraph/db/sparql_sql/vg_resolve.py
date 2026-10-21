@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from .space_names import space_prefix
 
 if TYPE_CHECKING:
     from .vg_functions import FuzzyRequest, VectorRequest
@@ -55,7 +56,7 @@ async def resolve_vector_requests(
         # Look up vector index to get provider info
         row = await conn.fetchrow(
             f"SELECT provider, provider_config, dimensions "
-            f"FROM {space_id}_vector_index "
+            f"FROM {space_prefix(space_id)}_vector_index "
             f"WHERE index_name = $1",
             vr.index_name,
         )
@@ -240,7 +241,7 @@ async def _fuzzy_via_minhash(
 
     # Step 1: Primary LSH band lookup
     band_queries = build_band_queries([mh], primary_ranges)
-    band_table = f"{space_id}_fuzzy_band"
+    band_table = f"{space_prefix(space_id)}_fuzzy_band"
 
     hits: Dict[str, int] = {}
     for band_id, hashes in band_queries:
@@ -259,7 +260,7 @@ async def _fuzzy_via_minhash(
         ph_mh = build_minhash(set(phonetic_codes), rule.num_perm)
         ph_ranges = compute_band_ranges(rule.num_perm, 0.3)
         ph_queries = build_band_queries([ph_mh], ph_ranges)
-        phonetic_table = f"{space_id}_fuzzy_phonetic_band"
+        phonetic_table = f"{space_prefix(space_id)}_fuzzy_phonetic_band"
 
         for band_id, hashes in ph_queries:
             rows = await conn.fetch(
@@ -304,8 +305,8 @@ async def _fuzzy_via_minhash(
         # Default: hasName
         all_property_uris = ["http://vital.ai/ontology/vital-core#hasName"]
 
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
 
     # Candidate UUIDs are strings; convert for query
     import uuid as _uuid
@@ -361,8 +362,8 @@ async def _fuzzy_via_trgm(
     Used when no fuzzy mapping is configured. Searches hasName values
     for entities similar to the query string.
     """
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
     safe_name = fr.search_text.replace("'", "''")
     threshold = fr.min_score / 100.0
 

@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, Optional, Tuple
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,9 @@ async def resync_value_stats(conn, space_id: str,
 
     Returns {"num_predicates": n, "dt_predicates": n, "rows": n}.
     """
-    vstats = f"{space_id}_rdf_value_stats"
-    quad = f"{space_id}_rdf_quad"
-    term = f"{space_id}_term"
+    vstats = f"{space_prefix(space_id)}_rdf_value_stats"
+    quad = f"{space_prefix(space_id)}_rdf_quad"
+    term = f"{space_prefix(space_id)}_term"
 
     await conn.execute(f"TRUNCATE {vstats}")
 
@@ -75,7 +76,7 @@ async def resync_value_stats(conn, space_id: str,
     pred_rows: Dict = {}
     try:
         for r in await conn.fetch(
-                f"SELECT predicate_uuid, row_count FROM {space_id}_rdf_pred_stats"):
+                f"SELECT predicate_uuid, row_count FROM {space_prefix(space_id)}_rdf_pred_stats"):
             pred_rows[r["predicate_uuid"]] = r["row_count"]
     except Exception as exc:
         logger.debug("resync_value_stats(%s): no pred_stats, freshness "
@@ -190,7 +191,7 @@ async def load_value_stats(conn, space_id: str) -> Dict[Tuple[str, str], dict]:
     try:
         rows = await conn.fetch(
             f"SELECT predicate_uuid::text AS p, lane, bucket, lower_num, "
-            f"lower_dt, total_rows, pred_rows FROM {space_id}_rdf_value_stats "
+            f"lower_dt, total_rows, pred_rows FROM {space_prefix(space_id)}_rdf_value_stats "
             f"ORDER BY predicate_uuid, lane, bucket")
     except Exception as exc:
         logger.debug("value stats unavailable for %s: %s", space_id, exc)
@@ -301,7 +302,7 @@ async def apply_freshness(conn, space_id: str,
 
     try:
         live = {str(r["predicate_uuid"]): r["row_count"] for r in await conn.fetch(
-            f"SELECT predicate_uuid, row_count FROM {space_id}_rdf_pred_stats")}
+            f"SELECT predicate_uuid, row_count FROM {space_prefix(space_id)}_rdf_pred_stats")}
     except Exception as exc:
         logger.debug("apply_freshness(%s): no pred_stats, leaving histograms "
                      "unscaled: %s", space_id, exc)
@@ -363,8 +364,8 @@ async def apply_freshness(conn, space_id: str,
                 for n in range(len(pts)))
             row = await conn.fetchrow(f"""
                 SELECT {sel}, count(*) AS total
-                FROM {space_id}_rdf_quad q
-                JOIN {space_id}_term t ON t.term_uuid = q.object_uuid
+                FROM {space_prefix(space_id)}_rdf_quad q
+                JOIN {space_prefix(space_id)}_term t ON t.term_uuid = q.object_uuid
                 WHERE q.predicate_uuid = $1::uuid AND t.{col} IS NOT NULL""",
                 pred, *[v for _i, v in pts])
         except Exception as exc:

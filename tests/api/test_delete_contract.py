@@ -36,6 +36,7 @@ from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.api, pytest.mark.asyncio(loop_scope="session")]
 
@@ -93,7 +94,7 @@ async def _enable_geo_auto_sync(vg_client, space):
 
 async def _seed_geo(pg_conn, space, graph, subject_uri):
     await pg_conn.execute(
-        f"INSERT INTO {space}_geo "
+        f"INSERT INTO {space_prefix(space)}_geo "
         f"(subject_uuid, location, latitude, longitude, context_uuid) "
         f"VALUES (vitalgraph_term_uuid($1, 'U'), "
         f"ST_SetSRID(ST_MakePoint(-73.98, 40.75), 4326)::geography, "
@@ -103,7 +104,7 @@ async def _seed_geo(pg_conn, space, graph, subject_uri):
 
 async def _geo_rows(pg_conn, space, graph, subject_uri) -> int:
     return await pg_conn.fetchval(
-        f"SELECT count(*) FROM {space}_geo "
+        f"SELECT count(*) FROM {space_prefix(space)}_geo "
         f"WHERE subject_uuid = vitalgraph_term_uuid($1, 'U') "
         f"AND context_uuid = vitalgraph_term_uuid($2, 'U')",
         subject_uri, graph)

@@ -20,6 +20,7 @@ import uuid
 from typing import Dict, List, Optional, Set
 
 from vitalgraph.constants import SP_KG_TYPES, TYPE_URI_PROPERTIES
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,8 @@ async def _find_affected_subjects(
     # reported itself as a successful scan.
     sql = f"""
         SELECT DISTINCT t_subj.term_text AS subject_uri
-        FROM {space_id}_rdf_quad q
-        JOIN {space_id}_term t_subj ON q.subject_uuid = t_subj.term_uuid
+        FROM {space_prefix(space_id)}_rdf_quad q
+        JOIN {space_prefix(space_id)}_term t_subj ON q.subject_uuid = t_subj.term_uuid
         WHERE q.predicate_uuid = $1
           AND q.object_uuid IN ({placeholders})
     """
@@ -109,7 +110,7 @@ async def _run_cross_space_sync(
                 try:
                     # Check if this space has any mappings that use type descriptions
                     rows = await conn.fetch(
-                        f"SELECT DISTINCT mapping_type FROM {space_id}_search_mapping "
+                        f"SELECT DISTINCT mapping_type FROM {space_prefix(space_id)}_search_mapping "
                         f"WHERE source_type IN ('type_description', 'properties_type') "
                         f"AND enabled = TRUE"
                     )

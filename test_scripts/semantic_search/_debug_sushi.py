@@ -14,6 +14,7 @@ from vitalgraph.vectorization.registry import get_provider
 from vitalgraph.vectorization.search_text_builder import (
     build_search_text, resolve_search_mapping, fetch_literal_properties,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 async def main():
@@ -22,14 +23,14 @@ async def main():
 
     # Context UUID
     ctx_row = await conn.fetchrow(
-        f"SELECT term_uuid FROM {space_id}_term "
+        f"SELECT term_uuid FROM {space_prefix(space_id)}_term "
         "WHERE term_text = 'urn:semantic_search_test'"
     )
     ctx_uuid = ctx_row["term_uuid"]
 
     # Sushi Saito entity UUID
     row = await conn.fetchrow(
-        f"SELECT term_uuid FROM {space_id}_term "
+        f"SELECT term_uuid FROM {space_prefix(space_id)}_term "
         "WHERE term_text = 'http://vital.ai/test/semantic/entity/sushi_saito'"
     )
     sushi_uuid = row["term_uuid"]
@@ -71,11 +72,11 @@ async def main():
 
     stored_vs_fresh = await conn.fetchval(f"""
         SELECT 1 - (embedding <=> '{sushi_vec_str}'::vector)
-        FROM {space_id}_vec_entity_vector WHERE subject_uuid = $1::uuid
+        FROM {space_prefix(space_id)}_vec_entity_vector WHERE subject_uuid = $1::uuid
     """, sushi_uuid)
     stored_vs_italian = await conn.fetchval(f"""
         SELECT 1 - (embedding <=> '{italian_vec_str}'::vector)
-        FROM {space_id}_vec_entity_vector WHERE subject_uuid = $1::uuid
+        FROM {space_prefix(space_id)}_vec_entity_vector WHERE subject_uuid = $1::uuid
     """, sushi_uuid)
     print(f"Stored sushi embedding vs fresh sushi text: {stored_vs_fresh:.4f}")
     print(f"Stored sushi embedding vs 'italian': {stored_vs_italian:.4f}")
@@ -86,7 +87,7 @@ async def main():
     jp_vec_str = "[" + ",".join(str(v) for v in jp_emb) + "]"
     stored_vs_jp = await conn.fetchval(f"""
         SELECT 1 - (embedding <=> '{jp_vec_str}'::vector)
-        FROM {space_id}_vec_entity_vector WHERE subject_uuid = $1::uuid
+        FROM {space_prefix(space_id)}_vec_entity_vector WHERE subject_uuid = $1::uuid
     """, sushi_uuid)
     print(f"Stored sushi embedding vs 'japanese': {stored_vs_jp:.4f}")
 

@@ -52,6 +52,7 @@ if env_path.exists():
 import asyncpg
 
 from vitalgraph.config.config_loader import VitalGraphConfig
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logging.basicConfig(
     level=logging.INFO,
@@ -94,7 +95,7 @@ async def check_function_exists(pool: asyncpg.Pool) -> bool:
 
 async def count_affected_terms(pool: asyncpg.Pool, space_id: str) -> int:
     """Count plain-literal terms with non-deterministic UUIDs."""
-    term_table = f"{space_id}_term"
+    term_table = f"{space_prefix(space_id)}_term"
     row = await pool.fetchrow(f"""
         SELECT COUNT(*) AS cnt
         FROM {term_table}
@@ -108,8 +109,8 @@ async def count_affected_terms(pool: asyncpg.Pool, space_id: str) -> int:
 
 async def migrate_space(pool: asyncpg.Pool, space_id: str, dry_run: bool) -> dict:
     """Migrate a single space's term UUIDs. Returns stats."""
-    term_table = f"{space_id}_term"
-    quad_table = f"{space_id}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
 
     affected = await count_affected_terms(pool, space_id)
     if affected == 0:

@@ -31,6 +31,7 @@ from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.api, pytest.mark.asyncio(loop_scope="session")]
 
@@ -75,14 +76,14 @@ def _frame_graph(frame_uri, slots):
 
 async def _quads(pg_conn, space, uri) -> int:
     return await pg_conn.fetchval(
-        f"SELECT count(*) FROM {space}_rdf_quad "
+        f"SELECT count(*) FROM {space_prefix(space)}_rdf_quad "
         f"WHERE subject_uuid = vitalgraph_term_uuid($1, 'U')", uri)
 
 
 async def _value(pg_conn, space, slot_uri):
     return await pg_conn.fetchval(
-        f"SELECT o.term_text FROM {space}_rdf_quad q "
-        f"JOIN {space}_term o ON o.term_uuid = q.object_uuid "
+        f"SELECT o.term_text FROM {space_prefix(space)}_rdf_quad q "
+        f"JOIN {space_prefix(space)}_term o ON o.term_uuid = q.object_uuid "
         f"WHERE q.subject_uuid = vitalgraph_term_uuid($1, 'U') "
         f"AND q.predicate_uuid = vitalgraph_term_uuid($2, 'U')", slot_uri, TEXT_VALUE)
 

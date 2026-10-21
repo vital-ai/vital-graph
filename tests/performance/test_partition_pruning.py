@@ -20,6 +20,7 @@ import pytest_asyncio
 
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 from .harness import explain_json, node_types
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 PG18 = dict(
     host=os.environ.get("VG_TEST_PG18_HOST", "localhost"),
@@ -118,7 +119,7 @@ async def part_space(make_pg18_space):
 
 def _partitions_scanned(plan, sid):
     """Relation names in the plan that are partitions of this space's rdf_quad."""
-    prefix = f"{sid}_rdf_quad_p"
+    prefix = f"{space_prefix(sid)}_rdf_quad_p"
     return sorted({n.get("Relation Name") for n in _walk(plan)
                    if (n.get("Relation Name") or "").startswith(prefix)})
 
@@ -171,7 +172,7 @@ async def test_edge_and_frame_slot_are_co_partitioned(pg18_pool, part_space):
             n = await conn.fetchval(
                 "SELECT count(*) FROM pg_inherits i "
                 "JOIN pg_class p ON p.oid = i.inhparent WHERE p.relname = $1",
-                f"{sid}_{tbl}")
+                f"{space_prefix(sid)}_{tbl}")
             assert n == N_PARTITIONS, (tbl, n)
 
 
@@ -237,7 +238,7 @@ async def test_migrate_nonpartitioned_space_preserves_data(pg18_pool, make_pg18_
         before = await distinct_quads(conn, sid)
         part_before = await conn.fetchval(
             "SELECT count(*) FROM pg_inherits i JOIN pg_class p "
-            "ON p.oid = i.inhparent WHERE p.relname = $1", f"{sid}_rdf_quad")
+            "ON p.oid = i.inhparent WHERE p.relname = $1", f"{space_prefix(sid)}_rdf_quad")
 
         async with conn.transaction():
             summary = await migrate_space_to_partitioned(conn, sid, n_partitions=4)
@@ -245,7 +246,7 @@ async def test_migrate_nonpartitioned_space_preserves_data(pg18_pool, make_pg18_
         after = await distinct_quads(conn, sid)
         part_after = await conn.fetchval(
             "SELECT count(*) FROM pg_inherits i JOIN pg_class p "
-            "ON p.oid = i.inhparent WHERE p.relname = $1", f"{sid}_rdf_quad")
+            "ON p.oid = i.inhparent WHERE p.relname = $1", f"{space_prefix(sid)}_rdf_quad")
         plan = await explain_json(
             conn, f"SELECT subject_uuid FROM {t['rdf_quad']} WHERE context_uuid = $1",
             g, analyze=False)
@@ -294,32 +295,32 @@ async def test_migrate_preserves_every_core_column_and_its_data(
 
         # Populate EVERY column, so a dropped one shows up as lost data rather
         # than as a column that happened to be NULL either way.
-        edge_cols = await columns(conn, f"{sid}_edge")
+        edge_cols = await columns(conn, f"{space_prefix(sid)}_edge")
         edge_vals = [uuid.uuid4() for _ in edge_cols]
         edge_vals[edge_cols.index("context_uuid")] = g
         await conn.execute(
-            f"INSERT INTO {sid}_edge ({', '.join(edge_cols)}) VALUES "
+            f"INSERT INTO {space_prefix(sid)}_edge ({', '.join(edge_cols)}) VALUES "
             f"({', '.join('$' + str(i + 1) for i in range(len(edge_cols)))})",
             *edge_vals)
 
-        fe_cols = await columns(conn, f"{sid}_frame_slot")
+        fe_cols = await columns(conn, f"{space_prefix(sid)}_frame_slot")
         fe_vals = [uuid.uuid4() for _ in fe_cols]
         fe_vals[fe_cols.index("context_uuid")] = g
         await conn.execute(
-            f"INSERT INTO {sid}_frame_slot ({', '.join(fe_cols)}) VALUES "
+            f"INSERT INTO {space_prefix(sid)}_frame_slot ({', '.join(fe_cols)}) VALUES "
             f"({', '.join('$' + str(i + 1) for i in range(len(fe_cols)))})",
             *fe_vals)
 
-        before = {c: await columns(conn, f"{sid}_{c}")
+        before = {c: await columns(conn, f"{space_prefix(sid)}_{c}")
                   for c in ("rdf_quad", "edge", "frame_slot")}
 
         async with conn.transaction():
             await migrate_space_to_partitioned(conn, sid, n_partitions=4)
 
-        after = {c: await columns(conn, f"{sid}_{c}")
+        after = {c: await columns(conn, f"{space_prefix(sid)}_{c}")
                  for c in ("rdf_quad", "edge", "frame_slot")}
-        edge_after = await conn.fetchrow(f"SELECT * FROM {sid}_edge")
-        fe_after = await conn.fetchrow(f"SELECT * FROM {sid}_frame_slot")
+        edge_after = await conn.fetchrow(f"SELECT * FROM {space_prefix(sid)}_edge")
+        fe_after = await conn.fetchrow(f"SELECT * FROM {space_prefix(sid)}_frame_slot")
 
     assert before == after, (
         "migration changed a core table's columns — a hand-maintained copy of "

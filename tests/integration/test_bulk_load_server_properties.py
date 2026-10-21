@@ -30,6 +30,7 @@ from rdflib.namespace import XSD
 from vitalgraph.kg_impl.kg_server_properties import (
     CREATION_TIME_URI, DEFAULT_STATUS, ENTITY_TYPE_URI, KGENTITY_CLASS_URI,
     MODIFICATION_TIME_URI, RDF_TYPE_URI, STATUS_TYPE_URI)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -71,8 +72,8 @@ async def loaded_space(space_impl):
 
 async def _pred_count(conn, sid, uri):
     return await conn.fetchval(f"""
-        SELECT count(*) FROM {sid}_rdf_quad q
-        JOIN {sid}_term t ON t.term_uuid = q.predicate_uuid
+        SELECT count(*) FROM {space_prefix(sid)}_rdf_quad q
+        JOIN {space_prefix(sid)}_term t ON t.term_uuid = q.predicate_uuid
         WHERE t.term_text = $1""", uri)
 
 
@@ -96,10 +97,10 @@ async def test_the_timestamp_is_a_TYPED_literal(space_impl, loaded_space):
     async with space_impl.get_db_connection() as conn:
         row = await conn.fetchrow(f"""
             SELECT t.term_type, t.dt_val, d.datatype_uri
-            FROM {sid}_rdf_quad q
-            JOIN {sid}_term tp ON tp.term_uuid = q.predicate_uuid
-            JOIN {sid}_term t ON t.term_uuid = q.object_uuid
-            LEFT JOIN {sid}_datatype d ON d.datatype_id = t.datatype_id
+            FROM {space_prefix(sid)}_rdf_quad q
+            JOIN {space_prefix(sid)}_term tp ON tp.term_uuid = q.predicate_uuid
+            JOIN {space_prefix(sid)}_term t ON t.term_uuid = q.object_uuid
+            LEFT JOIN {space_prefix(sid)}_datatype d ON d.datatype_id = t.datatype_id
             WHERE tp.term_text = $1 LIMIT 1""", CREATION_TIME_URI)
         assert row is not None, "no creation time was written"
         assert row["term_type"] == "L", "stored as a URI, not a literal"
@@ -113,9 +114,9 @@ async def test_the_status_uri_is_the_documented_default(space_impl, loaded_space
     sid = loaded_space
     async with space_impl.get_db_connection() as conn:
         val = await conn.fetchval(f"""
-            SELECT t.term_text FROM {sid}_rdf_quad q
-            JOIN {sid}_term tp ON tp.term_uuid = q.predicate_uuid
-            JOIN {sid}_term t ON t.term_uuid = q.object_uuid
+            SELECT t.term_text FROM {space_prefix(sid)}_rdf_quad q
+            JOIN {space_prefix(sid)}_term tp ON tp.term_uuid = q.predicate_uuid
+            JOIN {space_prefix(sid)}_term t ON t.term_uuid = q.object_uuid
             WHERE tp.term_text = $1 LIMIT 1""", STATUS_TYPE_URI)
         assert val == DEFAULT_STATUS
 
@@ -139,9 +140,9 @@ async def test_pred_stats_counts_the_stamped_predicates(space_impl, loaded_space
         await recompute_stats_tables(conn, sid)
         rows = await conn.fetch(f"""
             SELECT t.term_text AS predicate, a.n AS actual, ps.row_count AS in_stats
-            FROM (SELECT predicate_uuid, count(*) n FROM {sid}_rdf_quad GROUP BY 1) a
-            JOIN {sid}_term t ON t.term_uuid = a.predicate_uuid
-            LEFT JOIN {sid}_rdf_pred_stats ps ON ps.predicate_uuid = a.predicate_uuid
+            FROM (SELECT predicate_uuid, count(*) n FROM {space_prefix(sid)}_rdf_quad GROUP BY 1) a
+            JOIN {space_prefix(sid)}_term t ON t.term_uuid = a.predicate_uuid
+            LEFT JOIN {space_prefix(sid)}_rdf_pred_stats ps ON ps.predicate_uuid = a.predicate_uuid
             ORDER BY t.term_text""")
         missing = [r["predicate"] for r in rows if r["in_stats"] is None]
         assert not missing, f"predicates absent from rdf_pred_stats: {missing}"
@@ -170,9 +171,9 @@ async def test_a_supplied_value_is_not_overwritten(space_impl):
         ])
         async with space_impl.get_db_connection() as conn:
             vals = [r["term_text"] for r in await conn.fetch(f"""
-                SELECT t.term_text FROM {sid}_rdf_quad q
-                JOIN {sid}_term tp ON tp.term_uuid = q.predicate_uuid
-                JOIN {sid}_term t ON t.term_uuid = q.object_uuid
+                SELECT t.term_text FROM {space_prefix(sid)}_rdf_quad q
+                JOIN {space_prefix(sid)}_term tp ON tp.term_uuid = q.predicate_uuid
+                JOIN {space_prefix(sid)}_term t ON t.term_uuid = q.object_uuid
                 WHERE tp.term_text = $1""", CREATION_TIME_URI)]
             assert vals == [supplied], (
                 f"expected only the supplied creation time, got {vals}")

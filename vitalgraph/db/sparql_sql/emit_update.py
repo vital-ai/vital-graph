@@ -24,6 +24,7 @@ from ..jena_sparql.jena_types import (
     OpBGP, OpGraph, OpJoin, OpUnion, TriplePattern,
     CompileResult, ParsedQueryMeta,
 )
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ async def _ensure_datatype_id(
     if conn is None:
         raise RuntimeError(
             f"Cannot create datatype_id for {datatype_uri} without a DB connection")
-    dt_table = f"{space_id}_datatype"
+    dt_table = f"{space_prefix(space_id)}_datatype"
     new_id = await conn.fetchval(
         f"INSERT INTO {dt_table} (datatype_uri) VALUES ($1) "
         f"ON CONFLICT (datatype_uri) DO UPDATE SET datatype_uri = EXCLUDED.datatype_uri "
@@ -490,8 +491,8 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
     Uses deterministic UUID v5 for new terms, populates datatype_id and
     lang column for typed/language-tagged literals.
     """
-    term_table = f"{space_id}_term"
-    quad_table = f"{space_id}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
     stmts: List[str] = []
     seen_terms: Set[Tuple[str, str, Optional[int], Optional[str]]] = set()
     # Term upserts are collected here and emitted SORTED BY term_uuid ahead of
@@ -600,8 +601,8 @@ def _delete_data_sql(quads: List[QuadPattern], space_id: str,
                      dt_map: Optional[Dict[str, int]] = None) -> str:
     """DELETE DATA → DELETE FROM statements with deterministic UUID lookups."""
     _reject_bnodes_in_delete_data(quads)
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
     stmts: List[str] = []
 
     def _obj_dt_id(node: RDFNode) -> Optional[int]:
@@ -723,7 +724,7 @@ async def _modify_sql(
     # Full WHERE pattern matching via V2 pipeline
     from .generator import generate_sql as v2_generate_sql
 
-    term_table = f"{space_id}_term"
+    term_table = f"{space_prefix(space_id)}_term"
 
     if op.with_graph:
         where_graph = op.with_graph
@@ -851,7 +852,7 @@ async def _modify_sql(
         # term rows for values where __uuid is NULL (e.g. aggregates).
         # Uses deterministic UUID v5 via vitalgraph_term_uuid() so that
         # terms created here match the main write path exactly.
-        dt_table = f"{space_id}_datatype"
+        dt_table = f"{space_prefix(space_id)}_datatype"
         seen_var_upserts: Set[str] = set()
         for iq in op.insert_quads:
             for node in [iq.graph, iq.subject, iq.predicate, iq.object]:
@@ -969,9 +970,9 @@ def _delete_from_bindings(dq: QuadPattern, space_id: str,
                           var_map: Optional[Dict[str, str]] = None,
                           dt_map: Optional[Dict[str, int]] = None) -> str:
     """Generate DELETE ... USING _upd_bindings for one delete template quad."""
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
-    dt_table = f"{space_id}_datatype"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
+    dt_table = f"{space_prefix(space_id)}_datatype"
 
     conditions: List[str] = []
     needs_bindings = False  # track whether we reference _upd_bindings
@@ -1073,9 +1074,9 @@ def _insert_from_bindings(iq: QuadPattern, space_id: str,
                           var_map: Optional[Dict[str, str]] = None,
                           dt_map: Optional[Dict[str, int]] = None) -> str:
     """Generate INSERT ... SELECT from _upd_bindings for one insert template quad."""
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
-    dt_table = f"{space_id}_datatype"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
+    dt_table = f"{space_prefix(space_id)}_datatype"
 
     s_expr = _node_to_uuid_expr(iq.subject, term_table, var_map=var_map, dt_map=dt_map, dt_table=dt_table)
     p_expr = _node_to_uuid_expr(iq.predicate, term_table, var_map=var_map, dt_map=dt_map, dt_table=dt_table)
@@ -1119,8 +1120,8 @@ def _insert_from_bindings(iq: QuadPattern, space_id: str,
 def _clear_sql(op: UpdateClear, space_id: str,
                default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH) -> str:
     """CLEAR GRAPH/DEFAULT/NAMED/ALL → DELETE FROM statements."""
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
 
     if op.target == "ALL":
         return f"DELETE FROM {quad_table}"
@@ -1154,7 +1155,7 @@ def _drop_sql(op: UpdateDrop, space_id: str,
 
 def _create_sql(op: UpdateCreate, space_id: str) -> str:
     """CREATE GRAPH → ensure graph term exists."""
-    term_table = f"{space_id}_term"
+    term_table = f"{space_prefix(space_id)}_term"
     if not op.graph:
         return "SELECT 1"  # no-op for CREATE without URI
     return _term_upsert(term_table, op.graph, "U")
@@ -1178,8 +1179,8 @@ def _load_sql(op: UpdateLoad, space_id: str) -> str:
 def _copy_sql(op: UpdateCopy, space_id: str,
               default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH) -> str:
     """COPY source TO dest → clear dest, then insert all source quads with dest context."""
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
     stmts: List[str] = []
 
     src_uri = op.source or default_graph_uri
@@ -1237,8 +1238,8 @@ def _move_sql(op: UpdateMove, space_id: str,
 def _add_sql(op: UpdateAdd, space_id: str,
              default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH) -> str:
     """ADD source TO dest → copy source quads into dest (additive, no clear)."""
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
     stmts: List[str] = []
 
     src_uri = op.source or default_graph_uri

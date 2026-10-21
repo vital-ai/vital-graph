@@ -42,6 +42,7 @@ import asyncpg  # noqa: E402
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_drop_retired_tables")
 
@@ -55,7 +56,7 @@ async def _spaces(conn, only: str | None) -> list:
 async def _tables_for(conn, space_id: str) -> list:
     rows = await conn.fetch(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' "
-        "AND tablename LIKE $1 ORDER BY tablename", f"{space_id}\\_%")
+        "AND tablename LIKE $1 ORDER BY tablename", f"{space_prefix(space_id)}\\_%")
     return [r["tablename"] for r in rows]
 
 

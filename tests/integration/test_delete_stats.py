@@ -17,6 +17,7 @@ import pytest_asyncio
 from rdflib import URIRef, Literal
 
 from .conftest import skip_no_infra, TEST_SPACE_PREFIX
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
@@ -43,13 +44,13 @@ async def _remaining_pairs(space_impl, sid) -> int:
     async with space_impl.db_impl.connection_pool.acquire() as conn:
         return await conn.fetchval(
             f"SELECT count(*) FROM (SELECT DISTINCT predicate_uuid, object_uuid "
-            f"FROM {sid}_rdf_quad) x")
+            f"FROM {space_prefix(sid)}_rdf_quad) x")
 
 
 async def _stats(conn, sid):
     return {r["k"]: r["row_count"] for r in await conn.fetch(
         f"SELECT predicate_uuid::text||'|'||object_uuid::text AS k, row_count "
-        f"FROM {sid}_rdf_stats")}
+        f"FROM {space_prefix(sid)}_rdf_stats")}
 
 
 async def test_fused_delete_keeps_stats_correct(space_impl, del_space):
@@ -83,7 +84,7 @@ async def test_fused_delete_keeps_stats_correct(space_impl, del_space):
         rebuilt = await _stats(conn, sid)
         truth = {f"{r['p']}|{r['o']}": r["n"] for r in await conn.fetch(
             f"SELECT predicate_uuid::text AS p, object_uuid::text AS o, "
-            f"count(*) AS n FROM {sid}_rdf_quad GROUP BY 1, 2 HAVING count(*) >= 2")}
+            f"count(*) AS n FROM {space_prefix(sid)}_rdf_quad GROUP BY 1, 2 HAVING count(*) >= 2")}
 
     # After deleting s1/s2 only sX's two (pred,obj) pairs remain, each count 1 —
     # below STATS_MIN_ROW_COUNT, so the correct rebuilt table is EMPTY. Absence
@@ -113,7 +114,7 @@ async def test_delete_removes_an_entity_that_lacks_its_own_self_link(space_impl,
 
     async with space_impl.db_impl.connection_pool.acquire() as conn:
         left = await conn.fetchval(
-            f"SELECT count(*) FROM {sid}_rdf_quad q JOIN {sid}_term t "
+            f"SELECT count(*) FROM {space_prefix(sid)}_rdf_quad q JOIN {space_prefix(sid)}_term t "
             f"ON t.term_uuid = q.subject_uuid WHERE t.term_text = $1", e)
     assert left == 0, "the root survived its own graph delete"
 
@@ -153,7 +154,7 @@ async def test_delete_reports_members_that_arrive_after_the_membership_snapshot(
     o_uuid, g_uuid = _generate_term_uuid(e, "U"), _generate_term_uuid(g, "U")
     async with pool.acquire() as conn:
         await conn.execute(
-            f"INSERT INTO {sid}_term (term_uuid, term_text, term_type) "
+            f"INSERT INTO {space_prefix(sid)}_term (term_uuid, term_text, term_type) "
             f"VALUES ($1, 'urn:late3', 'U') ON CONFLICT DO NOTHING", late_s)
 
     async def racing_writer(conn, space_id, subject_uuids, **kw):
@@ -164,7 +165,7 @@ async def test_delete_reports_members_that_arrive_after_the_membership_snapshot(
         result = await real(conn, space_id, subject_uuids, **kw)
         async with pool.acquire() as other:
             await other.execute(
-                f"INSERT INTO {sid}_rdf_quad "
+                f"INSERT INTO {space_prefix(sid)}_rdf_quad "
                 f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
                 f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
                 late_s, p_uuid, o_uuid, g_uuid)
@@ -208,6 +209,6 @@ async def test_a_fully_stamped_graph_deletes_clean(space_impl, del_space, caplog
 
     async with space_impl.db_impl.connection_pool.acquire() as conn:
         left = await conn.fetchval(
-            f"SELECT count(*) FROM {sid}_rdf_quad WHERE context_uuid = "
-            f"(SELECT term_uuid FROM {sid}_term WHERE term_text = $1)", g)
+            f"SELECT count(*) FROM {space_prefix(sid)}_rdf_quad WHERE context_uuid = "
+            f"(SELECT term_uuid FROM {space_prefix(sid)}_term WHERE term_text = $1)", g)
     assert left == 0, f"{left} quad(s) survived a fully stamped graph delete"

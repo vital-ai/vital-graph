@@ -55,6 +55,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_vector_index_columns")
 
@@ -92,7 +93,7 @@ async def _metric_from_physical_index(conn, space_id: str, index_name: str):
 
 
 async def migrate_space(conn, space_id: str, dry_run: bool = True) -> dict:
-    table = f"{space_id}_vector_index"
+    table = f"{space_prefix(space_id)}_vector_index"
     if not await conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
             table):

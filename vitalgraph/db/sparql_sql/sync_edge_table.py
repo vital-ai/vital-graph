@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 from typing import List, Optional
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,8 @@ async def sync_edge_table_after_insert(
     if not subject_uuids:
         return 0
 
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
 
     inserted = 0
     for chunk in chunk_uuids(subject_uuids):
@@ -100,7 +101,7 @@ async def sync_edge_table_before_delete(
     if not subject_uuids:
         return 0
 
-    t_edge = f"{space_id}_edge"
+    t_edge = f"{space_prefix(space_id)}_edge"
 
     if context_uuid:
         result = await conn.execute(
@@ -132,8 +133,8 @@ async def cleanup_orphan_edges_for_subjects(conn, space_id: str,
     """
     if not subjects:
         return 0
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
     result = await conn.execute(f"""
         DELETE FROM {t_edge} e
         WHERE e.edge_uuid = ANY($3)
@@ -221,8 +222,8 @@ async def cleanup_orphan_edges(conn, space_id: str,
     edge_uuids that still resolve, so an identity-only test calls every row
     healthy while every query filters on the new context and matches nothing.
     """
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
     cursor = _sweep_cursor.get(space_id) or "(0,0)"
 
     # One pass over a bounded window: which of these rows are orphans, and how
@@ -269,7 +270,7 @@ async def delete_edges_for_context(conn, space_id: str, context_uuid) -> int:
     yields nothing and the per-subject hooks never fire — leaving the whole
     graph's edges orphaned while its quads are gone (issues/064).
     """
-    t_edge = f"{space_id}_edge"
+    t_edge = f"{space_prefix(space_id)}_edge"
     result = await conn.execute(
         f"DELETE FROM {t_edge} WHERE context_uuid = $1", context_uuid)
     deleted = int(result.split()[-1]) if result else 0
@@ -293,8 +294,8 @@ async def resync_edge_table(conn, space_id: str) -> int:
     pair per edge) and warn — otherwise the INSERT aborts and, because TRUNCATE
     already ran, leaves the edge table empty.
     """
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
 
     malformed = await conn.fetchval(f"""
         SELECT count(*) FROM (
@@ -362,8 +363,8 @@ async def backfill_edge_table(conn, space_id: str,
     (sync_edge_table_before_delete), so the table has no orphans to remove —
     drift is always *missing* edges, which this adds.  Returns rows inserted.
     """
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
 
     result = await conn.execute(f"""
         INSERT INTO {t_edge} (edge_uuid, source_node_uuid, dest_node_uuid,
@@ -448,8 +449,8 @@ async def edge_table_drift(conn, space_id: str,
     This measure now sees through the duplication. The duplication itself is a
     separate defect in rdf_quad and is not this function's to fix.
     """
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
     expected = await conn.fetchval(
         f"SELECT count(DISTINCT (subject_uuid, context_uuid)) FROM {t_quad} "
         f"WHERE predicate_uuid = $1", _EDGE_SRC_UUID, timeout=timeout)
@@ -497,8 +498,8 @@ async def edge_table_dangling_endpoints(conn, space_id: str,
     Equal counts covering the whole table is a fixture; a small asymmetric
     figure is a graph that lost something.
     """
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
     row = await conn.fetchrow(
         f"""
         SELECT
@@ -550,11 +551,11 @@ async def edge_table_unbuilt(conn, space_id: str,
     """
     try:
         edge_has_rows = await conn.fetchval(
-            f"SELECT EXISTS (SELECT 1 FROM {space_id}_edge)", timeout=timeout)
+            f"SELECT EXISTS (SELECT 1 FROM {space_prefix(space_id)}_edge)", timeout=timeout)
         if edge_has_rows:
             return False
         quads_exist = await conn.fetchval(
-            f"SELECT EXISTS (SELECT 1 FROM {space_id}_rdf_quad)", timeout=timeout)
+            f"SELECT EXISTS (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad)", timeout=timeout)
         return bool(quads_exist)
     except Exception as exc:
         # Cannot tell -> do NOT claim the derived tables are unbuilt. The
@@ -597,8 +598,8 @@ async def unreferenced_kg_objects(conn, space_id: str,
 
     Zero is therefore meaningful and a small number is a floor.
     """
-    t_quad = f"{space_id}_rdf_quad"
-    t_edge = f"{space_id}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
+    t_edge = f"{space_prefix(space_id)}_edge"
     row = await conn.fetchrow(
         f"""
         WITH frames AS (
@@ -654,8 +655,8 @@ async def edge_table_orphan_rate(conn, space_id: str, sample: int = 200,
     Bounded by `sample`: one index probe each, so a few hundred lookups
     regardless of table size.
     """
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
     orphans = await conn.fetchval(
         f"""
         SELECT count(*) FROM (
@@ -703,7 +704,7 @@ async def edge_table_untyped_rate(conn, space_id: str) -> float:
 
     Returns 0.0 for a space with no edge rows or no column yet.
     """
-    t_edge = f"{space_id}_edge"
+    t_edge = f"{space_prefix(space_id)}_edge"
     try:
         total = await conn.fetchval(f"SELECT count(*) FROM {t_edge}")
         if not total:

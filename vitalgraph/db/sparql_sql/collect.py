@@ -38,6 +38,7 @@ from .ir import (
     KIND_PROJECT, KIND_DISTINCT, KIND_REDUCED, KIND_SLICE,
     KIND_ORDER, KIND_FILTER, KIND_EXTEND, KIND_GROUP,
 )
+from .space_names import space_prefix
 
 # Sentinel: "inside GRAPH ?var" — skip the default-graph lock,
 # match all named graphs.  Distinct from None ("no GRAPH clause,
@@ -143,8 +144,8 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
     if not op.triples:
         return plan
 
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
 
     for triple in op.triples:
         q_id = aliases.next("q")
@@ -400,8 +401,8 @@ def _collect_sequence(op: OpSequence, space_id: str, aliases: AliasGenerator,
 def _collect_path(op: OpPath, space_id: str, aliases: AliasGenerator,
                   graph_uri: str = None) -> PlanV2:
     plan = PlanV2(kind=KIND_PATH)
-    term_table = f"{space_id}_term"
-    quad_table = f"{space_id}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
 
     plan.path_meta = {
         "path": op.path,
@@ -562,7 +563,7 @@ def _bind_graph_var(plan: PlanV2, graph_var: str, space_id: str,
     if plan.kind == KIND_PROJECT:
         return
 
-    term_table = f"{space_id}_term"
+    term_table = f"{space_prefix(space_id)}_term"
 
     for child in plan.children:
         if child.kind == KIND_PROJECT:

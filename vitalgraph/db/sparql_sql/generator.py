@@ -32,6 +32,7 @@ from .emit_context import EmitContext
 
 from .text_needle import UnindexableTextSearch
 from .db_provider import STATS_LOCK_TIMEOUT_MS
+from .space_names import space_id_for_prefix, space_prefix
 logger = logging.getLogger(__name__)
 
 
@@ -328,7 +329,7 @@ def _ctx_filter(space_id: str, lock_uri: Optional[str], alias: str = "") -> str:
     if not lock_uri:
         return ""
     col = f"{alias}.context_uuid" if alias else "context_uuid"
-    return (f" AND {col} = (SELECT term_uuid FROM {space_id}_term "
+    return (f" AND {col} = (SELECT term_uuid FROM {space_prefix(space_id)}_term "
             f"WHERE term_text = '{_esc(lock_uri)}' AND term_type = 'U' LIMIT 1)")
 
 
@@ -367,7 +368,7 @@ async def _load_quad_stats(
     try:
         pred_rows = await db.execute_query(
             f"SELECT predicate_uuid::text, row_count "
-            f"FROM {space_id}_rdf_pred_stats",
+            f"FROM {space_prefix(space_id)}_rdf_pred_stats",
             conn_params=conn_params, conn=conn,
             lock_timeout_ms=STATS_LOCK_TIMEOUT_MS,
         )
@@ -406,7 +407,7 @@ async def _load_quad_stats(
             # and tells it nothing.
             f"SELECT predicate_uuid::text, object_uuid::text, "
             f"context_uuid::text, row_count "
-            f"FROM {space_id}_rdf_stats "
+            f"FROM {space_prefix(space_id)}_rdf_stats "
             f"WHERE row_count >= 2{_ctx_filter(space_id, lock_uri)}",
             conn_params=conn_params, conn=conn,
             lock_timeout_ms=STATS_LOCK_TIMEOUT_MS,
@@ -477,7 +478,7 @@ async def _load_datatype_cache(
 
     from . import db_provider as db
 
-    datatype_table = f"{space_id}_datatype"
+    datatype_table = f"{space_prefix(space_id)}_datatype"
     try:
         rows = await db.execute_query(
             f"SELECT datatype_id, datatype_uri FROM {datatype_table}",
@@ -627,8 +628,9 @@ async def materialize_constants(
     if not aliases.constants:
         return
 
-    # Extract space_id from term_table name (e.g. "myspace_term" → "myspace")
-    space_id = term_table.rsplit("_term", 1)[0] if term_table.endswith("_term") else ""
+    # Recover the space from the term table's name (e.g. "myspace_term")
+    space_id = (space_id_for_prefix(term_table.rsplit("_term", 1)[0])
+                if term_table.endswith("_term") else "")
 
     # Keyed on the FULL term identity throughout — cache, query and result map.
     # `term_uuid` is a UUIDv5 over (text, type, lang, datatype), and matching on
@@ -1142,7 +1144,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 # everything around them purely by how they were fetched.
                 f"SELECT predicate_uuid::text, object_uuid::text, "
                 f"sum(row_count)::bigint AS row_count "
-                f"FROM {space_id}_rdf_stats "
+                f"FROM {space_prefix(space_id)}_rdf_stats "
                 f"WHERE (predicate_uuid, object_uuid) IN ({values})"
                 f"{_ctx_filter(space_id, _lock)} "
                 f"GROUP BY 1, 2",
@@ -1174,7 +1176,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                     continue
                 _stage = _mark("pair count (rdf_quad)")
                 crows = await db.execute_query(
-                    f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad "
+                    f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad "
                     f"WHERE predicate_uuid = '{p_uuid}'::uuid "
                     f"AND object_uuid = '{o_uuid}'::uuid"
                     f"{_ctx_filter(space_id, _lock)} "
@@ -1276,9 +1278,9 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 val_sql = str(literal)
             _stage = _mark("range count (rdf_quad)")
             crows = await db.execute_query(
-                f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad q "
+                f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad q "
                 f"WHERE q.predicate_uuid = '{p_uuid}'::uuid AND q.object_uuid IN "
-                f"(SELECT term_uuid FROM {space_id}_term "
+                f"(SELECT term_uuid FROM {space_prefix(space_id)}_term "
                 f" WHERE {col_sql} {op} {val_sql}) "
                 f"LIMIT {_PAIR_COUNT_CAP}) s",
                 conn=conn, conn_params=conn_params,
@@ -1322,7 +1324,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 cond = f"(t.term_text = '{_esc(text)}' AND t.term_type = '{ttype}'"
                 if dtype:
                     cond += (f" AND t.datatype_id = (SELECT datatype_id FROM "
-                             f"{space_id}_datatype WHERE datatype_uri = '{_esc(dtype)}')")
+                             f"{space_prefix(space_id)}_datatype WHERE datatype_uri = '{_esc(dtype)}')")
                 disjuncts.append(cond + ")")
             try:
                 _stage = _mark("IN selectivity (rdf_stats)")
@@ -1336,8 +1338,8 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                     # is the space-wide count it already meant.
                     f"SELECT count(DISTINCT t.term_uuid) AS n_terms, "
                     f"       COALESCE(sum(s.row_count), 0)::bigint AS total "
-                    f"FROM {space_id}_term t "
-                    f"JOIN {space_id}_rdf_stats s ON s.object_uuid = t.term_uuid "
+                    f"FROM {space_prefix(space_id)}_term t "
+                    f"JOIN {space_prefix(space_id)}_rdf_stats s ON s.object_uuid = t.term_uuid "
                     f" AND s.predicate_uuid = '{p_uuid}'::uuid "
                     f"WHERE {' OR '.join(disjuncts)}",
                     conn=conn, conn_params=conn_params,
@@ -1381,7 +1383,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 rrows = await db.execute_query(
                     "SELECT reltuples::bigint AS n FROM pg_class "
                     "WHERE oid = to_regclass($1)",
-                    (f"{space_id}_term",), conn=conn, conn_params=conn_params,
+                    (f"{space_prefix(space_id)}_term",), conn=conn, conn_params=conn_params,
                     lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
                 n_terms = rrows[0]["n"] if rrows else None
                 # -1 is PostgreSQL's "never analyzed", not a row count.
@@ -1396,7 +1398,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 continue
             _stage = _mark("text term count (term)")
             trows = await db.execute_query(
-                f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_term "
+                f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_prefix(space_id)}_term "
                 f"WHERE {cond} LIMIT {_TEXT_TERM_CAP}) s",
                 conn=conn, conn_params=conn_params,
                 lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
@@ -1408,9 +1410,9 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             else:
                 _stage = _mark("text count (rdf_quad)")
                 crows = await db.execute_query(
-                    f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad q "
+                    f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad q "
                     f"WHERE q.predicate_uuid = '{p_uuid}'::uuid AND q.object_uuid IN "
-                    f"(SELECT term_uuid FROM {space_id}_term WHERE {cond}) "
+                    f"(SELECT term_uuid FROM {space_prefix(space_id)}_term WHERE {cond}) "
                     f"LIMIT {_TEXT_COUNT_CAP}) s",
                     conn=conn, conn_params=conn_params,
                     lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
@@ -1699,7 +1701,7 @@ async def _generate_sql(
                               children=[plan])
 
         # Stage 2: Materialize constants
-        term_table = f"{space_id}_term"
+        term_table = f"{space_prefix(space_id)}_term"
         if conn is not None or conn_params is not None:
             with _decisions.stage("materialize_constants"):
                 await materialize_constants(aliases, term_table,
@@ -2259,7 +2261,7 @@ async def _generate_sql(
                         _rows = await db.execute_query(
                             f"SELECT predicate_uuid::text, object_uuid::text, "
                             f"sum(row_count)::bigint AS row_count "
-                            f"FROM {space_id}_rdf_stats "
+                            f"FROM {space_prefix(space_id)}_rdf_stats "
                             f"WHERE (predicate_uuid, object_uuid) IN ({_vals})"
                             f"{_ctx_filter(space_id, _tlock)} "
                             f"GROUP BY 1, 2",
@@ -2349,7 +2351,7 @@ async def _generate_sql(
         _idx_meta_t0 = time.monotonic()
         if conn is not None:
             try:
-                vi_table = f"{space_id}_vector_index"
+                vi_table = f"{space_prefix(space_id)}_vector_index"
                 rows = await conn.fetch(
                     f"SELECT index_name, model_name, dimensions "
                     f"FROM {vi_table}")
@@ -2363,7 +2365,7 @@ async def _generate_sql(
             except Exception:
                 pass  # table may not exist for non-vector spaces
             try:
-                fi_table = f"{space_id}_fts_index"
+                fi_table = f"{space_prefix(space_id)}_fts_index"
                 rows = await conn.fetch(
                     f"SELECT index_name, languages, "
                     f"coalesce(rank_normalization, 0) AS rank_normalization "
@@ -2382,8 +2384,8 @@ async def _generate_sql(
         search_mapping_meta: Dict[str, Dict[str, str]] = {}
         if conn is not None:
             try:
-                sm_table = f"{space_id}_search_mapping"
-                smi_table = f"{space_id}_search_mapping_index"
+                sm_table = f"{space_prefix(space_id)}_search_mapping"
+                smi_table = f"{space_prefix(space_id)}_search_mapping_index"
                 rows = await conn.fetch(
                     f"SELECT sm.index_name AS mapping_name, smi.index_type, smi.index_name "
                     f"FROM {sm_table} sm "

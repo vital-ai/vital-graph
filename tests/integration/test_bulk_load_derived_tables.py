@@ -32,6 +32,7 @@ import pytest
 from rdflib import Literal, URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -85,19 +86,19 @@ async def _snapshot(conn, space_id: str) -> dict:
     """Every derived table, as comparable sets."""
     edges = await conn.fetch(
         f"SELECT edge_uuid, source_node_uuid, dest_node_uuid, context_uuid, "
-        f"edge_type_uuid FROM {space_id}_edge")
+        f"edge_type_uuid FROM {space_prefix(space_id)}_edge")
     # `frame_entity` was retired for `frame_slot` (`issues/183`): the old table
     # named the two roles in its COLUMNS, which made a per-dataset data value
     # part of the schema. `frame_slot` carries the role as a uuid, one row per
     # slot rather than one per frame.
     fs = await conn.fetch(
         f"SELECT frame_uuid, slot_uuid, role_uuid, entity_uuid, context_uuid, "
-        f"frame_type_uuid FROM {space_id}_frame_slot")
+        f"frame_type_uuid FROM {space_prefix(space_id)}_frame_slot")
     stats = await conn.fetch(
         f"SELECT predicate_uuid, object_uuid, row_count "
-        f"FROM {space_id}_rdf_stats")
+        f"FROM {space_prefix(space_id)}_rdf_stats")
     preds = await conn.fetch(
-        f"SELECT predicate_uuid, row_count FROM {space_id}_rdf_pred_stats")
+        f"SELECT predicate_uuid, row_count FROM {space_prefix(space_id)}_rdf_pred_stats")
     return {
         "edge": {tuple(r) for r in edges},
         "frame_slot": {tuple(r) for r in fs},

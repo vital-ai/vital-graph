@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,7 @@ async def resolve_fuzzy_mapping(
     3. None (no fuzzy mapping configured)
     """
     sql = RESOLVE_FUZZY_MAPPING_SQL.format(
-        fuzzy_mapping=f"{space_id}_fuzzy_mapping",
+        fuzzy_mapping=f"{space_prefix(space_id)}_fuzzy_mapping",
     )
     row = await conn.fetchrow(sql, index_name, mapping_type, type_uri)
     if row is None:
@@ -151,7 +152,7 @@ async def resolve_fuzzy_mapping(
 
     # Fetch child property rows
     prop_sql = FUZZY_MAPPING_PROPERTIES_SQL.format(
-        fuzzy_mapping_property=f"{space_id}_fuzzy_mapping_property",
+        fuzzy_mapping_property=f"{space_prefix(space_id)}_fuzzy_mapping_property",
     )
     prop_rows = await conn.fetch(prop_sql, row["mapping_id"])
     for pr in prop_rows:
@@ -173,7 +174,7 @@ async def resolve_any_fuzzy_mapping(conn, space_id: str) -> Optional[FuzzyMappin
     Used by vg_resolve when we just need to know if fuzzy is configured.
     """
     sql = RESOLVE_ANY_FUZZY_MAPPING_SQL.format(
-        fuzzy_mapping=f"{space_id}_fuzzy_mapping",
+        fuzzy_mapping=f"{space_prefix(space_id)}_fuzzy_mapping",
     )
     row = await conn.fetchrow(sql)
     if row is None:
@@ -191,7 +192,7 @@ async def resolve_any_fuzzy_mapping(conn, space_id: str) -> Optional[FuzzyMappin
 
     # Fetch properties
     prop_sql = FUZZY_MAPPING_PROPERTIES_SQL.format(
-        fuzzy_mapping_property=f"{space_id}_fuzzy_mapping_property",
+        fuzzy_mapping_property=f"{space_prefix(space_id)}_fuzzy_mapping_property",
     )
     prop_rows = await conn.fetch(prop_sql, row["mapping_id"])
     for pr in prop_rows:
@@ -221,8 +222,8 @@ class FuzzyMappingManager:
     def __init__(self, conn, space_id: str):
         self.conn = conn
         self.space_id = space_id
-        self._mapping_table = f"{space_id}_fuzzy_mapping"
-        self._property_table = f"{space_id}_fuzzy_mapping_property"
+        self._mapping_table = f"{space_prefix(space_id)}_fuzzy_mapping"
+        self._property_table = f"{space_prefix(space_id)}_fuzzy_mapping_property"
 
     # ------------------------------------------------------------------
     # Mapping CRUD
@@ -385,8 +386,8 @@ class FuzzyMappingManager:
         if mapping is None:
             return None
 
-        band_table = f"{self.space_id}_fuzzy_band"
-        phonetic_band_table = f"{self.space_id}_fuzzy_phonetic_band"
+        band_table = f"{space_prefix(self.space_id)}_fuzzy_band"
+        phonetic_band_table = f"{space_prefix(self.space_id)}_fuzzy_phonetic_band"
 
         band_count = await self.conn.fetchval(
             f"SELECT COUNT(*) FROM {band_table}"

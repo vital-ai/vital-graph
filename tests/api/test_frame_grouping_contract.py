@@ -31,6 +31,7 @@ from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.api, pytest.mark.asyncio(loop_scope="session")]
 
@@ -71,8 +72,8 @@ def _slot_edge(frame_uri, slot_uri):
 
 async def _groupings(pg_conn, space, uri) -> set:
     rows = await pg_conn.fetch(
-        f"SELECT o.term_text FROM {space}_rdf_quad q "
-        f"JOIN {space}_term o ON o.term_uuid = q.object_uuid "
+        f"SELECT o.term_text FROM {space_prefix(space)}_rdf_quad q "
+        f"JOIN {space_prefix(space)}_term o ON o.term_uuid = q.object_uuid "
         f"WHERE q.subject_uuid = vitalgraph_term_uuid($1, 'U') "
         f"AND q.predicate_uuid = vitalgraph_term_uuid($2, 'U')", uri, FGU)
     return {r["term_text"] for r in rows}
@@ -80,7 +81,7 @@ async def _groupings(pg_conn, space, uri) -> set:
 
 async def _quads(pg_conn, space, uri) -> int:
     return await pg_conn.fetchval(
-        f"SELECT count(*) FROM {space}_rdf_quad "
+        f"SELECT count(*) FROM {space_prefix(space)}_rdf_quad "
         f"WHERE subject_uuid = vitalgraph_term_uuid($1, 'U')", uri)
 
 
@@ -201,7 +202,7 @@ async def test_the_slot_route_groups_a_slot_with_its_frame(
     assert await _groupings(pg_conn, test_space, str(client_edge.URI)) == {f}, (
         "the slot route kept the client's grouping on the Edge_hasKGSlot it sent")
     # The route also creates its own edge, `{frame}_{slot}_edge`.
-    assert await _groupings(pg_conn, test_space, f"{f}_{s}_edge") == {f}, (
+    assert await _groupings(pg_conn, test_space, f"{f}_{space_prefix(s)}_edge") == {f}, (
         "the slot route stored the Edge_hasKGSlot it CREATED with no "
         "hasFrameGraphURI at all")
 
@@ -262,12 +263,12 @@ async def _parent_child_edge_groupings(pg_conn, space, child_uri) -> list:
     """The hasFrameGraphURI values on every Edge_hasKGFrame pointing at child."""
     rows = await pg_conn.fetch(
         f"SELECT q.subject_uuid, "
-        f"  (SELECT array_agg(o.term_text) FROM {space}_rdf_quad g "
-        f"     JOIN {space}_term o ON o.term_uuid = g.object_uuid "
+        f"  (SELECT array_agg(o.term_text) FROM {space_prefix(space)}_rdf_quad g "
+        f"     JOIN {space_prefix(space)}_term o ON o.term_uuid = g.object_uuid "
         f"   WHERE g.subject_uuid = q.subject_uuid "
         f"     AND g.predicate_uuid = vitalgraph_term_uuid($3, 'U')) AS fgu "
-        f"FROM {space}_rdf_quad q "
-        f"JOIN {space}_rdf_quad d ON d.subject_uuid = q.subject_uuid "
+        f"FROM {space_prefix(space)}_rdf_quad q "
+        f"JOIN {space_prefix(space)}_rdf_quad d ON d.subject_uuid = q.subject_uuid "
         f"WHERE q.predicate_uuid = vitalgraph_term_uuid($1, 'U') "
         f"  AND q.object_uuid = vitalgraph_term_uuid($2, 'U') "
         f"  AND d.predicate_uuid = vitalgraph_term_uuid($4, 'U') "

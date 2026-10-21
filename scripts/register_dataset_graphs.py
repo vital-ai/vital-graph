@@ -48,6 +48,7 @@ from datetime import datetime
 sys.path.insert(0, os.getcwd())
 from devtools.target import dsn, sidecar_url  # noqa: E402
 import asyncpg  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 DSN = dsn()
 # EVERY dataset lives in a graph. No size threshold and no exclusions.
@@ -77,8 +78,8 @@ async def _contexts(conn, space_id):
     try:
         return await conn.fetch(f"""
             SELECT t.term_text AS uri, count(*) AS quads
-            FROM {space_id}_rdf_quad q
-            JOIN {space_id}_term t ON t.term_uuid = q.context_uuid
+            FROM {space_prefix(space_id)}_rdf_quad q
+            JOIN {space_prefix(space_id)}_term t ON t.term_uuid = q.context_uuid
             GROUP BY 1 ORDER BY 2 DESC
         """)
     except Exception:

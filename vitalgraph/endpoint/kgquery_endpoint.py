@@ -29,6 +29,7 @@ from ..cache.entity_graph_cache import _entity_graph_cache
 from ..cache.count_cache import _count_cache
 from vitalgraph.model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 # Upper bound on total_count when a caller opts in. A count is
@@ -350,8 +351,8 @@ class KGQueriesEndpoint:
             return None
         requested = fts.index_name
         targets = sorted({t.slot_type for t in (fts.targets or [])})
-        sm, smi, reg = (f"{space_id}_search_mapping", f"{space_id}_search_mapping_index",
-                        f"{space_id}_fts_index")
+        sm, smi, reg = (f"{space_prefix(space_id)}_search_mapping", f"{space_prefix(space_id)}_search_mapping_index",
+                        f"{space_prefix(space_id)}_fts_index")
         import asyncpg
         try:
             async with pool.acquire() as conn:
@@ -372,7 +373,7 @@ class KGQueriesEndpoint:
                     return (f"FTS is not configured in space '{space_id}': it has no "
                             f"FTS index registry, so index '{requested}' cannot exist.")
                 table_ok = await conn.fetchval(
-                    "SELECT to_regclass($1) IS NOT NULL", f"{space_id}_fts_{real}")
+                    "SELECT to_regclass($1) IS NOT NULL", f"{space_prefix(space_id)}_fts_{real}")
                 if not registered or not table_ok:
                     return (f"FTS index '{requested}' does not exist in space "
                             f"'{space_id}'. Create and populate it before searching.")

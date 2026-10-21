@@ -44,6 +44,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_term_uri_limit")
 
@@ -61,7 +62,7 @@ async def apply_space(conn, space_id: str) -> tuple:
     from vitalgraph.db.sparql_sql.uri_limit import (
         MAX_URI_BYTES, uri_limit_check_sql, uri_limit_constraint_name)
     name = uri_limit_constraint_name(space_id)
-    t = f"{space_id}_term"
+    t = f"{space_prefix(space_id)}_term"
     t0 = time.monotonic()
     if await constraint_state(conn, space_id) is None:
         await conn.execute(

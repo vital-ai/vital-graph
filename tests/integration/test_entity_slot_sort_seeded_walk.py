@@ -36,6 +36,7 @@ import pytest_asyncio
 from vitalgraph.db.sparql_sql import sync_entity_slot_sort as E
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -120,9 +121,9 @@ def _where(space_id: str) -> str:
          OR frame_w.frame_uuid_path && $8
          OR slot_e.edge_uuid = ANY($8)
          OR slot_e.dest_node_uuid IN (
-              SELECT dest_node_uuid FROM {space_id}_edge WHERE edge_uuid = ANY($8))
+              SELECT dest_node_uuid FROM {space_prefix(space_id)}_edge WHERE edge_uuid = ANY($8))
          OR frame_w.frame_uuid_path && ARRAY(
-              SELECT dest_node_uuid FROM {space_id}_edge WHERE edge_uuid = ANY($8)))
+              SELECT dest_node_uuid FROM {space_prefix(space_id)}_edge WHERE edge_uuid = ANY($8)))
     """
 
 
@@ -145,7 +146,7 @@ async def _derive(conn, space_id, touched, *, seeded):
 
 async def _sample(conn, space_id, column, n=24):
     return [r["u"] for r in await conn.fetch(
-        f"SELECT {column} AS u FROM {space_id}_edge LIMIT {n}")]
+        f"SELECT {column} AS u FROM {space_prefix(space_id)}_edge LIMIT {n}")]
 
 
 @pytest.mark.parametrize("column,reaches", [

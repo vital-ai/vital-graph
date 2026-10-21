@@ -25,6 +25,7 @@ left another for the minutes before its re-run. So validity is part of
 import logging
 import re
 from typing import Iterable, List, Optional, Set, Tuple
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ async def _present(conn, space_id: str) -> Tuple[Set[str], Set[str], Set[str]]:
     """`(tables, valid index names, INVALID index names)` for the space."""
     tables = {r["tablename"] for r in await conn.fetch(
         "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-        "AND tablename LIKE $1", f"{space_id}\\_%")}
+        "AND tablename LIKE $1", f"{space_prefix(space_id)}\\_%")}
     valid, invalid = set(), set()
     for r in await conn.fetch(
             "SELECT ci.relname, i.indisvalid AND i.indisready AS ok "

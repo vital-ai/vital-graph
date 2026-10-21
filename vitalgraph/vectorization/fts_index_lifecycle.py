@@ -15,6 +15,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ async def ensure_fts_index(
     if languages is None:
         languages = ["english"]
 
-    fts_index_table = f"{space_id}_fts_index"
+    fts_index_table = f"{space_prefix(space_id)}_fts_index"
     try:
         row = await conn.fetchrow(
             f"SELECT index_name FROM {fts_index_table} WHERE index_name = $1",
@@ -87,7 +88,7 @@ async def teardown_fts_index(conn, space_id: str, index_name: str) -> bool:
 
     Returns True on success.
     """
-    fts_index_table = f"{space_id}_fts_index"
+    fts_index_table = f"{space_prefix(space_id)}_fts_index"
     try:
         schema = SparqlSQLSchema()
         for stmt in schema.drop_fts_data_table_sql(space_id, index_name):
@@ -109,7 +110,7 @@ async def list_fts_indexes(conn, space_id: str) -> List[Dict[str, Any]]:
 
     Returns a list of dicts with keys: index_id, index_name, languages, created_time.
     """
-    fts_index_table = f"{space_id}_fts_index"
+    fts_index_table = f"{space_prefix(space_id)}_fts_index"
     try:
         rows = await conn.fetch(
             f"SELECT * FROM {fts_index_table} ORDER BY index_id"
@@ -133,7 +134,7 @@ async def get_fts_index(conn, space_id: str, index_name: str) -> Optional[Dict[s
 
     Returns a dict or None if not found.
     """
-    fts_index_table = f"{space_id}_fts_index"
+    fts_index_table = f"{space_prefix(space_id)}_fts_index"
     try:
         row = await conn.fetchrow(
             f"SELECT * FROM {fts_index_table} WHERE index_name = $1",
@@ -167,7 +168,7 @@ async def update_fts_languages(
 
     Returns True on success.
     """
-    fts_index_table = f"{space_id}_fts_index"
+    fts_index_table = f"{space_prefix(space_id)}_fts_index"
     try:
         # Update registry
         result = await conn.execute(
@@ -180,7 +181,7 @@ async def update_fts_languages(
 
         # Recreate trigger function with new languages
         schema = SparqlSQLSchema()
-        trigger_fn = f"{space_id}_fts_{index_name}_tsv_trigger"
+        trigger_fn = f"{space_prefix(space_id)}_fts_{index_name}_tsv_trigger"
         table = schema.fts_table_name(space_id, index_name)
         tsv_expr = schema._build_tsv_concat_expr(languages)
 
@@ -256,7 +257,7 @@ async def update_rank_normalization(conn, space_id: str, index_name: str,
     """
     try:
         result = await conn.execute(
-            f"UPDATE {space_id}_fts_index SET rank_normalization = $1 "
+            f"UPDATE {space_prefix(space_id)}_fts_index SET rank_normalization = $1 "
             f"WHERE index_name = $2", rank_normalization, index_name)
         updated = result.endswith(" 1")
         if updated:

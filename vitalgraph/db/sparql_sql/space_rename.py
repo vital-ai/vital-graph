@@ -34,6 +34,13 @@ orphan under the old id, which is the defect this whole issue is about — so
 `_map_name` returns None for anything it cannot confidently rewrite and the
 rename refuses. Silence is the one outcome that must be impossible.
 
+IT RENAMES NAME PREFIXES, AND ASSUMES A SPACE'S PREFIX IS ITS ID. Everything
+else names objects through `space_names.space_prefix`; this module maps
+`{old}` to `{new}` directly because it exists to move objects between prefixes,
+and today `space_prefix` is the identity. When the prefix becomes a storage key
+(`planning/planning_db/space_storage_key_plan.md`) renaming a space stops being
+DDL, and this module becomes the tool that moves a space onto its key.
+
 GRAPH URIs ARE NOT TOUCHED, which `issues/232` decided explicitly. The default
 graph URI is `urn:{space_id}` and it is stored as a term whose uuid is DERIVED
 FROM ITS TEXT, so rewriting it would change every `context_uuid` in `rdf_quad`,

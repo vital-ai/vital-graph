@@ -56,6 +56,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config_export import CONFIG_VERSION, _REDACTED
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ async def _apply_vector_indexes(conn, space_id, document, report, dry_run):
     from vitalgraph.vectorization.vector_index_lifecycle import ensure_index
 
     existing = {r["index_name"] for r in await conn.fetch(
-        f"SELECT index_name FROM {space_id}_vector_index")}
+        f"SELECT index_name FROM {space_prefix(space_id)}_vector_index")}
     for vi in document.get("vector_indexes") or []:
         name = vi.get("index_name")
         if name in existing:
@@ -433,13 +434,13 @@ async def _remove_absent(conn, space_id, document, report, dry_run):
     wanted_fts = {f.get("index_name") for f in document.get("fts_indexes") or []}
 
     for row in await conn.fetch(
-            f"SELECT index_name FROM {space_id}_vector_index ORDER BY index_name"):
+            f"SELECT index_name FROM {space_prefix(space_id)}_vector_index ORDER BY index_name"):
         name = row["index_name"]
         if name in wanted_vec:
             continue
-        rows = await _row_count(conn, f"{space_id}_vec_{name}")
+        rows = await _row_count(conn, f"{space_prefix(space_id)}_vec_{name}")
         entry = {"what": f"vector_index/{name}",
-                 "table": f"{space_id}_vec_{name}", "rows_destroyed": rows}
+                 "table": f"{space_prefix(space_id)}_vec_{name}", "rows_destroyed": rows}
         if dry_run:
             entry["rows_destroyed"] = rows          # would destroy
             report["removed"].append(entry)
@@ -454,9 +455,9 @@ async def _remove_absent(conn, space_id, document, report, dry_run):
         name = idx.get("index_name")
         if name in wanted_fts:
             continue
-        rows = await _row_count(conn, f"{space_id}_fts_{name}")
+        rows = await _row_count(conn, f"{space_prefix(space_id)}_fts_{name}")
         entry = {"what": f"fts_index/{name}",
-                 "table": f"{space_id}_fts_{name}", "rows_destroyed": rows}
+                 "table": f"{space_prefix(space_id)}_fts_{name}", "rows_destroyed": rows}
         if dry_run:
             report["removed"].append(entry)
             continue

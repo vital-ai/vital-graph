@@ -23,6 +23,7 @@ from __future__ import annotations
 import pytest
 
 from vitalgraph.cache.count_cache import CountCache
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 def test_a_hit_returns_the_stored_count():
@@ -109,7 +110,7 @@ async def test_a_failed_count_is_not_cached_as_zero():
     class _Schema:
         @staticmethod
         def get_table_names(space_id):
-            return {"rdf_quad": f"{space_id}_rdf_quad"}
+            return {"rdf_quad": f"{space_prefix(space_id)}_rdf_quad"}
 
     class _DB:
         _pool = _Boom()
@@ -175,7 +176,7 @@ def _impl_with(value):
     class _Schema:
         @staticmethod
         def get_table_names(space_id):
-            return {"rdf_quad": f"{space_id}_rdf_quad"}
+            return {"rdf_quad": f"{space_prefix(space_id)}_rdf_quad"}
 
     class _DB:
         _pool = _EstPool(value)

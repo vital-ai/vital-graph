@@ -41,6 +41,7 @@ from __future__ import annotations
 import logging
 import uuid
 from typing import Dict
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,9 @@ async def compute_edge_fanout(conn, space_id: str) -> int:
     incremental would mean maintaining a distribution under every write, which
     is far more machinery than the thing is worth.
     """
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
-    t_fan = f"{space_id}_edge_fanout"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
+    t_fan = f"{space_prefix(space_id)}_edge_fanout"
 
     has_type = await conn.fetchval(
         "SELECT 1 FROM information_schema.columns "
@@ -363,7 +364,7 @@ async def load_edge_fanout(conn, space_id: str) -> Dict[tuple, dict]:
     the table does not exist yet, so a space that predates it simply has no
     fan-out information rather than failing every query.
     """
-    t_fan = f"{space_id}_edge_fanout"
+    t_fan = f"{space_prefix(space_id)}_edge_fanout"
     try:
         rows = await conn.fetch(
             f"SELECT edge_type_uuid, relation_type_uuid, direction, "

@@ -49,6 +49,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("repair_derived_tables")
 
@@ -85,7 +86,7 @@ async def _exists(conn, table: str) -> bool:
 
 
 async def _count(conn, space_id: str, suffix: str):
-    t = f"{space_id}_{suffix}"
+    t = f"{space_prefix(space_id)}_{suffix}"
     if not await _exists(conn, t):
         return None
     return await conn.fetchval(f"SELECT count(*) FROM {t}")
@@ -98,9 +99,9 @@ async def survey_space(conn, space_id: str) -> dict | None:
     have an empty frame_slot. So the expected row count is derived from the
     quads and compared, rather than treating zero as automatically wrong.
     """
-    if not await _exists(conn, f"{space_id}_rdf_quad"):
+    if not await _exists(conn, f"{space_prefix(space_id)}_rdf_quad"):
         return None
-    quads = await conn.fetchval(f"SELECT count(*) FROM {space_id}_rdf_quad")
+    quads = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(space_id)}_rdf_quad")
     if not quads:
         return None
 
@@ -109,7 +110,7 @@ async def survey_space(conn, space_id: str) -> dict | None:
     edge = await _count(conn, space_id, "edge")
 
     present = await conn.fetchval(f"""
-        SELECT count(*) FROM {space_id}_term WHERE term_text = ANY($1::text[])
+        SELECT count(*) FROM {space_prefix(space_id)}_term WHERE term_text = ANY($1::text[])
     """, list(CONNECTOR_URIS))
     uses_connectors = present == len(CONNECTOR_URIS)
 
@@ -159,8 +160,8 @@ async def survey_space(conn, space_id: str) -> dict | None:
         from vitalgraph.db.sparql_sql.sync_value_stats import DEFAULT_BUCKETS
         buildable = await conn.fetchval(f"""
             SELECT EXISTS (
-              SELECT 1 FROM {space_id}_rdf_quad q
-              JOIN {space_id}_term t ON t.term_uuid = q.object_uuid
+              SELECT 1 FROM {space_prefix(space_id)}_rdf_quad q
+              JOIN {space_prefix(space_id)}_term t ON t.term_uuid = q.object_uuid
               WHERE t.num_val IS NOT NULL OR t.dt_val IS NOT NULL
               GROUP BY q.predicate_uuid,
                        (t.num_val IS NOT NULL)

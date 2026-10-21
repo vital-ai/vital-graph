@@ -25,6 +25,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +268,7 @@ async def resolve_search_mapping(
     3. None (caller should use default behavior)
     """
     sql = RESOLVE_SEARCH_MAPPING_SQL.format(
-        search_mapping=f"{space_id}_search_mapping",
+        search_mapping=f"{space_prefix(space_id)}_search_mapping",
     )
     row = await conn.fetchrow(sql, index_name, mapping_type, type_uri)
     if row is None:
@@ -283,7 +284,7 @@ async def resolve_search_mapping(
 
     # Fetch child property rows
     prop_sql = SEARCH_MAPPING_PROPERTIES_SQL.format(
-        search_mapping_property=f"{space_id}_search_mapping_property",
+        search_mapping_property=f"{space_prefix(space_id)}_search_mapping_property",
     )
     prop_rows = await conn.fetch(prop_sql, row["mapping_id"])
     for pr in prop_rows:
@@ -300,8 +301,8 @@ async def fetch_literal_properties(
 ) -> List[Tuple[str, str]]:
     """Fetch all literal-valued properties for a single subject."""
     sql = LITERAL_PROPERTIES_SQL.format(
-        rdf_quad=f"{space_id}_rdf_quad",
-        term=f"{space_id}_term",
+        rdf_quad=f"{space_prefix(space_id)}_rdf_quad",
+        term=f"{space_prefix(space_id)}_term",
     )
     rows = await conn.fetch(sql, subject_uuid, context_uuid)
     return [(r["predicate_uri"], r["object_text"]) for r in rows]
@@ -315,8 +316,8 @@ async def fetch_literal_properties_batch(
     Returns a dict mapping subject_uuid → [(predicate_uri, object_text), ...].
     """
     sql = LITERAL_PROPERTIES_BATCH_SQL.format(
-        rdf_quad=f"{space_id}_rdf_quad",
-        term=f"{space_id}_term",
+        rdf_quad=f"{space_prefix(space_id)}_rdf_quad",
+        term=f"{space_prefix(space_id)}_term",
     )
     rows = await conn.fetch(sql, subject_uuids, context_uuid)
 

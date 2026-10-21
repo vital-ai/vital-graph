@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from vitalgraph.db.sparql_sql.uri_limit import check_uri
 from vitalgraph.vectorization.index_sync_trigger import suppress as suppress_index_sync
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ async def _resolve_datatype_ids(conn, space_id: str,
     uris = {u for u in uris if u}
     if not uris:
         return {}
-    t_dt = f"{space_id}_datatype"
+    t_dt = f"{space_prefix(space_id)}_datatype"
     await conn.executemany(
         f"INSERT INTO {t_dt} (datatype_uri) VALUES ($1) ON CONFLICT DO NOTHING",
         [(u,) for u in sorted(uris)])

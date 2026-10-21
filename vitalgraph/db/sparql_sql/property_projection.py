@@ -39,6 +39,7 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence
 
 from .fast_slot_sort import _term_uuid
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +104,8 @@ async def project_property_values(
     rows = await conn.fetch(
         f"""
         SELECT q.subject_uuid, q.predicate_uuid, t.term_text
-        FROM {space_id}_rdf_quad q
-        JOIN {space_id}_term t ON t.term_uuid = q.object_uuid
+        FROM {space_prefix(space_id)}_rdf_quad q
+        JOIN {space_prefix(space_id)}_term t ON t.term_uuid = q.object_uuid
         WHERE q.context_uuid = $1
           AND q.subject_uuid = ANY($2::uuid[])
           AND q.predicate_uuid = ANY($3::uuid[])

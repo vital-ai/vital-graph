@@ -13,6 +13,7 @@ os.chdir(str(Path(__file__).parent.parent))
 logging.basicConfig(level=logging.WARNING, format="%(name)s - %(message)s")
 
 from dotenv import load_dotenv
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 
@@ -82,7 +83,7 @@ async def main():
     for sid in space_ids:
         async with pool.acquire() as conn:
             cnt = await conn.fetchval(
-                f"SELECT COUNT(*) FROM {sid}_rdf_quad LIMIT 1"
+                f"SELECT COUNT(*) FROM {space_prefix(sid)}_rdf_quad LIMIT 1"
             )
         if cnt and cnt > 0:
             print(f"  {sid}: {cnt} quads")
@@ -102,7 +103,7 @@ async def main():
     # First, find typed literals using a direct SQL check
     async with pool.acquire() as conn:
         dt_rows = await conn.fetch(
-            f"SELECT datatype_id, datatype_uri FROM {space_id}_datatype ORDER BY datatype_id LIMIT 20"
+            f"SELECT datatype_id, datatype_uri FROM {space_prefix(space_id)}_datatype ORDER BY datatype_id LIMIT 20"
         )
     if dt_rows:
         print(f"  Datatype table ({len(dt_rows)} entries):")
@@ -115,9 +116,9 @@ async def main():
     async with pool.acquire() as conn:
         typed_rows = await conn.fetch(
             f"SELECT t.term_text, t.datatype_id, d.datatype_uri, COUNT(*) as cnt "
-            f"FROM {space_id}_rdf_quad q "
-            f"JOIN {space_id}_term t ON q.object_uuid = t.term_uuid "
-            f"LEFT JOIN {space_id}_datatype d ON t.datatype_id = d.datatype_id "
+            f"FROM {space_prefix(space_id)}_rdf_quad q "
+            f"JOIN {space_prefix(space_id)}_term t ON q.object_uuid = t.term_uuid "
+            f"LEFT JOIN {space_prefix(space_id)}_datatype d ON t.datatype_id = d.datatype_id "
             f"WHERE t.term_type = 'L' AND t.datatype_id IS NOT NULL "
             f"GROUP BY t.term_text, t.datatype_id, d.datatype_uri "
             f"LIMIT 5"

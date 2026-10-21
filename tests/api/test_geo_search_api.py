@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.api,
@@ -202,7 +203,7 @@ class TestGeoDbVerification:
     async def test_geo_spatial_indexes_exist(self, pg_conn, geo_env):
         """Verify spatial indexes on the geo table."""
         sid = geo_env["space_id"]
-        for idx_name in [f"idx_{sid}_geo_subj", f"idx_{sid}_geo_ctx"]:
+        for idx_name in [f"idx_{space_prefix(sid)}_geo_subj", f"idx_{space_prefix(sid)}_geo_ctx"]:
             exists = await pg_conn.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = $1)",
                 idx_name,
@@ -232,7 +233,7 @@ class TestGeoDbVerification:
     async def test_geo_index_definitions(self, pg_conn, geo_env):
         """Verify actual index definitions on the geo table."""
         sid = geo_env["space_id"]
-        geo_table = f"{sid}_geo"
+        geo_table = f"{space_prefix(sid)}_geo"
         # Get all indexes on the geo table
         rows = await pg_conn.fetch(
             "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = $1",

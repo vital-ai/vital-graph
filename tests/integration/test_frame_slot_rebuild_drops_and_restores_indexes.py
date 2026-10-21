@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -46,11 +47,11 @@ def _quads(n_frames=12, slots=3):
 
 async def _indexes(conn, space):
     return sorted(r["indexname"] for r in await conn.fetch(
-        "SELECT indexname FROM pg_indexes WHERE tablename = $1", f"{space}_frame_slot"))
+        "SELECT indexname FROM pg_indexes WHERE tablename = $1", f"{space_prefix(space)}_frame_slot"))
 
 
 async def _rows(conn, space):
-    return sorted(tuple(r) for r in await conn.fetch(f"SELECT * FROM {space}_frame_slot"))
+    return sorted(tuple(r) for r in await conn.fetch(f"SELECT * FROM {space_prefix(space)}_frame_slot"))
 
 
 async def test_the_rebuild_restores_every_index_and_the_rows(test_space, space_impl, pg_pool):

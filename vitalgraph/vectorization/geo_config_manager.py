@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Set
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ class GeoConfigManager:
     def __init__(self, conn, space_id: str):
         self.conn = conn
         self.space_id = space_id
-        self._table = f"{space_id}_geo_config"
+        self._table = f"{space_prefix(space_id)}_geo_config"
 
     async def get_config(self) -> Optional[GeoConfigDTO]:
         """Return the geo config row, or None if not yet created."""

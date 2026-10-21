@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from vitalgraph.vectorization.geo_config_manager import (
     GeoConfigManager, GeoConfigDTO,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -223,10 +224,10 @@ async def populate_geo(
     else:
         dtypes = GEO_DATATYPE_URIS
 
-    geo_table = f"{space_id}_geo"
-    rdf_quad = f"{space_id}_rdf_quad"
-    term = f"{space_id}_term"
-    datatype = f"{space_id}_datatype"
+    geo_table = f"{space_prefix(space_id)}_geo"
+    rdf_quad = f"{space_prefix(space_id)}_rdf_quad"
+    term = f"{space_prefix(space_id)}_term"
+    datatype = f"{space_prefix(space_id)}_datatype"
 
     # Fetch all geo-typed literal quads
     sql = GEO_QUADS_SQL.format(rdf_quad=rdf_quad, term=term, datatype=datatype)
@@ -302,7 +303,7 @@ async def delete_subject_geo(
     conn, space_id: str, subject_uuid, context_uuid,
 ) -> bool:
     """Remove a subject's geo point."""
-    geo_table = f"{space_id}_geo"
+    geo_table = f"{space_prefix(space_id)}_geo"
     try:
         await conn.execute(
             GEO_DELETE_SQL.format(geo_table=geo_table),
@@ -343,15 +344,15 @@ async def update_subject_geo(
     else:
         dtypes = GEO_DATATYPE_URIS
 
-    rdf_quad = f"{space_id}_rdf_quad"
-    term = f"{space_id}_term"
-    datatype = f"{space_id}_datatype"
+    rdf_quad = f"{space_prefix(space_id)}_rdf_quad"
+    term = f"{space_prefix(space_id)}_term"
+    datatype = f"{space_prefix(space_id)}_datatype"
 
     sql = GEO_QUADS_SQL.format(rdf_quad=rdf_quad, term=term, datatype=datatype)
     sql += " AND q.subject_uuid = $3"
     rows = await conn.fetch(sql, context_uuid, list(dtypes), subject_uuid)
 
-    geo_table = f"{space_id}_geo"
+    geo_table = f"{space_prefix(space_id)}_geo"
     upsert_sql = GEO_UPSERT_SQL.format(geo_table=geo_table)
     for r in rows:
         parsed = parse_geo_wkt(r["value_text"])

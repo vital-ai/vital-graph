@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any, List, Optional, Set, Tuple
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -181,8 +182,8 @@ async def resolve_entity_uuid_for_slot(
     this is that decision, recorded rather than made by accident.
     """
     # Edge traversal: slot → frame → owning entity
-    rdf_quad = f"{space_id}_rdf_quad"
-    term = f"{space_id}_term"
+    rdf_quad = f"{space_prefix(space_id)}_rdf_quad"
+    term = f"{space_prefix(space_id)}_term"
 
     # Step 1: slot → frame
     sql_s2f = _SLOT_TO_FRAME_SQL.format(rdf_quad=rdf_quad, term=term)
@@ -221,7 +222,7 @@ async def process_geo_slot(
     """
     from vitalgraph.vectorization.geo_populator import GEO_UPSERT_SQL, GEO_DELETE_BY_SLOT_SQL
 
-    geo_table = f"{space_id}_geo"
+    geo_table = f"{space_prefix(space_id)}_geo"
 
     # Resolve the owning entity
     entity_uuid = await resolve_entity_uuid_for_slot(conn, space_id, slot_uuid, context_uuid)
@@ -242,8 +243,8 @@ async def process_geo_slot(
             return False
 
     # Read the slot's hasGeoLocationSlotValue
-    rdf_quad = f"{space_id}_rdf_quad"
-    term = f"{space_id}_term"
+    rdf_quad = f"{space_prefix(space_id)}_rdf_quad"
+    term = f"{space_prefix(space_id)}_term"
     sql = _SLOT_VALUE_SQL.format(rdf_quad=rdf_quad, term=term)
     row = await conn.fetchrow(sql, slot_uuid, context_uuid, GEO_SLOT_VALUE_PRED)
 
@@ -333,8 +334,8 @@ async def detect_and_process_geo_slots(
     if not subject_uuids:
         return 0
 
-    rdf_quad = f"{space_id}_rdf_quad"
-    term = f"{space_id}_term"
+    rdf_quad = f"{space_prefix(space_id)}_rdf_quad"
+    term = f"{space_prefix(space_id)}_term"
 
     # Find which subjects are KGGeoLocationSlots (check vitaltype)
     detect_sql = f"""

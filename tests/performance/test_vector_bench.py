@@ -37,6 +37,7 @@ import pytest_asyncio
 from rdflib import URIRef, Literal
 
 from .conftest import skip_no_pg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -118,9 +119,9 @@ async def test_vector_index_build_and_search(vector_space, perf_record):
     pool = impl.db_impl._pool
     async with pool.acquire() as conn:
         ctx = await conn.fetchval(
-            f"SELECT term_uuid FROM {sid}_term WHERE term_text = $1", str(graph))
+            f"SELECT term_uuid FROM {space_prefix(sid)}_term WHERE term_text = $1", str(graph))
         await conn.execute(
-            f"INSERT INTO {sid}_vector_index "
+            f"INSERT INTO {space_prefix(sid)}_vector_index "
             f"(index_name, dimensions, distance_metric, provider) "
             f"VALUES ($1, $2, 'cosine', 'openai') ON CONFLICT DO NOTHING",
             INDEX_NAME, DIMENSIONS)
@@ -131,15 +132,15 @@ async def test_vector_index_build_and_search(vector_space, perf_record):
         ddl_s = time.perf_counter() - t0
 
         subjects = await conn.fetch(
-            f"SELECT DISTINCT subject_uuid FROM {sid}_rdf_quad LIMIT {N_ENTITIES}")
+            f"SELECT DISTINCT subject_uuid FROM {space_prefix(sid)}_rdf_quad LIMIT {N_ENTITIES}")
         t0 = time.perf_counter()
         await conn.executemany(
-            f"INSERT INTO {sid}_vec_{INDEX_NAME} "
+            f"INSERT INTO {space_prefix(sid)}_vec_{INDEX_NAME} "
             f"(subject_uuid, context_uuid, embedding) "
             f"VALUES ($1, $2, $3::vector) ON CONFLICT DO NOTHING",
             [(r["subject_uuid"], ctx, _vector(rng)) for r in subjects])
         upsert_s = time.perf_counter() - t0
-        vec_rows = await conn.fetchval(f"SELECT count(*) FROM {sid}_vec_{INDEX_NAME}")
+        vec_rows = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_vec_{INDEX_NAME}")
 
     assert vec_rows >= N_ENTITIES * 0.9, (
         f"{vec_rows} vectors for {N_ENTITIES} entities — the search below would "
@@ -167,7 +168,7 @@ async def test_vector_index_build_and_search(vector_space, perf_record):
     async with pool.acquire() as conn:
         gen = await generate_sql(cr, sid, conn=conn)
         assert gen.ok, f"vector query failed to generate SQL: {gen.error}"
-        uses_vec = f"{sid}_vec_{INDEX_NAME}" in gen.sql
+        uses_vec = f"{space_prefix(sid)}_vec_{INDEX_NAME}" in gen.sql
         await conn.fetch(gen.sql)                        # warm
         runs = []
         for _ in range(3):
@@ -190,7 +191,7 @@ async def test_vector_index_build_and_search(vector_space, perf_record):
               f"{DIMENSIONS}-d vectors, pre-computed probe (no embedding)")
 
     assert uses_vec, (
-        f"the vector search did not touch {sid}_vec_{INDEX_NAME}, so it is not "
+        f"the vector search did not touch {space_prefix(sid)}_vec_{INDEX_NAME}, so it is not "
         f"measuring the index at all")
     assert rows, (
         "the vector search returned no rows, so its latency describes a query "

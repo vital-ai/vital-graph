@@ -17,6 +17,7 @@ import pytest
 from rdflib import URIRef
 
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -26,7 +27,7 @@ P = "http://vital.ai/ontology/vital-core#hasName"
 async def _count(space_impl, space_id, graph, subj):
     async with space_impl.db_impl.connection_pool.acquire() as c:
         return await c.fetchval(
-            f"SELECT count(*) FROM {space_id}_rdf_quad "
+            f"SELECT count(*) FROM {space_prefix(space_id)}_rdf_quad "
             f" WHERE subject_uuid = $1 AND context_uuid = $2",
             _generate_term_uuid(subj, "U"), _generate_term_uuid(graph, "U"))
 

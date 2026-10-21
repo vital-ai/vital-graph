@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import uuid
 from typing import Dict, List, Optional
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ def _secondary_index_ddl(space_id: str) -> List[tuple]:
     declares, so an index missing before the rebuild exists after it.
     """
     from .sparql_sql_schema import SparqlSQLSchema
-    t_fs = f"{space_id}_frame_slot"
+    t_fs = f"{space_prefix(space_id)}_frame_slot"
     out = []
     for stmt in SparqlSQLSchema().create_space_indexes_sql(space_id):
         if stmt.startswith("CREATE INDEX") and f" ON {t_fs} " in stmt:
@@ -88,9 +89,9 @@ async def resync_frame_slot_table(conn, space_id: str) -> int:
     index-only scans: 53 s for the SELECT alone). A 30-minute timeout on this
     space was a machine swapping, not a slow query; see the issue.
     """
-    t_fs = f"{space_id}_frame_slot"
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_fs = f"{space_prefix(space_id)}_frame_slot"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
     secondaries = _secondary_index_ddl(space_id)
 
     async with conn.transaction():
@@ -150,9 +151,9 @@ async def backfill_frame_slot_table(
     defines it, and the role is carried as DATA — `st.object_uuid` is selected,
     never compared against a URI this module names.
     """
-    t_fs = f"{space_id}_frame_slot"
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_fs = f"{space_prefix(space_id)}_frame_slot"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
 
     result = await conn.execute(f"""
         INSERT INTO {t_fs} (frame_uuid, slot_uuid, role_uuid, entity_uuid,
@@ -187,7 +188,7 @@ async def backfill_frame_slot_table(
 
 
 async def frame_slot_row_count(conn, space_id: str) -> int:
-    return await conn.fetchval(f"SELECT count(*) FROM {space_id}_frame_slot")
+    return await conn.fetchval(f"SELECT count(*) FROM {space_prefix(space_id)}_frame_slot")
 
 
 # Spaces whose `{space}_frame_slot` is known to exist. Only a True short-circuits,
@@ -224,7 +225,7 @@ async def _table_present(conn, space_id: str) -> bool:
     if _frame_slot_present.get(space_id):
         return True
     present = await conn.fetchval(
-        "SELECT to_regclass($1)", f"public.{space_id}_frame_slot") is not None
+        "SELECT to_regclass($1)", f"public.{space_prefix(space_id)}_frame_slot") is not None
     _frame_slot_present[space_id] = present
     if not present:
         logger.debug(
@@ -272,9 +273,9 @@ async def sync_frame_slot_after_edge_insert(conn, space_id: str,
         return 0
     if not await _table_present(conn, space_id):
         return 0
-    t_fs = f"{space_id}_frame_slot"
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_fs = f"{space_prefix(space_id)}_frame_slot"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
 
     from .sync_edge_table import chunk_uuids
 
@@ -328,7 +329,7 @@ async def _edge_owners(conn, space_id: str,
     if not touched_uuids:
         return []
     rows = await conn.fetch(
-        f"SELECT DISTINCT source_node_uuid FROM {space_id}_edge "
+        f"SELECT DISTINCT source_node_uuid FROM {space_prefix(space_id)}_edge "
         f"WHERE source_node_uuid = ANY($1::uuid[]) "
         f"   OR dest_node_uuid = ANY($1::uuid[]) "
         f"   OR edge_uuid = ANY($1::uuid[])",
@@ -353,7 +354,7 @@ async def _edge_source_nodes(conn, space_id: str,
     if not touched_uuids:
         return []
     rows = await conn.fetch(
-        f"SELECT DISTINCT source_node_uuid FROM {space_id}_edge "
+        f"SELECT DISTINCT source_node_uuid FROM {space_prefix(space_id)}_edge "
         f"WHERE dest_node_uuid = ANY($1::uuid[]) OR edge_uuid = ANY($1::uuid[])",
         touched_uuids)
     return [r["source_node_uuid"] for r in rows]
@@ -373,7 +374,7 @@ async def sync_frame_slot_before_delete(conn, space_id: str,
         return 0
     if not await _table_present(conn, space_id):
         return 0
-    t_fs = f"{space_id}_frame_slot"
+    t_fs = f"{space_prefix(space_id)}_frame_slot"
     # BOTH ARMS `= ANY(array)` SO THE PLANNER CAN BitmapOr THEM (`issues/253`,
     # applying `issues/238`'s fix to this table). The second arm used to be
     #
@@ -442,9 +443,9 @@ async def cleanup_stale_frame_slot(conn, space_id: str,
     value-slot row and still rejects one whose slot gained, lost or changed its
     entity.
     """
-    t_fs = f"{space_id}_frame_slot"
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_fs = f"{space_prefix(space_id)}_frame_slot"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
 
     cursor = _fs_sweep_cursor.get(space_id) or "(0,0)"
     rows = await conn.fetch(f"""
@@ -496,7 +497,7 @@ async def delete_frame_slot_for_context(conn, space_id: str,
     if not await _table_present(conn, space_id):
         return 0
     result = await conn.execute(
-        f"DELETE FROM {space_id}_frame_slot WHERE context_uuid = $1", context_uuid)
+        f"DELETE FROM {space_prefix(space_id)}_frame_slot WHERE context_uuid = $1", context_uuid)
     return int(result.split()[-1]) if result else 0
 
 
@@ -517,9 +518,9 @@ async def frame_slot_drift(conn, space_id: str, timeout: float = None) -> tuple:
     `timeout` is the CLIENT-side cancel (`issues/149`); it was accepted and never
     passed to the driver.
     """
-    t_fs = f"{space_id}_frame_slot"
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
+    t_fs = f"{space_prefix(space_id)}_frame_slot"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
     row = await conn.fetchrow(f"""
         SELECT
           (SELECT count(*) FROM (
@@ -540,8 +541,8 @@ async def frame_slot_orphan_rate(conn, space_id: str) -> float:
     the PREVIOUS contents: same size, disjoint set, drift zero, every traversal
     empty. `issues/041` is that failure, and only a referential probe sees it.
     """
-    t_fs = f"{space_id}_frame_slot"
-    t_edge = f"{space_id}_edge"
+    t_fs = f"{space_prefix(space_id)}_frame_slot"
+    t_edge = f"{space_prefix(space_id)}_edge"
     total = await conn.fetchval(f"SELECT count(*) FROM {t_fs}")
     if not total:
         return 0.0

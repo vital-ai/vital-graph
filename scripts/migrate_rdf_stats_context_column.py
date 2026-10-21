@@ -47,6 +47,7 @@ from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 from vitalgraph.db.sparql_sql.sync_stats_tables import (  # noqa: E402
     recompute_stats_tables,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_rdf_stats_context_column")
 
@@ -58,7 +59,7 @@ async def _has_column(conn, table: str, column: str) -> bool:
 
 
 async def migrate_space(conn, space_id: str, dry_run: bool = True) -> dict:
-    t = f"{space_id}_rdf_stats"
+    t = f"{space_prefix(space_id)}_rdf_stats"
     if not await conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
             t):
@@ -124,7 +125,7 @@ async def migrate_space(conn, space_id: str, dry_run: bool = True) -> dict:
 
     after = await conn.fetchval(f"SELECT count(*) FROM {t}")
     graphs = await conn.fetchval(
-        f"SELECT count(DISTINCT context_uuid) FROM {space_id}_rdf_quad")
+        f"SELECT count(DISTINCT context_uuid) FROM {space_prefix(space_id)}_rdf_quad")
     return {"space": space_id, "status": "migrated", "graphs": graphs,
             "rows_before": before, "rows_after": after}
 

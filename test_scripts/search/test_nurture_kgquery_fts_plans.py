@@ -23,6 +23,7 @@ from vitalgraph.sparql.kg_query_builder import (  # noqa: E402
     FrameQueryCriteria,
     SortCriteria as BuilderSortCriteria,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 
 def to_builder(case, index_name: str) -> FrameQueryCriteria:
@@ -91,7 +92,7 @@ async def main() -> int:
             generated = await generate_sql(compiled, space)
             sql = generated.sql
             checks = {
-                "fts table": f"{space}_fts_{index_name}" in sql,
+                "fts table": f"{space_prefix(space)}_fts_{index_name}" in sql,
                 "boolean match": "tsv @@" in sql,
                 "websearch parser": "websearch_to_tsquery" in sql,
                 "no rank": "ts_rank" not in sql,
@@ -123,9 +124,9 @@ async def main() -> int:
             checks.update(
                 {
                     "metadata bounded to page": "urn:test:frame:page-row" in matches_sql,
-                    "metadata uses fts": f"{space}_fts_{index_name}" in matches_sql,
+                    "metadata uses fts": f"{space_prefix(space)}_fts_{index_name}" in matches_sql,
                     "metadata has no rank": "ts_rank" not in matches_sql,
-                    "count uses fts": f"{space}_fts_{index_name}" in count_sql,
+                    "count uses fts": f"{space_prefix(space)}_fts_{index_name}" in count_sql,
                     "count has no rank": "ts_rank" not in count_sql,
                 }
             )

@@ -20,6 +20,7 @@ import pytest
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
 from .conftest import skip_no_pg, space_exists
 from .harness import assert_plan, node_types, total_shared_buffers
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -59,25 +60,25 @@ async def test_selective_graph_scoped_scan_is_index_only(perf_pool, perf_record)
 
         # Ensure the covering index + a set visibility map (index-only needs it).
         # Idempotent; the index persists after the first run.
-        idx = f"idx_{space_id}_quad_ctx_pred"
+        idx = f"idx_{space_prefix(space_id)}_quad_ctx_pred"
         await conn.execute(
-            f"CREATE INDEX IF NOT EXISTS {idx} ON {space_id}_rdf_quad {_INCLUDE}")
-        await conn.execute(f"VACUUM (ANALYZE) {space_id}_rdf_quad")
+            f"CREATE INDEX IF NOT EXISTS {idx} ON {space_prefix(space_id)}_rdf_quad {_INCLUDE}")
+        await conn.execute(f"VACUUM (ANALYZE) {space_prefix(space_id)}_rdf_quad")
 
         g_uuid = _generate_term_uuid(graph_uri, "U")
         p_uuid = _generate_term_uuid(pred_uri, "U")
-        sql = (f"SELECT subject_uuid, object_uuid FROM {space_id}_rdf_quad "
+        sql = (f"SELECT subject_uuid, object_uuid FROM {space_prefix(space_id)}_rdf_quad "
                f"WHERE context_uuid = $1 AND predicate_uuid = $2")
 
         plan = await assert_plan(
             conn, sql, g_uuid, p_uuid,
             must_use_index=idx,
             index_only=True,                      # Index Only Scan + 0 heap fetches
-            no_seq_scan_on=[f"{space_id}_rdf_quad"],
+            no_seq_scan_on=[f"{space_prefix(space_id)}_rdf_quad"],
             no_spill=True,
         )
         matched = await conn.fetchval(
-            f"SELECT count(*) FROM {space_id}_rdf_quad "
+            f"SELECT count(*) FROM {space_prefix(space_id)}_rdf_quad "
             f"WHERE context_uuid = $1 AND predicate_uuid = $2", g_uuid, p_uuid)
         perf_record(plan=plan, dataset=space_id, metrics={"matched_rows": matched})
         print(f"\n[{space_id}] graph-scoped scan matched {matched} rows: "

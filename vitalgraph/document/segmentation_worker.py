@@ -26,6 +26,7 @@ from vitalgraph.document.segmentation_job_manager import (
     SegmentationJobDTO,
     SegmentationJobManager,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ class SegmentationWorker:
                         space_id, msg, _IDLE_POLL_INTERVAL,
                     )
                     continue
-                channel = f"{space_id}_seg_jobs"
+                channel = f"{space_prefix(space_id)}_seg_jobs"
                 await conn.add_listener(channel, self._on_notify)
                 self._listen_conns.append((conn, channel))
                 self._listen_status[space_id] = "connected"
@@ -810,7 +811,7 @@ class SegmentationWorker:
             type_config = None
             if doc_type and await conn.fetchval(
                     "SELECT to_regclass($1) IS NOT NULL",
-                    f"{space_id}_document_segmentation_config"):
+                    f"{space_prefix(space_id)}_document_segmentation_config"):
                 configs = await SegmentationConfigManager(
                     conn, space_id).get_config_for_document_type(doc_type)
                 matching = [c for c in configs

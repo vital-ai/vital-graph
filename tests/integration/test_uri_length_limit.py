@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -38,7 +39,7 @@ def _uri(n_bytes: int) -> str:
 
 async def _stored(conn, space, uri) -> bool:
     return bool(await conn.fetchval(
-        f"SELECT 1 FROM {space}_term WHERE term_text = $1 AND term_type = 'U'", uri))
+        f"SELECT 1 FROM {space_prefix(space)}_term WHERE term_text = $1 AND term_type = 'U'", uri))
 
 
 async def test_a_uri_at_the_limit_is_stored(test_space, space_impl, pg_pool):

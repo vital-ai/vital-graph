@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, Iterable, Optional, Set
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ async def types_with_vectorize_off(conn, space_id: str,
     types = sorted({t for t in doc_types if t})
     if not types:
         return set()
-    table = f"{space_id}_document_segmentation_config"
+    table = f"{space_prefix(space_id)}_document_segmentation_config"
     if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", table):
         return set()
     rows = await conn.fetch(
@@ -104,8 +105,8 @@ async def vector_opt_outs(conn, space_id: str, subject_uuids,
     if not subject_uuids:
         return set()
     rows = await conn.fetch(
-        _STATE_SQL.format(rdf_quad=f"{space_id}_rdf_quad",
-                          term=f"{space_id}_term"),
+        _STATE_SQL.format(rdf_quad=f"{space_prefix(space_id)}_rdf_quad",
+                          term=f"{space_prefix(space_id)}_term"),
         subject_uuids, context_uuid,
         INDEX_STATUS_PROPERTY, _SEGMENT_INDEX, _DOCUMENT_TYPE)
     off: Set[str] = set()

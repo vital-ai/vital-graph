@@ -45,6 +45,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import pg_kwargs  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 
 def pg_env() -> dict:
@@ -55,7 +56,7 @@ def pg_env() -> dict:
 
 async def _ensure_column(conn, space: str) -> None:
     """Add edge_type_uuid if absent. Nullable, no default: catalogue-only."""
-    t_edge = f"{space}_edge"
+    t_edge = f"{space_prefix(space)}_edge"
     has = await conn.fetchval(
         "SELECT 1 FROM information_schema.columns "
         "WHERE table_name=$1 AND column_name='edge_type_uuid'", t_edge)
@@ -63,9 +64,9 @@ async def _ensure_column(conn, space: str) -> None:
         await conn.execute(
             f"ALTER TABLE {t_edge} ADD COLUMN edge_type_uuid UUID")
     for stmt in (
-        f"CREATE INDEX IF NOT EXISTS idx_{space}_edge_type_dst "
+        f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space)}_edge_type_dst "
         f"ON {t_edge} (edge_type_uuid, dest_node_uuid)",
-        f"CREATE INDEX IF NOT EXISTS idx_{space}_edge_type_src "
+        f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space)}_edge_type_src "
         f"ON {t_edge} (edge_type_uuid, source_node_uuid)",
     ):
         await conn.execute(stmt)
@@ -74,7 +75,7 @@ async def _ensure_column(conn, space: str) -> None:
 async def rebuild(conn, space: str, dry_run: bool) -> dict:
     from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
 
-    t_edge = f"{space}_edge"
+    t_edge = f"{space_prefix(space)}_edge"
     if not await conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
             t_edge):

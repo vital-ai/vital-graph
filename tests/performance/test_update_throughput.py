@@ -40,6 +40,7 @@ from .conftest import skip_no_pg
 from .test_delete_throughput import (  # noqa: F401
     delete_space_impl, delete_space, _edges, _edge_rows,
     VITALTYPE, SLOT_EDGE, HAS_EDGE_SOURCE, HAS_EDGE_DEST, PG)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -90,8 +91,8 @@ async def test_update_cost_across_the_three_forms(delete_space,
     async with impl.db_impl.connection_pool.acquire() as conn:
         final_edges = await _edge_rows(conn, sid)
         marked = await conn.fetchval(
-            f"SELECT count(*) FROM {sid}_rdf_quad q "
-            f"JOIN {sid}_term t ON t.term_uuid = q.object_uuid "
+            f"SELECT count(*) FROM {space_prefix(sid)}_rdf_quad q "
+            f"JOIN {space_prefix(sid)}_term t ON t.term_uuid = q.object_uuid "
             f"WHERE t.term_text = 'remarked'")
 
     perf_record(

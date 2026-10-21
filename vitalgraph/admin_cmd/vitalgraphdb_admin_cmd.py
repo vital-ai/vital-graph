@@ -27,6 +27,7 @@ from tabulate import tabulate
 # Import VitalGraphDB components
 from vitalgraph.config.config_loader import VitalGraphConfig
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 # GraphImportOp removed — import is now handled by standalone vitalgraphimport CLI
 
 
@@ -751,8 +752,8 @@ class VitalGraphDBAdminREPL:
             for s in space_ids:
                 print(f"\n🔄 Rebuilding indexes for space '{s}'...")
                 tables = [
-                    f"{s}_term", f"{s}_rdf_quad", f"{s}_datatype",
-                    f"{s}_rdf_pred_stats", f"{s}_rdf_stats",
+                    f"{space_prefix(s)}_term", f"{space_prefix(s)}_rdf_quad", f"{space_prefix(s)}_datatype",
+                    f"{space_prefix(s)}_rdf_pred_stats", f"{space_prefix(s)}_rdf_stats",
                 ]
                 async with pool.acquire() as conn:
                     for table in tables:
@@ -2093,7 +2094,7 @@ Note: All commands must end with a semicolon (;)
                     space_id + '\\_%'
                 )
                 if clashing:
-                    print(f"❌ {clashing} table(s) prefixed '{space_id}_' already "
+                    print(f"❌ {clashing} table(s) prefixed '{space_prefix(space_id)}_' already "
                           f"exist without a space record — resolve before creating")
                     return False
 

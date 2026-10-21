@@ -14,8 +14,9 @@ else on it waited, and an acquire that waited 15 s failed its sync with
 nothing to retry it. Here the number of syncs in flight is the number of
 consumers, and a failure is retried with backoff.
 
-WAKING. Enqueue NOTIFYs `index_sync_queue.NOTIFY_CHANNEL` with the space id;
-one LISTEN connection per process receives it. A sweep every
+WAKING. Enqueue NOTIFYs `index_sync_queue.NOTIFY_CHANNEL` with the space's
+name prefix (`space_names.space_prefix`), which is all the capture trigger can
+derive from its table; one LISTEN connection per process receives it. A sweep every
 `sweep_seconds` asks each space whether anything is due, which covers a missed
 notification, a retry whose backoff ran out and a lease that expired.
 
@@ -35,6 +36,7 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Set
 
 from . import index_sync_queue as q
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix, space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +100,7 @@ async def resolve(conn, space_id: str, context_uuid: uuid.UUID,
     removed from the indexes. Plus the geo slots an edge among the upserts
     reaches.
     """
-    quad = f"{space_id}_rdf_quad"
+    quad = f"{space_prefix(space_id)}_rdf_quad"
     present = {r["subject_uuid"] for r in await conn.fetch(
         _PRESENT_SQL.format(quad=quad), context_uuid, list(subject_uuids))}
     absent = [s for s in subject_uuids if s not in present]
@@ -276,7 +278,8 @@ class IndexSyncWorker:
             import asyncpg
             self._listen_conn = await asyncpg.connect(**kwargs)
             await self._listen_conn.add_listener(
-                q.NOTIFY_CHANNEL, lambda _c, _p, _ch, payload: self._mark(payload))
+                q.NOTIFY_CHANNEL,
+                lambda _c, _p, _ch, payload: self._mark(space_id_for_prefix(payload)))
         except Exception as e:
             self._listen_conn = None
             logger.warning("index sync: LISTEN failed (%s: %s); relying on the sweep",

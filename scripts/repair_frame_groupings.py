@@ -57,6 +57,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 KG = "http://vital.ai/ontology/haley-ai-kg#"
 VC = "http://vital.ai/ontology/vital-core#"
@@ -241,7 +242,7 @@ SQL = {
 
 async def _sql_violators(conn, space, key) -> list:
     """The exact violators of one step, as URI tuples in the step's VALUES order."""
-    q, t = f"{space}_rdf_quad", f"{space}_term"
+    q, t = f"{space_prefix(space)}_rdf_quad", f"{space_prefix(space)}_term"
     cols = ["x", "g", "f"] if key in ("3", "4") else ["x", "g"]
     inner = SQL[key].replace("{Q}", q)
     body = inner
@@ -258,7 +259,7 @@ async def census_sql(conn, space) -> tuple:
     for step in STEPS:
         found[step["key"]] = await _sql_violators(conn, space, step["key"])
         out[step["name"]] = len(found[step["key"]])
-    q = f"{space}_rdf_quad"
+    q = f"{space_prefix(space)}_rdf_quad"
     out["slots linked from more than one frame (not repaired)"] = await conn.fetchval(
         _inline(f"WITH {_SETS.replace('{Q}', q)} " + SQL["shared"].replace("{Q}", q)))
     return out, found
@@ -268,7 +269,7 @@ async def _current_groupings(conn, space, pairs) -> dict:
     """{(subject, graph): [hasFrameGraphURI values]} for the given subjects, by URI."""
     if not pairs:
         return {}
-    t, q = f"{space}_term", f"{space}_rdf_quad"
+    t, q = f"{space_prefix(space)}_term", f"{space_prefix(space)}_rdf_quad"
     rows = await conn.fetch(
         f"""SELECT ts.term_text AS x, tg.term_text AS g, tob.term_text AS o
             FROM unnest($1::text[], $2::text[]) AS v(x, g)

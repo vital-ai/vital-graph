@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 
 import asyncpg  # noqa: E402
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 
 async def find_absent_pair(conn, space: str):
@@ -41,11 +42,11 @@ async def find_absent_pair(conn, space: str):
     return await conn.fetchrow(f"""
         WITH per_pred AS (
           SELECT predicate_uuid, count(DISTINCT object_uuid) AS cardinality
-            FROM {space}_rdf_quad GROUP BY 1 ORDER BY 2 DESC LIMIT 1)
+            FROM {space_prefix(space)}_rdf_quad GROUP BY 1 ORDER BY 2 DESC LIMIT 1)
         SELECT q.predicate_uuid, q.object_uuid, count(*) AS rc
-          FROM {space}_rdf_quad q
+          FROM {space_prefix(space)}_rdf_quad q
           JOIN per_pred p ON p.predicate_uuid = q.predicate_uuid
-         WHERE NOT EXISTS (SELECT 1 FROM {space}_rdf_stats s
+         WHERE NOT EXISTS (SELECT 1 FROM {space_prefix(space)}_rdf_stats s
                             WHERE s.predicate_uuid = q.predicate_uuid
                               AND s.object_uuid = q.object_uuid)
          GROUP BY 1, 2 ORDER BY count(*) ASC LIMIT 1""")

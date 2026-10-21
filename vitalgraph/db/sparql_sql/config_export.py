@@ -48,6 +48,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ async def _rows(conn, space_id: str, suffix: str, columns: str,
     it is most needed — on the oldest space — so the absence is reported in the
     document instead.
     """
-    table = f"{space_id}_{suffix}"
+    table = f"{space_prefix(space_id)}_{suffix}"
     try:
         rows = await conn.fetch(
             f"SELECT {columns} FROM {table} ORDER BY {order}")

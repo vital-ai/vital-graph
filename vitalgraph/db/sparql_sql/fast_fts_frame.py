@@ -42,6 +42,7 @@ import uuid as _uuid
 from typing import Any, List, Optional, Tuple
 
 from .sort_value_key import fits_value_key
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -122,21 +123,21 @@ async def _resolve_index(conn, space_id: str, index_name: str
     real = index_name
     try:
         alias = await conn.fetchval(
-            f"SELECT smi.index_name FROM {space_id}_search_mapping sm "
-            f"JOIN {space_id}_search_mapping_index smi ON smi.mapping_id = sm.mapping_id "
+            f"SELECT smi.index_name FROM {space_prefix(space_id)}_search_mapping sm "
+            f"JOIN {space_prefix(space_id)}_search_mapping_index smi ON smi.mapping_id = sm.mapping_id "
             f"WHERE sm.index_name = $1 AND smi.index_type = 'fts' LIMIT 1", index_name)
         real = alias or index_name
     except Exception:
         pass
     try:
         langs = await conn.fetchval(
-            f"SELECT languages FROM {space_id}_fts_index WHERE index_name = $1", real)
+            f"SELECT languages FROM {space_prefix(space_id)}_fts_index WHERE index_name = $1", real)
     except Exception:
         return None
     if langs is None:
         return None
     cfg = (list(langs) or ["english"])[0]
-    table = f"{space_id}_fts_{real}"
+    table = f"{space_prefix(space_id)}_fts_{real}"
     if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", table):
         return None
     return table, cfg
@@ -145,9 +146,9 @@ async def _resolve_index(conn, space_id: str, index_name: str
 def _build(space_id: str, criteria, fts_table: str, cfg: str, *, for_count: bool,
            cap: Optional[int], page_size: int, offset: int) -> Tuple[str, list]:
     """The page or count SQL, and its parameters."""
-    ess = f"{space_id}_entity_slot_sort"
-    eps = f"{space_id}_entity_prop_sort"
-    term = f"{space_id}_term"
+    ess = f"{space_prefix(space_id)}_entity_slot_sort"
+    eps = f"{space_prefix(space_id)}_entity_prop_sort"
+    term = f"{space_prefix(space_id)}_term"
     fts = criteria.fts_criteria
     args: List[Any] = []
 

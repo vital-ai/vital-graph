@@ -58,6 +58,7 @@ from devtools.target import pg_kwargs  # noqa: E402
 
 from check_space_datatypes import (  # noqa: E402
     INCOMPLETE, NOT_EXPOSED, OK, check_space)
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 
 async def plan_repair(conn, space: str):
@@ -72,11 +73,11 @@ async def plan_repair(conn, space: str):
     want = {uri: i for i, uri in canonical}
 
     rows = await conn.fetch(
-        f"SELECT datatype_id, datatype_uri FROM {space}_datatype")
+        f"SELECT datatype_id, datatype_uri FROM {space_prefix(space)}_datatype")
     have = {r["datatype_id"]: r["datatype_uri"] for r in rows}
 
     used = {r["datatype_id"]: r["n"] for r in await conn.fetch(
-        f"SELECT datatype_id, count(*) AS n FROM {space}_term "
+        f"SELECT datatype_id, count(*) AS n FROM {space_prefix(space)}_term "
         f"WHERE datatype_id IS NOT NULL GROUP BY datatype_id")}
 
     # A term pointing at an id with no row: the URI it meant is gone. Refuse.
@@ -84,7 +85,7 @@ async def plan_repair(conn, space: str):
     if orphans:
         raise RuntimeError(
             f"{space}: {sum(orphans.values())} term(s) reference datatype id(s) "
-            f"{sorted(orphans)} that have no row in {space}_datatype. What "
+            f"{sorted(orphans)} that have no row in {space_prefix(space)}_datatype. What "
             f"those ids meant cannot be recovered, and this script will not "
             f"guess a datatype that would then be materialized into num_val.")
 
@@ -125,7 +126,7 @@ async def plan_topup(conn, space: str):
 
     canonical = [(i, uri) for i, (uri, _n) in enumerate(STANDARD_DATATYPES, 1)]
     rows = await conn.fetch(
-        f"SELECT datatype_id, datatype_uri FROM {space}_datatype")
+        f"SELECT datatype_id, datatype_uri FROM {space_prefix(space)}_datatype")
     by_id = {r["datatype_id"]: r["datatype_uri"] for r in rows}
     by_uri = {r["datatype_uri"] for r in rows}
 
@@ -156,17 +157,17 @@ async def apply_topup(conn, space: str, final) -> None:
     add, seq_to = final
     async with conn.transaction():
         have = {r["datatype_id"] for r in await conn.fetch(
-            f"SELECT datatype_id FROM {space}_datatype")}
+            f"SELECT datatype_id FROM {space_prefix(space)}_datatype")}
         clash = [i for i, _u in add if i in have]
         assert not clash, f"{space}: top-up would overwrite id(s) {clash}"
 
         await conn.executemany(
-            f"INSERT INTO {space}_datatype (datatype_id, datatype_uri) "
+            f"INSERT INTO {space_prefix(space)}_datatype (datatype_id, datatype_uri) "
             f"VALUES ($1, $2)", add)
         # Past every id now present, standard or not, so the next append
         # cannot land on one of these.
         await conn.execute(
-            f"SELECT setval('{space}_datatype_datatype_id_seq', $1, true)",
+            f"SELECT setval('{space_prefix(space)}_datatype_datatype_id_seq', $1, true)",
             seq_to)
 
 
@@ -179,23 +180,23 @@ async def apply_repair(conn, space: str, remap, final) -> None:
         OFFSET = 1_000_000
         for old, new in remap.items():
             await conn.execute(
-                f"UPDATE {space}_term SET datatype_id = $1 "
+                f"UPDATE {space_prefix(space)}_term SET datatype_id = $1 "
                 f"WHERE datatype_id = $2", new + OFFSET, old)
         if remap:
             await conn.execute(
-                f"UPDATE {space}_term SET datatype_id = datatype_id - $1 "
+                f"UPDATE {space_prefix(space)}_term SET datatype_id = datatype_id - $1 "
                 f"WHERE datatype_id > $1", OFFSET)
 
-        await conn.execute(f"DELETE FROM {space}_datatype")
+        await conn.execute(f"DELETE FROM {space_prefix(space)}_datatype")
         await conn.executemany(
-            f"INSERT INTO {space}_datatype (datatype_id, datatype_uri) "
+            f"INSERT INTO {space_prefix(space)}_datatype (datatype_id, datatype_uri) "
             f"VALUES ($1, $2)", final)
 
         # The sequence must clear the seeded block, or the loader's next
         # append reuses a standard id and puts the space straight back into
         # the state this repaired.
         await conn.execute(
-            f"SELECT setval('{space}_datatype_datatype_id_seq', $1, true)",
+            f"SELECT setval('{space_prefix(space)}_datatype_datatype_id_seq', $1, true)",
             max(i for i, _u in final))
 
 

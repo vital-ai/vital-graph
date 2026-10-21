@@ -21,6 +21,7 @@ import logging
 import pytest
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -41,7 +42,7 @@ async def _complete(conn, space_id) -> set:
     """
     from vitalgraph.db.sparql_sql.space_indexes import missing_space_indexes
     assert await missing_space_indexes(conn, space_id, [
-        f"{space_id}_term", f"{space_id}_rdf_quad"]) == [], (
+        f"{space_prefix(space_id)}_term", f"{space_prefix(space_id)}_rdf_quad"]) == [], (
         "the fixture space is already missing indexes; this test would prove nothing")
     names = await _index_names(conn, space_id)
     assert names
@@ -52,7 +53,7 @@ async def _index_names(conn, space_id) -> set:
     return {r["indexname"] for r in await conn.fetch(
         "SELECT indexname FROM pg_indexes WHERE tablename = ANY($1::text[]) "
         "AND indexname NOT LIKE '%_pkey'",
-        [f"{space_id}_term", f"{space_id}_rdf_quad"])}
+        [f"{space_prefix(space_id)}_term", f"{space_prefix(space_id)}_rdf_quad"])}
 
 
 @pytest.fixture

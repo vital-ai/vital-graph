@@ -25,6 +25,7 @@ import pytest_asyncio
 from rdflib import Literal, URIRef
 
 from .conftest import skip_no_infra, TEST_SPACE_PREFIX
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
@@ -55,8 +56,8 @@ async def test_a_fenced_stats_read_succeeds_during_a_recompute(
     sid = stats_space
 
     async with pg_pool.acquire() as writer, pg_pool.acquire() as reader:
-        before_stats = await reader.fetchval(f"SELECT count(*) FROM {sid}_rdf_stats")
-        before_pred = await reader.fetchval(f"SELECT count(*) FROM {sid}_rdf_pred_stats")
+        before_stats = await reader.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_rdf_stats")
+        before_pred = await reader.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_rdf_pred_stats")
         assert before_stats > 0 and before_pred > 0, (
             "the seed produced no stats rows; the read below would prove nothing")
 
@@ -67,8 +68,8 @@ async def test_a_fenced_stats_read_succeeds_during_a_recompute(
 
             await reader.execute(f"SET lock_timeout = '{STATS_LOCK_TIMEOUT_MS}ms'")
             try:
-                for table, before in ((f"{sid}_rdf_stats", before_stats),
-                                      (f"{sid}_rdf_pred_stats", before_pred)):
+                for table, before in ((f"{space_prefix(sid)}_rdf_stats", before_stats),
+                                      (f"{space_prefix(sid)}_rdf_pred_stats", before_pred)):
                     try:
                         seen = await reader.fetchval(f"SELECT count(*) FROM {table}")
                     except asyncpg.LockNotAvailableError:

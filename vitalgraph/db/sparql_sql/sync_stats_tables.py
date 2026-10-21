@@ -13,6 +13,7 @@ import logging
 import uuid
 from collections import Counter
 from typing import Dict, List, Tuple
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -239,9 +240,9 @@ async def recompute_stats_tables(conn, space_id: str,
     aggregate's index scan, not the table size.
     """
     n = int(keep_top_n if keep_top_n is not None else STATS_KEEP_DEFAULT)
-    t_quad = f"{space_id}_rdf_quad"
-    t_pred = f"{space_id}_rdf_pred_stats"
-    t_stats = f"{space_id}_rdf_stats"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
+    t_pred = f"{space_prefix(space_id)}_rdf_pred_stats"
+    t_stats = f"{space_prefix(space_id)}_rdf_stats"
 
     # ONE transaction. A DELETE that commits without its INSERT leaves the
     # table EMPTY, and absence means "not in the top N" to every consumer --

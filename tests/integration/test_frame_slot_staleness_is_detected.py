@@ -35,6 +35,7 @@ from vitalgraph.db.sparql_sql.sync_frame_slot_table import (
 )
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -52,9 +53,9 @@ async def _populated_space(conn):
     for r in rows:
         sid = r["space_id"]
         if not await conn.fetchval(
-                "SELECT 1 FROM pg_tables WHERE tablename = $1", f"{sid}_frame_slot"):
+                "SELECT 1 FROM pg_tables WHERE tablename = $1", f"{space_prefix(sid)}_frame_slot"):
             continue
-        if await conn.fetchval(f"SELECT count(*) FROM {sid}_frame_slot"):
+        if await conn.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_frame_slot"):
             return sid
     pytest.skip("no space on this stack has a populated frame_slot")
 
@@ -71,7 +72,7 @@ async def test_a_healthy_table_reads_zero(pg_conn):
 ], ids=["identity", "context"])
 async def test_staleness_is_detected_where_drift_is_blind(pg_conn, column, mode):
     sid = await _populated_space(pg_conn)
-    table = f"{sid}_frame_slot"
+    table = f"{space_prefix(sid)}_frame_slot"
 
     # Rolled back: this deliberately corrupts a real fixture table.
     tx = pg_conn.transaction()
@@ -96,7 +97,7 @@ async def test_resync_repairs_a_stale_table(pg_conn):
     work: the script only ever repaired an EMPTY table, so the one fault it could
     not fix was this one."""
     sid = await _populated_space(pg_conn)
-    table = f"{sid}_frame_slot"
+    table = f"{space_prefix(sid)}_frame_slot"
     before = await pg_conn.fetchval(f"SELECT count(*) FROM {table}")
 
     tx = pg_conn.transaction()

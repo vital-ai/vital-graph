@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -683,7 +684,7 @@ def _try_selective_driven(plan: PlanV2, ctx: EmitContext,
                      f"({driver_n} rows) rather than the anchor ({anchor_n})")
     return (f"SELECT {', '.join(cols)}\n"
             f"FROM ({page}) AS {r_alias}\n"
-            f"JOIN {ctx.space_id}_term AS {t_alias} "
+            f"JOIN {space_prefix(ctx.space_id)}_term AS {t_alias} "
             f"ON {r_alias}.{sn}__uuid = {t_alias}.term_uuid")
 
 
@@ -989,5 +990,5 @@ def _try_candidate_driven(plan, ctx, left_bgp, right_bgp, exists_expr,
                      f"negation excludes {excluded_n}/{population_n}")
     return (f"SELECT {', '.join(cols)}\n"
             f"FROM ({page}) AS {r_alias}\n"
-            f"JOIN {ctx.space_id}_term AS {t_alias} "
+            f"JOIN {space_prefix(ctx.space_id)}_term AS {t_alias} "
             f"ON {r_alias}.{sn}__uuid = {t_alias}.term_uuid")

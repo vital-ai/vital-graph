@@ -35,6 +35,7 @@ import pytest
 from rdflib import URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -61,10 +62,10 @@ async def _orphan_count(conn, space_id: str) -> int:
     """
     return await conn.fetchval(
         f"""
-        SELECT count(*) FROM {space_id}_edge e
+        SELECT count(*) FROM {space_prefix(space_id)}_edge e
         WHERE NOT EXISTS (
-            SELECT 1 FROM {space_id}_rdf_quad q
-            JOIN {space_id}_term t ON t.term_uuid = q.predicate_uuid
+            SELECT 1 FROM {space_prefix(space_id)}_rdf_quad q
+            JOIN {space_prefix(space_id)}_term t ON t.term_uuid = q.predicate_uuid
             WHERE q.subject_uuid = e.edge_uuid
               AND t.term_text = $1
               AND q.context_uuid = e.context_uuid)
@@ -74,7 +75,7 @@ async def _orphan_count(conn, space_id: str) -> int:
 
 
 async def _edge_rows(conn, space_id: str) -> int:
-    return await conn.fetchval(f"SELECT count(*) FROM {space_id}_edge")
+    return await conn.fetchval(f"SELECT count(*) FROM {space_prefix(space_id)}_edge")
 
 
 async def _seed(space_impl, space_id: str, n: int, tag: str) -> list:

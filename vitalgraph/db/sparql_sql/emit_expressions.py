@@ -38,6 +38,7 @@ from .vg_functions import (
     text_search_sql, hybrid_search_sql, fuzzy_match_sql,
     trigram_similarity_sql,
 )
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -2121,7 +2122,7 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
     # index, and still a per-probe InitPlan with one. The outer query never paid
     # this because substitute_constants resolves its tokens to literals; the
     # body was simply never given the same treatment (issues/057).
-    term_table = f"{ctx.space_id}_term"
+    term_table = f"{space_prefix(ctx.space_id)}_term"
     for (text, ttype, _lg, _dt), col_name in inner_aliases.constants.items():
         token = f"__CONST_{col_name}__"
         uuid_str = inner_aliases.resolved_constants.get(col_name)

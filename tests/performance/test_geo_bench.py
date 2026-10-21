@@ -36,6 +36,7 @@ import pytest_asyncio
 from rdflib import URIRef, Literal
 
 from .conftest import skip_no_pg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -115,11 +116,11 @@ async def test_geo_populate_and_search(geo_space, perf_record):
     pool = impl.db_impl._pool
     async with pool.acquire() as conn:
         ctx = await conn.fetchval(
-            f"SELECT term_uuid FROM {sid}_term WHERE term_text = $1", str(graph))
+            f"SELECT term_uuid FROM {space_prefix(sid)}_term WHERE term_text = $1", str(graph))
         t0 = time.perf_counter()
         stats = await populate_geo(conn, sid, ctx)
         populate_s = time.perf_counter() - t0
-        geo_rows = await conn.fetchval(f"SELECT count(*) FROM {sid}_geo")
+        geo_rows = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_geo")
 
     assert geo_rows == N_POINTS, (
         f"{geo_rows} geo rows for {N_POINTS} points — the search below would "
@@ -149,7 +150,7 @@ async def test_geo_populate_and_search(geo_space, perf_record):
     async with pool.acquire() as conn:
         gen = await generate_sql(cr, sid, conn=conn)
         assert gen.ok, f"geo query failed to generate SQL: {gen.error}"
-        uses_geo = f"{sid}_geo" in gen.sql
+        uses_geo = f"{space_prefix(sid)}_geo" in gen.sql
         await conn.fetch(gen.sql)                       # warm
         runs = []
         for _ in range(3):
@@ -173,7 +174,7 @@ async def test_geo_populate_and_search(geo_space, perf_record):
               f"radius {SEARCH_RADIUS_M}m top_k {TOP_K}")
 
     assert uses_geo, (
-        f"the geo search did not touch {sid}_geo, so it is not measuring the "
+        f"the geo search did not touch {space_prefix(sid)}_geo, so it is not measuring the "
         f"geo path at all")
     assert rows, (
         "the geo search returned no rows, so its latency describes a query "

@@ -16,6 +16,7 @@ from vitalgraph.constants import (
     TYPE_GRAPH_DESCRIPTION_PROPERTY,
     TYPE_URI_PROPERTIES,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +122,8 @@ class KGTypeDescriptionLookup:
         if not self.type_uri_property:
             return None
 
-        term_table = f"{space_id}_term"
-        quad_table = f"{space_id}_rdf_quad"
+        term_table = f"{space_prefix(space_id)}_term"
+        quad_table = f"{space_prefix(space_id)}_rdf_quad"
 
         sql = f"""
             SELECT ot.term_text
@@ -149,8 +150,8 @@ class KGTypeDescriptionLookup:
         if not self.type_uri_property or not subject_uuids:
             return {}
 
-        term_table = f"{space_id}_term"
-        quad_table = f"{space_id}_rdf_quad"
+        term_table = f"{space_prefix(space_id)}_term"
+        quad_table = f"{space_prefix(space_id)}_rdf_quad"
 
         sql = f"""
             SELECT q.subject_uuid, ot.term_text
@@ -171,8 +172,8 @@ class KGTypeDescriptionLookup:
 
     async def _fetch_description(self, conn, type_uri: str) -> Optional[str]:
         """Fetch a single type description from sp_kg_types tables."""
-        term_table = f"{self.SPACE_ID}_term"
-        quad_table = f"{self.SPACE_ID}_rdf_quad"
+        term_table = f"{space_prefix(self.SPACE_ID)}_term"
+        quad_table = f"{space_prefix(self.SPACE_ID)}_rdf_quad"
 
         sql = f"""
             SELECT ot.term_text
@@ -192,8 +193,8 @@ class KGTypeDescriptionLookup:
         self, conn, type_uris: List[str]
     ) -> Dict[str, str]:
         """Batch fetch descriptions from sp_kg_types tables."""
-        term_table = f"{self.SPACE_ID}_term"
-        quad_table = f"{self.SPACE_ID}_rdf_quad"
+        term_table = f"{space_prefix(self.SPACE_ID)}_term"
+        quad_table = f"{space_prefix(self.SPACE_ID)}_rdf_quad"
 
         sql = f"""
             SELECT st.term_text AS type_uri, ot.term_text AS description

@@ -32,6 +32,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_entity_prop_sort")
 
@@ -79,10 +80,10 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
     from vitalgraph.db.sparql_sql.sync_entity_prop_sort import (
         backfill_entity_prop_sort, entity_prop_sort_coverage)
 
-    table = f"{space_id}_entity_prop_sort"
+    table = f"{space_prefix(space_id)}_entity_prop_sort"
     if not await conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
-            f"{space_id}_rdf_quad"):
+            f"{space_prefix(space_id)}_rdf_quad"):
         return {"space": space_id, "status": "not a space (no rdf_quad)"}
 
     sch = SparqlSQLSchema()
@@ -96,7 +97,7 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
         # or the new table would be shaped unlike everything beside it.
         parts = await conn.fetchval(
             "SELECT count(*) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhparent"
-            " WHERE c.relname=$1", f"{space_id}_rdf_quad") or 0
+            " WHERE c.relname=$1", f"{space_prefix(space_id)}_rdf_quad") or 0
         for stmt in sch.create_space_tables_sql(space_id, partition_quads=parts):
             if "entity_prop_sort" in stmt:
                 await conn.execute(stmt)

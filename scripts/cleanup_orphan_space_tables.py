@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 from devtools.reserved_spaces import (  # noqa: E402
     UNREGISTERED_BY_DESIGN, is_unregistered_by_design)
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 def global_tables() -> set[str]:
     """Tables belonging to the GLOBAL registries, not to any space.
@@ -150,10 +151,10 @@ async def survey(conn):
             # conformance suite's space. See devtools/reserved_spaces.py.
             reserved.append(sid)
             continue
-        quads = await conn.fetchval(f'SELECT count(*) FROM "{sid}_rdf_quad"')
+        quads = await conn.fetchval(f'SELECT count(*) FROM "{space_prefix(sid)}_rdf_quad"')
         n = await conn.fetchval(
             "SELECT count(*) FROM pg_tables WHERE schemaname='public' "
-            "AND tablename LIKE $1", f"{sid}\\_%")
+            "AND tablename LIKE $1", f"{space_prefix(sid)}\\_%")
         orphan_spaces.append({"space": sid, "quads": quads, "tables": n})
 
     stale_rows = [r["space_id"] for r in await conn.fetch(

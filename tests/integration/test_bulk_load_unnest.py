@@ -20,6 +20,7 @@ from rdflib import Literal, URIRef
 from rdflib.namespace import XSD
 
 from .conftest import skip_no_infra, TEST_SPACE_PREFIX
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
@@ -52,10 +53,10 @@ async def _contents(pool, sid):
     async with pool.acquire() as c:
         terms = sorted(tuple(r) for r in await c.fetch(
             f"SELECT term_uuid::text, term_text, term_type, lang, datatype_id, "
-            f"num_val::text, dt_val::text FROM {sid}_term"))
+            f"num_val::text, dt_val::text FROM {space_prefix(sid)}_term"))
         quads = sorted(tuple(r) for r in await c.fetch(
             f"SELECT subject_uuid::text, predicate_uuid::text, object_uuid::text, "
-            f"context_uuid::text FROM {sid}_rdf_quad"))
+            f"context_uuid::text FROM {space_prefix(sid)}_rdf_quad"))
     return terms, quads
 
 

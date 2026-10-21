@@ -58,6 +58,7 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .fast_slot_sort import _LANE, _term_uuid
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ async def project_slot_values(
     for c in columns:
         by_key.setdefault((c.path, c.slot_type), []).append(c)
 
-    t = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
     rows = await conn.fetch(
         f"""
         SELECT entity_uuid, frame_type_path, slot_type_uuid,

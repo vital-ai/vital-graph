@@ -40,6 +40,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_quad_pk_dedup")
 
@@ -64,7 +65,7 @@ async def _pk_name(conn, table: str) -> str | None:
 
 
 async def survey_space(conn, space_id: str) -> dict | None:
-    t = f"{space_id}_rdf_quad"
+    t = f"{space_prefix(space_id)}_rdf_quad"
     if not await conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1", t):
         return None
@@ -85,7 +86,7 @@ async def survey_space(conn, space_id: str) -> dict | None:
 
 
 async def migrate_space(conn, space_id: str, s: dict) -> dict:
-    t = f"{space_id}_rdf_quad"
+    t = f"{space_prefix(space_id)}_rdf_quad"
     out = {"dropped": 0}
     t0 = time.time()
     async with conn.transaction():

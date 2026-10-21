@@ -34,6 +34,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 from .entity_lock import lock_entities
 from .sparql_sql_space_impl import _generate_term_uuid
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +104,8 @@ async def _groupings_for(conn, space_id: str, subjects: Iterable[str],
         uuid_to_uri = {_generate_term_uuid(s, "U"): s for s in to_lookup}
         rows = await conn.fetch(
             f"SELECT q.subject_uuid, t.term_text"
-            f"  FROM {space_id}_rdf_quad q"
-            f"  JOIN {space_id}_term t ON t.term_uuid = q.object_uuid"
+            f"  FROM {space_prefix(space_id)}_rdf_quad q"
+            f"  JOIN {space_prefix(space_id)}_term t ON t.term_uuid = q.object_uuid"
             f" WHERE q.predicate_uuid = $1 AND q.subject_uuid = ANY($2::uuid[])",
             _generate_term_uuid(HAS_KG_GRAPH_URI, "U"), list(uuid_to_uri))
         for r in rows:

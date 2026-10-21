@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from vitalgraph_sparql_sql import db
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 # --- Constants (from edge_materialization.py) ---
 
@@ -50,8 +51,8 @@ def analyze_direct_properties(space_id: str, graph_uri: str) -> list:
 
     Returns list of (source_uri, direct_predicate, dest_uri, graph_uri) tuples.
     """
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
 
     # Step 1: Find all edge URIs with their edge types
     # An edge object has a vitaltype quad matching one of the three edge types

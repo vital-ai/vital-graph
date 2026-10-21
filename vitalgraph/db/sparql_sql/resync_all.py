@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +190,7 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
             graph_rows = await conn.fetch(
                 "SELECT graph_uri FROM graph WHERE space_id = $1", space_id,
             )
-            term_table = t.get('term', f"{space_id}_term")
+            term_table = t.get('term', f"{space_prefix(space_id)}_term")
             for gr in graph_rows:
                 graph_uri = gr["graph_uri"]
                 # Resolve graph URI to context_uuid

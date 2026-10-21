@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from .declines import Rule
 from .ir import PlanV2, TableRef, AliasGenerator, KIND_BGP
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ def rewrite_edge_table(plan: PlanV2, aliases: AliasGenerator,
             plan.children[i] = rewrite_edge_table(child, aliases, space_id)
         return plan
 
-    edge_table_name = f"{space_id}_edge"
+    edge_table_name = f"{space_prefix(space_id)}_edge"
 
     # Build reverse constant map: const_alias → URI text
     const_to_uri: Dict[str, str] = {}

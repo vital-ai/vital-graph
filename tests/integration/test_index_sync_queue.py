@@ -22,6 +22,7 @@ import pytest_asyncio
 
 from .conftest import (PG_DATABASE, PG_HOST, PG_PASSWORD, PG_PORT, PG_USER,
                        skip_no_infra)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -35,12 +36,12 @@ def _ctx(i=0):
 
 
 async def _rows(conn, space):
-    return await conn.fetch(f"SELECT * FROM {space}_index_sync_queue "
+    return await conn.fetch(f"SELECT * FROM {space_prefix(space)}_index_sync_queue "
                             f"ORDER BY context_uuid, subject_uuid")
 
 
 async def _clear(conn, space):
-    await conn.execute(f"DELETE FROM {space}_index_sync_queue")
+    await conn.execute(f"DELETE FROM {space_prefix(space)}_index_sync_queue")
 
 
 # ---------------------------------------------------------------------------

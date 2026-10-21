@@ -36,6 +36,7 @@ from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (
 )
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -60,8 +61,8 @@ _SUBQUERY_FILTER_ORACLE = """
 
 async def _oracle_matches(conn, space_id, touched, context_uuid=None):
     """The slot_uuids the PRE-REWRITE filter would have deleted."""
-    where = _SUBQUERY_FILTER_ORACLE.format(t_edge=f"{space_id}_edge")
-    sql = f"SELECT slot_uuid FROM {space_id}_entity_slot_sort WHERE {where}"
+    where = _SUBQUERY_FILTER_ORACLE.format(t_edge=f"{space_prefix(space_id)}_edge")
+    sql = f"SELECT slot_uuid FROM {space_prefix(space_id)}_entity_slot_sort WHERE {where}"
     args = [touched]
     if context_uuid is not None:
         sql += " AND context_uuid = $2"
@@ -71,7 +72,7 @@ async def _oracle_matches(conn, space_id, touched, context_uuid=None):
 
 async def _remaining(conn, space_id):
     return {r["slot_uuid"] for r in
-            await conn.fetch(f"SELECT slot_uuid FROM {space_id}_entity_slot_sort")}
+            await conn.fetch(f"SELECT slot_uuid FROM {space_prefix(space_id)}_entity_slot_sort")}
 
 
 async def _add_row(conn, space_id, ctx, *, slot=None, entity=None, frame=None):
@@ -82,7 +83,7 @@ async def _add_row(conn, space_id, ctx, *, slot=None, entity=None, frame=None):
     what was inserted, so a skipped insert cannot hide a wrong answer."""
     slot = slot or uuid.uuid4()
     await conn.execute(
-        f"INSERT INTO {space_id}_entity_slot_sort "
+        f"INSERT INTO {space_prefix(space_id)}_entity_slot_sort "
         f"(slot_uuid, context_uuid, entity_uuid, frame_uuid, value_text) "
         f"VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
         slot, ctx, entity or uuid.uuid4(), frame or uuid.uuid4(), "v")
@@ -91,7 +92,7 @@ async def _add_row(conn, space_id, ctx, *, slot=None, entity=None, frame=None):
 
 async def _add_edge(conn, space_id, ctx, edge_uuid, dest):
     await conn.execute(
-        f"INSERT INTO {space_id}_edge "
+        f"INSERT INTO {space_prefix(space_id)}_edge "
         f"(edge_uuid, source_node_uuid, dest_node_uuid, context_uuid) "
         f"VALUES ($1, $2, $3, $4)",
         edge_uuid, uuid.uuid4(), dest, ctx)

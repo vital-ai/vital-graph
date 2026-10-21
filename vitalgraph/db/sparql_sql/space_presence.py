@@ -25,6 +25,7 @@ catalogue says. The work is on the TABLES, so that is what is checked.
 from __future__ import annotations
 
 import logging
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ async def space_tables_present(conn, space_id: str) -> bool:
     """
     try:
         return bool(await conn.fetchval(
-            "SELECT to_regclass($1) IS NOT NULL", f"{space_id}_rdf_quad"))
+            "SELECT to_regclass($1) IS NOT NULL", f"{space_prefix(space_id)}_rdf_quad"))
     except Exception as e:                   # pragma: no cover - defensive
         # A broken connection is not an answer to "does this space exist", and
         # guessing either way would be worse than letting the caller proceed and

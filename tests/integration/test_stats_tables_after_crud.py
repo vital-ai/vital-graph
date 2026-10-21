@@ -42,6 +42,7 @@ import pytest
 from rdflib import Literal, URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -76,10 +77,10 @@ async def _mismatched_stats(conn, space_id: str) -> list:
         SELECT s.predicate_uuid, s.object_uuid,
                s.row_count AS stored,
                COALESCE(q.n, 0) AS actual
-        FROM {space_id}_rdf_stats s
+        FROM {space_prefix(space_id)}_rdf_stats s
         LEFT JOIN (
             SELECT predicate_uuid, object_uuid, count(*) AS n
-            FROM {space_id}_rdf_quad GROUP BY 1, 2
+            FROM {space_prefix(space_id)}_rdf_quad GROUP BY 1, 2
         ) q ON q.predicate_uuid = s.predicate_uuid
            AND q.object_uuid = s.object_uuid
         WHERE s.row_count IS DISTINCT FROM COALESCE(q.n, 0)
@@ -91,10 +92,10 @@ async def _mismatched_pred_stats(conn, space_id: str) -> list:
     return await conn.fetch(
         f"""
         SELECT p.predicate_uuid, p.row_count AS stored, COALESCE(q.n, 0) AS actual
-        FROM {space_id}_rdf_pred_stats p
+        FROM {space_prefix(space_id)}_rdf_pred_stats p
         LEFT JOIN (
             SELECT predicate_uuid, count(*) AS n
-            FROM {space_id}_rdf_quad GROUP BY 1
+            FROM {space_prefix(space_id)}_rdf_quad GROUP BY 1
         ) q ON q.predicate_uuid = p.predicate_uuid
         WHERE p.row_count IS DISTINCT FROM COALESCE(q.n, 0)
         """

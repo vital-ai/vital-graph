@@ -27,6 +27,7 @@ from rdflib import Literal, URIRef
 from rdflib.namespace import XSD
 
 from vitalgraph.db.sparql_sql.bulk_load import REBUILD_MIN_QUADS
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -72,7 +73,7 @@ async def test_a_bulk_load_builds_the_histograms(space_impl, fresh_space):
     await space_impl.add_rdf_quads_batch_bulk(sid, _quads(n))
 
     async with space_impl.get_db_connection() as conn:
-        rows = await conn.fetchval(f"SELECT count(*) FROM {sid}_rdf_value_stats")
+        rows = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_rdf_value_stats")
         assert rows > 0, (
             "a bulk load left no value histograms, so every range criterion on "
             "this space reads as unmeasured")
@@ -80,7 +81,7 @@ async def test_a_bulk_load_builds_the_histograms(space_impl, fresh_space):
         # The freshness reference must be captured too, or the histogram is
         # built but neither scalable nor guardable.
         unref = await conn.fetchval(
-            f"SELECT count(*) FROM {sid}_rdf_value_stats WHERE pred_rows IS NULL")
+            f"SELECT count(*) FROM {space_prefix(sid)}_rdf_value_stats WHERE pred_rows IS NULL")
         assert unref == 0, f"{unref} histogram row(s) have no freshness reference"
 
 
@@ -102,7 +103,7 @@ async def test_the_histogram_actually_estimates(space_impl, fresh_space):
     async with space_impl.get_db_connection() as conn:
         stats = await load_value_stats(conn, sid)
         pred = await conn.fetchval(
-            f"SELECT term_uuid::text FROM {sid}_term WHERE term_text=$1", SCORE)
+            f"SELECT term_uuid::text FROM {space_prefix(sid)}_term WHERE term_text=$1", SCORE)
         assert (pred, "num") in stats, "no numeric histogram for hasScore"
         est = estimate_range(stats, pred, "num", ">=", 50)
         assert est is not None, "the histogram is present but estimates nothing"
@@ -122,7 +123,7 @@ async def test_a_small_write_does_not_trigger_a_rebuild(space_impl, fresh_space)
     await space_impl.add_rdf_quads_batch_bulk(sid, small)
 
     async with space_impl.get_db_connection() as conn:
-        rows = await conn.fetchval(f"SELECT count(*) FROM {sid}_rdf_value_stats")
+        rows = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_rdf_value_stats")
         assert rows == 0, (
             "a 20-quad insert rebuilt the value histograms; the size gate is "
             "not holding and every small write now pays a full rebuild")

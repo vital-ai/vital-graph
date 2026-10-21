@@ -27,6 +27,7 @@ import pytest
 from .conftest import skip_no_pg
 from .graph_fixtures import SYNTH, SKEW
 from .lead_fixtures import ALL, DUP
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -47,7 +48,7 @@ async def _skip_if_absent(perf_conn, space):
     """
     exists = await perf_conn.fetchval(
         "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
-        f"{space}_rdf_quad")
+        f"{space_prefix(space)}_rdf_quad")
     if not exists:
         pytest.skip(f"space {space} not present in this environment")
 
@@ -71,8 +72,8 @@ async def test_every_context_in_the_data_is_registered(perf_conn, space, graph):
     unregistered = await perf_conn.fetch(
         f"""
         SELECT t.term_text
-        FROM (SELECT DISTINCT context_uuid FROM {space}_rdf_quad) c
-        JOIN {space}_term t ON t.term_uuid = c.context_uuid
+        FROM (SELECT DISTINCT context_uuid FROM {space_prefix(space)}_rdf_quad) c
+        JOIN {space_prefix(space)}_term t ON t.term_uuid = c.context_uuid
         WHERE NOT EXISTS (SELECT 1 FROM graph g
                           WHERE g.space_id = $1 AND g.graph_uri = t.term_text)
         """, space)

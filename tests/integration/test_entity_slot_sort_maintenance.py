@@ -27,6 +27,7 @@ from __future__ import annotations
 import pytest
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -78,8 +79,8 @@ async def _rows(pg_pool, space: str) -> list[tuple]:
     async with pg_pool.acquire() as conn:
         recs = await conn.fetch(f"""
             SELECT t.term_text, s.value_text
-            FROM {space}_entity_slot_sort s
-            JOIN {space}_term t ON t.term_uuid = s.entity_uuid
+            FROM {space_prefix(space)}_entity_slot_sort s
+            JOIN {space_prefix(space)}_term t ON t.term_uuid = s.entity_uuid
             ORDER BY s.value_text COLLATE "C" """)
     return [(r[0].rsplit("/", 1)[-1], r[1]) for r in recs]
 

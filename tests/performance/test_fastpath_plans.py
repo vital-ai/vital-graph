@@ -19,6 +19,7 @@ import pytest
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
 from .conftest import skip_no_pg, space_exists
 from .harness import assert_plan, total_shared_buffers, max_actual_rows
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -43,11 +44,11 @@ def _fast_page_sql(space_id: str) -> str:
     """The exact query fast_typed_subject_page issues (order by subject_uuid)."""
     return (
         f"SELECT tt.term_text AS uri "
-        f"FROM (SELECT DISTINCT subject_uuid FROM {space_id}_rdf_quad "
+        f"FROM (SELECT DISTINCT subject_uuid FROM {space_prefix(space_id)}_rdf_quad "
         f"      WHERE predicate_uuid = $1 AND object_uuid = ANY($2::uuid[]) "
         f"      AND context_uuid = $3 "
         f"      ORDER BY subject_uuid LIMIT $4 OFFSET $5) sub "
-        f"JOIN {space_id}_term tt ON tt.term_uuid = sub.subject_uuid "
+        f"JOIN {space_prefix(space_id)}_term tt ON tt.term_uuid = sub.subject_uuid "
         f"ORDER BY sub.subject_uuid"
     )
 
@@ -68,7 +69,7 @@ async def test_fast_page_is_o_page(perf_conn, perf_record, space_id, graph_uri, 
     plan = await assert_plan(
         perf_conn, _fast_page_sql(space_id),
         p_uuid, obj_uuids, g_uuid, 25, 0,
-        no_seq_scan_on=[f"{space_id}_rdf_quad"],
+        no_seq_scan_on=[f"{space_prefix(space_id)}_rdf_quad"],
         max_shared_buffers=8_000,     # observed ~464 on 109K; O(N) would be ~450K
         max_actual_rows_bound=5_000,  # a page examines a bounded slice, not all rows
         min_actual_rows=25,           # a full page — else the bounds pass vacuously
@@ -96,7 +97,7 @@ async def test_deep_page_offset_stays_bounded(perf_conn, perf_record):
     plan = await assert_plan(
         perf_conn, _fast_page_sql(space_id),
         p_uuid, obj_uuids, g_uuid, 25, 1000,
-        no_seq_scan_on=[f"{space_id}_rdf_quad"],
+        no_seq_scan_on=[f"{space_prefix(space_id)}_rdf_quad"],
         max_shared_buffers=20_000,
         min_actual_rows=25,
         no_spill=True,

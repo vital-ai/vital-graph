@@ -80,6 +80,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_single_valued_indexes")
 
@@ -127,8 +128,8 @@ async def derive_predicates(conn, space_id: str):
     ontology has no opinion is a decision someone should see.
     """
     rows = await conn.fetch(
-        f"SELECT t.term_text FROM {space_id}_rdf_pred_stats s"
-        f"  JOIN {space_id}_term t ON t.term_uuid = s.predicate_uuid")
+        f"SELECT t.term_text FROM {space_prefix(space_id)}_rdf_pred_stats s"
+        f"  JOIN {space_prefix(space_id)}_term t ON t.term_uuid = s.predicate_uuid")
     sv, mv, unk = [], [], []
     for r in rows:
         uri = r["term_text"]
@@ -145,13 +146,13 @@ def _index_name(space_id: str, uri: str) -> str:
     and `hasObjectModificationDateTime` share a prefix long enough to matter. The
     UUID's first segment is stable and unique.
     """
-    return f"uq_{space_id}_sv_{_generate_term_uuid(uri, 'U').hex[:12]}"
+    return f"uq_{space_prefix(space_id)}_sv_{_generate_term_uuid(uri, 'U').hex[:12]}"
 
 
 async def _violations(conn, space_id: str, p_uuid) -> int:
     return await conn.fetchval(
         f"SELECT count(*) FROM (SELECT subject_uuid, context_uuid"
-        f"   FROM {space_id}_rdf_quad WHERE predicate_uuid = $1"
+        f"   FROM {space_prefix(space_id)}_rdf_quad WHERE predicate_uuid = $1"
         f"  GROUP BY 1, 2 HAVING count(*) > 1) x", p_uuid) or 0
 
 
@@ -166,7 +167,7 @@ async def _index_state(conn, name: str):
 async def migrate_space(conn, space_id: str, predicates, apply: bool) -> dict:
     if not await conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
-            f"{space_id}_rdf_quad"):
+            f"{space_prefix(space_id)}_rdf_quad"):
         return {"space": space_id, "status": "no such space"}
 
     made, skipped, blocked, invalid = [], [], [], []
@@ -207,7 +208,7 @@ async def migrate_space(conn, space_id: str, predicates, apply: bool) -> dict:
         # bare execute, so this must NOT be wrapped.
         await conn.execute(
             f"CREATE UNIQUE INDEX CONCURRENTLY {name}"
-            f"  ON {space_id}_rdf_quad (subject_uuid, context_uuid)"
+            f"  ON {space_prefix(space_id)}_rdf_quad (subject_uuid, context_uuid)"
             f"  WHERE predicate_uuid = '{p_uuid}'")
         _, ok = await _index_state(conn, name)
         if not ok:

@@ -13,6 +13,7 @@ import asyncpg
 from vitalgraph.vectorization.search_text_builder import (
     build_search_text, resolve_search_mapping, fetch_literal_properties,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 async def main():
@@ -21,7 +22,7 @@ async def main():
 
     # Get Joe's Pizza subject UUID
     row = await conn.fetchrow(
-        f"SELECT term_uuid FROM {space_id}_term "
+        f"SELECT term_uuid FROM {space_prefix(space_id)}_term "
         "WHERE term_text = 'http://vital.ai/test/semantic/entity/joes_pizza'"
     )
     subj_uuid = row["term_uuid"]
@@ -29,7 +30,7 @@ async def main():
 
     # Get graph context UUID
     ctx_row = await conn.fetchrow(
-        f"SELECT term_uuid FROM {space_id}_term "
+        f"SELECT term_uuid FROM {space_prefix(space_id)}_term "
         "WHERE term_text = 'urn:semantic_search_test'"
     )
     ctx_uuid = ctx_row["term_uuid"]
@@ -67,7 +68,7 @@ async def main():
     # Compare to stored embedding
     stored_sim = await conn.fetchval(f"""
         SELECT 1 - (embedding <=> '{vec_str}'::vector)
-        FROM {space_id}_vec_entity_vector
+        FROM {space_prefix(space_id)}_vec_entity_vector
         WHERE subject_uuid = $1::uuid
     """, subj_uuid)
     print(f"\nFresh embedding vs stored: similarity = {stored_sim}")
@@ -78,7 +79,7 @@ async def main():
         q_str = "[" + ",".join(str(v) for v in q_emb) + "]"
         score = await conn.fetchval(f"""
             SELECT 1 - (embedding <=> '{q_str}'::vector)
-            FROM {space_id}_vec_entity_vector
+            FROM {space_prefix(space_id)}_vec_entity_vector
             WHERE subject_uuid = $1::uuid
         """, subj_uuid)
         print(f"  '{query}' vs stored Joe's Pizza: {score:.4f}")

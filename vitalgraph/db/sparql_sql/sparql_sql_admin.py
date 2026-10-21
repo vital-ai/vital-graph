@@ -14,6 +14,7 @@ from typing import Any, Dict, List
 from ..common.models import GraphData, SpaceData, UserData
 from ..db_admin_inf import DbAdminInterface
 from .sparql_sql_schema import SparqlSQLSchema
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -235,8 +236,8 @@ class SparqlSQLAdmin(DbAdminInterface):
             info['spaces'] = []
             for sp in spaces:
                 sid = sp.space_id
-                term_tbl = f"{sid}_term"
-                quad_tbl = f"{sid}_rdf_quad"
+                term_tbl = f"{space_prefix(sid)}_term"
+                quad_tbl = f"{space_prefix(sid)}_rdf_quad"
                 tbl_check = await db_impl.execute_query(
                     "SELECT COUNT(*) as c FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_name IN ($1, $2)",

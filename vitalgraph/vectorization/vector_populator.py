@@ -31,6 +31,7 @@ from vitalgraph.vectorization.search_text_builder import (
 from vitalgraph.vectorization.kgtype_description_lookup import (
     KGTypeDescriptionLookup,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -190,12 +191,12 @@ async def populate_index(
         if provider_name is None:
             # Look up from vector_index table
             row = await conn.fetchrow(
-                f"SELECT provider, provider_config, dimensions FROM {space_id}_vector_index "
+                f"SELECT provider, provider_config, dimensions FROM {space_prefix(space_id)}_vector_index "
                 f"WHERE index_name = $1",
                 index_name,
             )
             if row is None:
-                stats.errors.append(f"Vector index '{index_name}' not found in {space_id}_vector_index")
+                stats.errors.append(f"Vector index '{index_name}' not found in {space_prefix(space_id)}_vector_index")
                 return stats
             provider_name = str(row["provider"])
             provider_config = row["provider_config"] or {}
@@ -221,14 +222,14 @@ async def populate_index(
                      space_id, index_name, mapping_type, type_uri)
         return stats
 
-    vec_table = f"{space_id}_vec_{index_name}"
+    vec_table = f"{space_prefix(space_id)}_vec_{index_name}"
 
     # Get subjects to index
     if subject_uuids is None:
         if type_uri:
             sql = TYPED_SUBJECTS_SQL.format(
-                rdf_quad=f"{space_id}_rdf_quad",
-                term=f"{space_id}_term",
+                rdf_quad=f"{space_prefix(space_id)}_rdf_quad",
+                term=f"{space_prefix(space_id)}_term",
             )
             rows = await conn.fetch(sql, context_uuid, type_uri)
         elif mapping_type:
@@ -236,8 +237,8 @@ async def populate_index(
             vitaltype_uris = _resolve_vitaltype_filter(mapping_type)
             if vitaltype_uris:
                 sql = VITALTYPE_SUBJECTS_SQL.format(
-                    rdf_quad=f"{space_id}_rdf_quad",
-                    term=f"{space_id}_term",
+                    rdf_quad=f"{space_prefix(space_id)}_rdf_quad",
+                    term=f"{space_prefix(space_id)}_term",
                 )
                 rows = await conn.fetch(sql, context_uuid, vitaltype_uris)
             else:
@@ -246,10 +247,10 @@ async def populate_index(
                     "populate_index: %s/%s — no vitaltype filter for mapping_type=%s, indexing all subjects",
                     space_id, index_name, mapping_type,
                 )
-                sql = ALL_SUBJECTS_SQL.format(rdf_quad=f"{space_id}_rdf_quad")
+                sql = ALL_SUBJECTS_SQL.format(rdf_quad=f"{space_prefix(space_id)}_rdf_quad")
                 rows = await conn.fetch(sql, context_uuid)
         else:
-            sql = ALL_SUBJECTS_SQL.format(rdf_quad=f"{space_id}_rdf_quad")
+            sql = ALL_SUBJECTS_SQL.format(rdf_quad=f"{space_prefix(space_id)}_rdf_quad")
             rows = await conn.fetch(sql, context_uuid)
         subject_uuids = [r["subject_uuid"] for r in rows]
 
@@ -380,7 +381,7 @@ async def delete_subject_vectors(
     context_uuid,
 ) -> bool:
     """Remove a subject's vector from a specific index."""
-    vec_table = f"{space_id}_vec_{index_name}"
+    vec_table = f"{space_prefix(space_id)}_vec_{index_name}"
     sql = DELETE_VECTOR_SQL.format(vec_table=vec_table)
     try:
         await conn.execute(sql, subject_uuid, context_uuid)
@@ -410,7 +411,7 @@ async def update_subject_vector(
         # Resolve provider if needed
         if provider is None:
             row = await conn.fetchrow(
-                f"SELECT provider, provider_config FROM {space_id}_vector_index "
+                f"SELECT provider, provider_config FROM {space_prefix(space_id)}_vector_index "
                 f"WHERE index_name = $1",
                 index_name,
             )
@@ -453,7 +454,7 @@ async def update_subject_vector(
         embedding = await provider.vectorize_text(text)
 
         # Upsert (embedding only; FTS is in _fts_ tables)
-        vec_table = f"{space_id}_vec_{index_name}"
+        vec_table = f"{space_prefix(space_id)}_vec_{index_name}"
         vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
         await conn.execute(
             UPSERT_VECTOR_SQL.format(vec_table=vec_table),

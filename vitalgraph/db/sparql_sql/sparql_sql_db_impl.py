@@ -20,6 +20,7 @@ from ..db_inf import DbImplInterface
 from ..user_management import UserManagementMixin
 from ...utils.resource_manager import track_pool
 from ..connection_config import require
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -652,7 +653,7 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
             """
             results = await self.execute_query(
                 check_query,
-                [f'{space_id}_term', f'{space_id}_rdf_quad'],
+                [f'{space_prefix(space_id)}_term', f'{space_prefix(space_id)}_rdf_quad'],
             )
 
             if results and len(results) > 0:

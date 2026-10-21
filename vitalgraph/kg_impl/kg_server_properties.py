@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ai_haley_kg_domain.model.KGEntity import KGEntity
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +329,7 @@ class BackfillResult:
 
 async def _resolve_xsd_datetime_id(conn, space_id: str) -> Optional[int]:
     """Return the datatype_id for xsd:dateTime, creating it if needed."""
-    dt_table = f"{space_id}_datatype"
+    dt_table = f"{space_prefix(space_id)}_datatype"
     row = await conn.fetchrow(
         f"SELECT datatype_id FROM {dt_table} WHERE datatype_uri = $1",
         XSD_DATETIME_URI,
@@ -359,8 +360,8 @@ async def _ensure_term_row(conn, term_table: str,
 
 async def discover_graphs_sql(pool, space_id: str) -> List[str]:
     """Return graph URIs in a space that contain KGEntity instances (direct SQL)."""
-    t_quad = f"{space_id}_rdf_quad"
-    t_term = f"{space_id}_term"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
+    t_term = f"{space_prefix(space_id)}_term"
     rdf_type_uuid = _term_uuid(RDF_TYPE_URI)
     kgentity_uuid = _term_uuid(KGENTITY_CLASS_URI)
     sql = f"""
@@ -376,7 +377,7 @@ async def discover_graphs_sql(pool, space_id: str) -> List[str]:
 
 async def count_entities_needing_backfill_sql(pool, space_id: str, graph_id: str) -> int:
     """Count KGEntity subjects in *graph_id* that are missing any managed property."""
-    t_quad = f"{space_id}_rdf_quad"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
     rdf_type_uuid = _term_uuid(RDF_TYPE_URI)
     kgentity_uuid = _term_uuid(KGENTITY_CLASS_URI)
     graph_uuid = _term_uuid(graph_id)
@@ -483,8 +484,8 @@ async def _backfill_one_batch_sql(
     now: datetime,
 ) -> List[str]:
     """Backfill one batch via direct SQL.  Returns list of patched entity URIs (empty = done)."""
-    t_quad = f"{space_id}_rdf_quad"
-    t_term = f"{space_id}_term"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
+    t_term = f"{space_prefix(space_id)}_term"
     rdf_type_uuid = _term_uuid(RDF_TYPE_URI)
     kgentity_uuid = _term_uuid(KGENTITY_CLASS_URI)
     graph_uuid = _term_uuid(graph_id)

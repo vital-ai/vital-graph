@@ -14,6 +14,7 @@ import logging
 from typing import Optional, List, Dict, Any
 
 from .graph_op import GraphOp, OperationResult, OperationStatus
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +59,13 @@ class DatabaseOp(GraphOp):
         """
         sid = self.space_id
         return [
-            f"{sid}_term",
-            f"{sid}_rdf_quad",
-            f"{sid}_datatype",
-            f"{sid}_rdf_pred_stats",
-            f"{sid}_rdf_stats",
-            f"{sid}_edge",
-            f"{sid}_frame_slot",
+            f"{space_prefix(sid)}_term",
+            f"{space_prefix(sid)}_rdf_quad",
+            f"{space_prefix(sid)}_datatype",
+            f"{space_prefix(sid)}_rdf_pred_stats",
+            f"{space_prefix(sid)}_rdf_stats",
+            f"{space_prefix(sid)}_edge",
+            f"{space_prefix(sid)}_frame_slot",
         ]
 
 
@@ -147,8 +148,8 @@ class StatsRebuildOp(DatabaseOp):
 
     async def execute(self) -> OperationResult:
         sid = self.space_id
-        pred_stats = f"{sid}_rdf_pred_stats"
-        rdf_stats = f"{sid}_rdf_stats"
+        pred_stats = f"{space_prefix(sid)}_rdf_pred_stats"
+        rdf_stats = f"{space_prefix(sid)}_rdf_stats"
 
         # DELEGATED, not reimplemented. This used to carry its own pair
         # aggregate, and it had silently drifted from the real one: no cap, no

@@ -29,6 +29,7 @@ import pytest
 from rdflib import URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -55,9 +56,9 @@ async def _fanout(conn, space_id: str) -> dict:
     rows = await conn.fetch(f"""
         SELECT te.term_text AS etype, tr.term_text AS rtype, f.direction,
                f.avg_fanout, f.p99_fanout, f.max_fanout
-        FROM {space_id}_edge_fanout f
-        JOIN {space_id}_term te ON te.term_uuid = f.edge_type_uuid
-        LEFT JOIN {space_id}_term tr ON tr.term_uuid = f.relation_type_uuid
+        FROM {space_prefix(space_id)}_edge_fanout f
+        JOIN {space_prefix(space_id)}_term te ON te.term_uuid = f.edge_type_uuid
+        LEFT JOIN {space_prefix(space_id)}_term tr ON tr.term_uuid = f.relation_type_uuid
     """)
     return {(r["etype"], r["rtype"], r["direction"]): r for r in rows}
 

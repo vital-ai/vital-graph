@@ -27,6 +27,7 @@ from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGGeoLocationSlot import KGGeoLocationSlot
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.api, pytest.mark.asyncio(loop_scope="session")]
 
@@ -61,7 +62,7 @@ async def _slot_latitude(pg_conn, space, graph, slot_uri, want):
     lat = None
     while asyncio.get_running_loop().time() < deadline:
         lat = await pg_conn.fetchval(
-            f"SELECT latitude FROM {space}_geo "
+            f"SELECT latitude FROM {space_prefix(space)}_geo "
             f"WHERE subject_uuid = vitalgraph_term_uuid($1, 'U') "
             f"AND source_slot_uuid = vitalgraph_term_uuid($1, 'U') "
             f"AND context_uuid = vitalgraph_term_uuid($2, 'U')", slot_uri, graph)

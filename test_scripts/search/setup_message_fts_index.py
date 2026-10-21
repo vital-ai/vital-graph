@@ -38,6 +38,7 @@ import uuid as _uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 HALEY = "http://vital.ai/ontology/haley-ai-kg#"
 HAS_TEXT_SLOT_VALUE = HALEY + "hasTextSlotValue"
@@ -65,15 +66,15 @@ async def _align_ownership(conn, space: str, index: str) -> list:
     """
     owner = await conn.fetchval(
         "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = $1",
-        f"{space}_fts_index")
+        f"{space_prefix(space)}_fts_index")
     if owner is None:
         owner = await conn.fetchval(
             "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = $1",
-            f"{space}_rdf_quad")
+            f"{space_prefix(space)}_rdf_quad")
     if owner is None:
         raise RuntimeError(f"cannot determine the owning role of space {space!r}")
 
-    table = f"{space}_fts_{index}"
+    table = f"{space_prefix(space)}_fts_{index}"
     changes = []
     current = await conn.fetchval(
         "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = $1", table)

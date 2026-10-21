@@ -29,6 +29,7 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 _failures: list[str] = []
 
@@ -77,11 +78,11 @@ async def main() -> int:
         for s, p, o, otype in triples:
             for text, ttype in ((s, "U"), (p, "U"), (o, otype)):
                 await conn.execute(
-                    f"INSERT INTO {space}_term (term_uuid, term_text, term_type) "
+                    f"INSERT INTO {space_prefix(space)}_term (term_uuid, term_text, term_type) "
                     f"VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
                     _term_uuid(text, ttype), text, ttype)
             await conn.execute(
-                f"INSERT INTO {space}_rdf_quad "
+                f"INSERT INTO {space_prefix(space)}_rdf_quad "
                 f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
                 f"VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
                 _term_uuid(s, "U"), _term_uuid(p, "U"),
@@ -89,18 +90,18 @@ async def main() -> int:
 
     async def del_subject(s):
         await conn.execute(
-            f"DELETE FROM {space}_rdf_quad WHERE subject_uuid=$1 AND context_uuid=$2",
+            f"DELETE FROM {space_prefix(space)}_rdf_quad WHERE subject_uuid=$1 AND context_uuid=$2",
             _term_uuid(s, "U"), ctx_u)
 
     async def in_index(s) -> bool:
         return bool(await conn.fetchval(
-            f"SELECT 1 FROM {space}_fts_{index} "
+            f"SELECT 1 FROM {space_prefix(space)}_fts_{index} "
             f"WHERE subject_uuid=$1 AND context_uuid=$2",
             _term_uuid(s, "U"), ctx_u))
 
     async def text_of(s):
         return await conn.fetchval(
-            f"SELECT search_text FROM {space}_fts_{index} "
+            f"SELECT search_text FROM {space_prefix(space)}_fts_{index} "
             f"WHERE subject_uuid=$1 AND context_uuid=$2",
             _term_uuid(s, "U"), ctx_u)
 
@@ -141,7 +142,7 @@ async def main() -> int:
 
         # --- 2. UPDATE ---------------------------------------------------
         await conn.execute(
-            f"DELETE FROM {space}_rdf_quad WHERE subject_uuid=$1 "
+            f"DELETE FROM {space_prefix(space)}_rdf_quad WHERE subject_uuid=$1 "
             f"AND predicate_uuid=$2 AND context_uuid=$3",
             _term_uuid(slot, "U"), _term_uuid(H + "hasTextSlotValue", "U"), ctx_u)
         await put_quads([(slot, H + "hasTextSlotValue",
@@ -165,7 +166,7 @@ async def main() -> int:
             try:
                 await del_subject(s)
                 await conn.execute(
-                    f"DELETE FROM {space}_fts_{index} WHERE subject_uuid=$1",
+                    f"DELETE FROM {space_prefix(space)}_fts_{index} WHERE subject_uuid=$1",
                     _term_uuid(s, "U"))
             except Exception:
                 pass

@@ -30,6 +30,7 @@ Two layers, because no single Python function sees every write:
 from __future__ import annotations
 
 from vitalgraph.kg_impl.refusals import RequestRefused
+from .space_names import space_prefix
 
 MAX_URI_BYTES = 1024
 
@@ -51,7 +52,7 @@ def check_uri(text: str) -> None:
 
 
 def uri_limit_constraint_name(space_id: str) -> str:
-    return f"ck_{space_id}_term_uri_len"
+    return f"ck_{space_prefix(space_id)}_term_uri_len"
 
 
 def uri_limit_check_sql() -> str:

@@ -71,6 +71,7 @@ import logging
 import os
 import uuid
 from typing import List, Optional
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -154,9 +155,9 @@ def _select_rows(space_id: str, where: str, *, seed_param: str = None) -> str:
     `$1..$5` are the discriminating type uuids, `$6` the value predicates.
     `where` supplies the incremental restriction and its own parameters.
     """
-    t_edge = f"{space_id}_edge"
-    t_quad = f"{space_id}_rdf_quad"
-    t_term = f"{space_id}_term"
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
+    t_term = f"{space_prefix(space_id)}_term"
     # SEEDS the recursion; it used not to, and that was the whole cost.
     #
     # The base case selected EVERY entity->frame edge in the space, and the
@@ -343,7 +344,7 @@ async def _edge_dest_nodes(conn, space_id: str,
     subquery form would have read.
     """
     rows = await conn.fetch(
-        f"SELECT dest_node_uuid FROM {space_id}_edge WHERE edge_uuid = ANY($1::uuid[])",
+        f"SELECT dest_node_uuid FROM {space_prefix(space_id)}_edge WHERE edge_uuid = ANY($1::uuid[])",
         touched_uuids)
     return [r["dest_node_uuid"] for r in rows]
 
@@ -355,7 +356,7 @@ async def sync_entity_slot_sort_before_delete(
     """Before quads are deleted, drop the rows they invalidate."""
     if not subject_uuids:
         return 0
-    t = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
     edge_dests = await _edge_dest_nodes(conn, space_id, subject_uuids)
     if context_uuid:
         result = await conn.execute(
@@ -397,7 +398,7 @@ async def _frame_roots(conn, space_id: str, touched_uuids: List[uuid.UUID]):
     """
     if not touched_uuids:
         return []
-    t_edge = f"{space_id}_edge"
+    t_edge = f"{space_prefix(space_id)}_edge"
     rows = await conn.fetch(f"""
         WITH RECURSIVE seed AS (
             SELECT unnest($1::uuid[]) AS n
@@ -426,8 +427,8 @@ async def sync_entity_slot_sort_after_edge_insert(
     """
     if not touched_uuids:
         return 0
-    t = f"{space_id}_entity_slot_sort"
-    t_edge = f"{space_id}_edge"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
+    t_edge = f"{space_prefix(space_id)}_edge"
 
     await sync_entity_slot_sort_before_delete(conn, space_id, touched_uuids)
 
@@ -471,7 +472,7 @@ async def sync_entity_slot_sort_after_edge_insert(
 async def delete_entity_slot_sort_for_context(conn, space_id: str,
                                               context_uuid: uuid.UUID) -> int:
     """Drop every row for one graph. Pairs with clear/drop graph."""
-    t = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
     result = await conn.execute(
         f"DELETE FROM {t} WHERE context_uuid = $1", context_uuid)
     return int(result.split()[-1]) if result else 0
@@ -483,7 +484,7 @@ async def delete_entity_slot_sort_for_context(conn, space_id: str,
 
 async def resync_entity_slot_sort(conn, space_id: str) -> int:
     """TRUNCATE and rebuild from the graph. For bulk loads and recovery."""
-    t = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
     await conn.execute(f"TRUNCATE {t}")
     args = await _type_args(space_id)
     result = await conn.execute(
@@ -520,7 +521,7 @@ async def backfill_entity_slot_sort(conn, space_id: str,
     at 60s and 43 LockNotAvailableError at the 10s lock fence, leaving the table
     at 40k rows against a ~2.83M target.
     """
-    t = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
     args = await _type_args(space_id)
     result = await conn.execute(
         f"INSERT INTO {t} ({_INSERT_COLS}) "
@@ -580,9 +581,9 @@ async def backfill_entity_slot_sort_batch(
     and made every equivalence assertion vacuous.
     """
     n = int(batch_size or ESS_BACKFILL_BATCH)
-    t = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
     rows = await conn.fetch(
-        f"SELECT DISTINCT q.subject_uuid FROM {space_id}_rdf_quad q "
+        f"SELECT DISTINCT q.subject_uuid FROM {space_prefix(space_id)}_rdf_quad q "
         f"WHERE q.predicate_uuid = $1 AND q.object_uuid = $2 "
         f"  AND NOT EXISTS (SELECT 1 FROM {t} e "
         f"                   WHERE e.entity_uuid = q.subject_uuid) "
@@ -637,19 +638,19 @@ async def backfill_entity_slot_sort_missing_slots(
     remedy.
     """
     n = int(batch_size or ESS_BACKFILL_BATCH)
-    t = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
     # ONLY SLOTS THAT CAN HAVE A ROW (`issues/277`): absent AND carrying a value
     # this table sorts on. A slot with no value, or only an entity-slot value,
     # derives nothing here, so it can never be repaired — it used to fill the
     # batch anyway, and the ones under nested frames were reported every cycle
     # as "unattributed", an ERROR about rows that should not exist.
     rows = await conn.fetch(
-        f"SELECT q.subject_uuid AS slot_uuid FROM {space_id}_rdf_quad q "
+        f"SELECT q.subject_uuid AS slot_uuid FROM {space_prefix(space_id)}_rdf_quad q "
         f" WHERE q.predicate_uuid = $1 "
         f"   AND NOT EXISTS (SELECT 1 FROM {t} e "
         f"                    WHERE e.slot_uuid = q.subject_uuid "
         f"                      AND e.context_uuid = q.context_uuid) "
-        f"   AND EXISTS (SELECT 1 FROM {space_id}_rdf_quad v "
+        f"   AND EXISTS (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad v "
         f"                WHERE v.subject_uuid = q.subject_uuid "
         f"                  AND v.predicate_uuid = ANY($2::uuid[])) "
         f" LIMIT {n}",
@@ -673,8 +674,8 @@ async def backfill_entity_slot_sort_missing_slots(
     # <- entity. Bounded by the batch, so both hops are index probes.
     ents = await conn.fetch(
         f"SELECT DISTINCT ef.source_node_uuid AS entity_uuid "
-        f"  FROM {space_id}_edge se "
-        f"  JOIN {space_id}_edge ef "
+        f"  FROM {space_prefix(space_id)}_edge se "
+        f"  JOIN {space_prefix(space_id)}_edge ef "
         f"    ON ef.dest_node_uuid = se.source_node_uuid "
         f"   AND ef.context_uuid = se.context_uuid "
         f"   AND ef.edge_type_uuid = $2 "
@@ -684,8 +685,8 @@ async def backfill_entity_slot_sort_missing_slots(
     seeds = [r["entity_uuid"] for r in ents]
     attributed = await conn.fetchval(
         f"SELECT count(DISTINCT se.dest_node_uuid) "
-        f"  FROM {space_id}_edge se "
-        f"  JOIN {space_id}_edge ef "
+        f"  FROM {space_prefix(space_id)}_edge se "
+        f"  JOIN {space_prefix(space_id)}_edge ef "
         f"    ON ef.dest_node_uuid = se.source_node_uuid "
         f"   AND ef.context_uuid = se.context_uuid "
         f"   AND ef.edge_type_uuid = $2 "
@@ -750,9 +751,9 @@ async def entity_slot_sort_row_shortfall(conn, space_id: str,
     # a real one — which `fast_slot_filter` reads as "complete" and releases a
     # block on.
     row = await conn.fetchrow(
-        f"SELECT (SELECT count(*) FROM {space_id}_rdf_quad WHERE predicate_uuid = $1) "
+        f"SELECT (SELECT count(*) FROM {space_prefix(space_id)}_rdf_quad WHERE predicate_uuid = $1) "
         f"         AS quad_slots, "
-        f"       (SELECT count(*) FROM {space_id}_entity_slot_sort) AS table_rows",
+        f"       (SELECT count(*) FROM {space_prefix(space_id)}_entity_slot_sort) AS table_rows",
         _SLOT_TYPE, timeout=timeout)
     quad_slots, table_rows = row["quad_slots"], row["table_rows"]
     return {"quad_slots": int(quad_slots or 0),
@@ -774,9 +775,9 @@ async def entity_slot_sort_valueless_slots(conn, space_id: str,
     because subtracting this from it gives the REAL gap.
     """
     return int(await conn.fetchval(
-        f"SELECT count(*) FROM {space_id}_rdf_quad q "
+        f"SELECT count(*) FROM {space_prefix(space_id)}_rdf_quad q "
         f" WHERE q.predicate_uuid = $1 "
-        f"   AND NOT EXISTS (SELECT 1 FROM {space_id}_rdf_quad v "
+        f"   AND NOT EXISTS (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad v "
         f"                    WHERE v.subject_uuid = q.subject_uuid "
         f"                      AND v.predicate_uuid = ANY($2))",
         _SLOT_TYPE, _SLOT_VALUE_PREDS, timeout=timeout) or 0)
@@ -816,18 +817,18 @@ async def entity_slot_sort_gap(conn, space_id: str,
         f"""
         WITH slots AS (
             SELECT q.subject_uuid,
-                   EXISTS (SELECT 1 FROM {space_id}_rdf_quad v
+                   EXISTS (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad v
                             WHERE v.subject_uuid = q.subject_uuid
                               AND v.predicate_uuid = ANY($2::uuid[])) AS has_value,
-                   EXISTS (SELECT 1 FROM {space_id}_rdf_quad v
+                   EXISTS (SELECT 1 FROM {space_prefix(space_id)}_rdf_quad v
                             WHERE v.subject_uuid = q.subject_uuid
                               AND v.predicate_uuid = $3) AS has_entity
-              FROM {space_id}_rdf_quad q
+              FROM {space_prefix(space_id)}_rdf_quad q
              WHERE q.predicate_uuid = $1)
         SELECT count(*) AS quad_slots,
                count(*) FILTER (WHERE NOT has_value AND NOT has_entity) AS no_value,
                count(*) FILTER (WHERE NOT has_value AND has_entity) AS entity_slots,
-               (SELECT count(*) FROM {space_id}_entity_slot_sort) AS table_rows
+               (SELECT count(*) FROM {space_prefix(space_id)}_entity_slot_sort) AS table_rows
           FROM slots
         """, _SLOT_TYPE, _SLOT_VALUE_PREDS, _ENTITY_SLOT_VALUE, timeout=timeout)
     quad_slots, table_rows = int(row["quad_slots"] or 0), int(row["table_rows"] or 0)
@@ -881,8 +882,8 @@ async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
     rows = await conn.fetch(f"""
         WITH of_type AS (
             SELECT DISTINCT q.object_uuid AS ty, q.subject_uuid AS entity_uuid
-              FROM {space_id}_rdf_quad q
-              JOIN {space_id}_term p ON p.term_uuid = q.predicate_uuid
+              FROM {space_prefix(space_id)}_rdf_quad q
+              JOIN {space_prefix(space_id)}_term p ON p.term_uuid = q.predicate_uuid
                AND p.term_text = $1
              -- AN ENTITY OWNING NO FRAMES HAS NO ROWS BY CONSTRUCTION, so
              -- counting it here asks the table for something it can never hold.
@@ -899,7 +900,7 @@ async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
              -- a far worse failure than the false shortfall being fixed.
              --
              -- Tested through the QUADS that make up an `Edge_hasEntityKGFrame`
-             -- -- not through `{space_id}_edge`, and not through the table being
+             -- -- not through `{space_prefix(space_id)}_edge`, and not through the table being
              -- checked. Independence is the point of this probe (`issues/149`),
              -- and `entity_slot_sort` is itself derived from `edge`, so routing
              -- this through `edge` would let one incomplete table excuse another.
@@ -909,8 +910,8 @@ async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
              -- 984 ms against 2,234 ms for the CTE form, because it probes only
              -- the 82k typed entities instead of building the whole set.
              AND EXISTS (
-                SELECT 1 FROM {space_id}_rdf_quad src
-                  JOIN {space_id}_rdf_quad vt
+                SELECT 1 FROM {space_prefix(space_id)}_rdf_quad src
+                  JOIN {space_prefix(space_id)}_rdf_quad vt
                     ON vt.subject_uuid = src.subject_uuid
                    AND vt.context_uuid = src.context_uuid
                    AND vt.predicate_uuid = $2
@@ -920,17 +921,17 @@ async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
         SELECT t.term_text AS entity_type,
                o.ty        AS entity_type_uuid,
                count(*) FILTER (WHERE EXISTS (
-                   SELECT 1 FROM {space_id}_entity_slot_sort e
+                   SELECT 1 FROM {space_prefix(space_id)}_entity_slot_sort e
                     WHERE e.entity_uuid = o.entity_uuid)) AS in_table,
                count(*) AS of_type
           FROM of_type o
-          JOIN {space_id}_term t ON t.term_uuid = o.ty
+          JOIN {space_prefix(space_id)}_term t ON t.term_uuid = o.ty
          GROUP BY 1, 2
         HAVING count(*) FILTER (WHERE EXISTS (
-                   SELECT 1 FROM {space_id}_entity_slot_sort e
+                   SELECT 1 FROM {space_prefix(space_id)}_entity_slot_sort e
                     WHERE e.entity_uuid = o.entity_uuid)) < count(*)
          ORDER BY (count(*) - count(*) FILTER (WHERE EXISTS (
-                   SELECT 1 FROM {space_id}_entity_slot_sort e
+                   SELECT 1 FROM {space_prefix(space_id)}_entity_slot_sort e
                     WHERE e.entity_uuid = o.entity_uuid))) DESC
          LIMIT {int(limit)}
     """, ENTITY_TYPE_URI, _u(f"{CORE}vitaltype"), _ENTITY_FRAME_EDGE,
@@ -992,7 +993,7 @@ async def entity_slot_sort_drift(conn, space_id: str,
     # **97-133s** on a 45M-quad space, so it had NEVER completed there, and the
     # backfill it gates had never run (`issues/149`). The table sat at 812
     # entities against 79,630 the walk actually yields.
-    t = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
     actual = await conn.fetchval(f"SELECT count(*) FROM {t}", timeout=timeout)
     args = await _type_args(space_id)
     expected = await conn.fetchval(
@@ -1022,17 +1023,17 @@ async def entity_slot_sort_all_types(conn, space_id: str,
     rows = await conn.fetch(f"""
         WITH of_type AS (
             SELECT DISTINCT q.object_uuid AS ty, q.subject_uuid AS entity_uuid
-              FROM {space_id}_rdf_quad q
-              JOIN {space_id}_term p ON p.term_uuid = q.predicate_uuid
+              FROM {space_prefix(space_id)}_rdf_quad q
+              JOIN {space_prefix(space_id)}_term p ON p.term_uuid = q.predicate_uuid
                AND p.term_text = $1)
         SELECT t.term_text AS entity_type,
                o.ty        AS entity_type_uuid,
                count(*) FILTER (WHERE EXISTS (
-                   SELECT 1 FROM {space_id}_entity_slot_sort e
+                   SELECT 1 FROM {space_prefix(space_id)}_entity_slot_sort e
                     WHERE e.entity_uuid = o.entity_uuid)) AS in_table,
                count(*) AS of_type
           FROM of_type o
-          JOIN {space_id}_term t ON t.term_uuid = o.ty
+          JOIN {space_prefix(space_id)}_term t ON t.term_uuid = o.ty
          GROUP BY 1, 2
     """, ENTITY_TYPE_URI, timeout=timeout)
     return [
@@ -1083,7 +1084,7 @@ async def rebuild_entity_slot_sort_batched(
 
     Returns total rows inserted.
     """
-    t = f"{space_id}_entity_slot_sort"
+    t = f"{space_prefix(space_id)}_entity_slot_sort"
     await conn.execute(f"TRUNCATE {t}")
 
     types = await entity_slot_sort_all_types(conn, space_id)

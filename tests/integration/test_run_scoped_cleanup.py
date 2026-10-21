@@ -23,6 +23,7 @@ import pytest
 
 from tests.load.run_scoped_data import (
     RunScope, cleanup, resolve_context, snapshot, verify_clean)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -33,16 +34,16 @@ async def _write_run_data(conn, space_id, scope, n=25):
     """Quads in the run's own graph, as a load run would write them."""
     g = uuid.uuid4()
     await conn.execute(
-        f"INSERT INTO {space_id}_term (term_uuid, term_text, term_type) "
+        f"INSERT INTO {space_prefix(space_id)}_term (term_uuid, term_text, term_type) "
         f"VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING",
         g, scope.graph_uri)
     pred, typ = uuid.uuid4(), uuid.uuid4()
     for tid, text in ((pred, _VITALTYPE), (typ, f"urn:loadtest:{scope.run_id}")):
         await conn.execute(
-            f"INSERT INTO {space_id}_term (term_uuid, term_text, term_type) "
+            f"INSERT INTO {space_prefix(space_id)}_term (term_uuid, term_text, term_type) "
             f"VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING", tid, text)
     await conn.executemany(
-        f"INSERT INTO {space_id}_rdf_quad (subject_uuid, predicate_uuid,"
+        f"INSERT INTO {space_prefix(space_id)}_rdf_quad (subject_uuid, predicate_uuid,"
         f" object_uuid, context_uuid) VALUES ($1,$2,$3,$4) "
         f"ON CONFLICT DO NOTHING",
         [(uuid.uuid4(), pred, typ, g) for _ in range(n)])

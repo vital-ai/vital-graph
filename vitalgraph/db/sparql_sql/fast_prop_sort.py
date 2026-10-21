@@ -33,6 +33,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from .sort_value_key import fits_value_key
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ async def prop_sort_table_present(conn, space_id: str) -> bool:
     if _prop_sort_present.get(space_id):
         return True
     present = await conn.fetchval(
-        "SELECT to_regclass($1)", f"public.{space_id}_entity_prop_sort") is not None
+        "SELECT to_regclass($1)", f"public.{space_prefix(space_id)}_entity_prop_sort") is not None
     if present:
         _prop_sort_present[space_id] = True
     return present
@@ -209,7 +210,7 @@ def build_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[str],
     same table for one entity, which is why the intersect is on `entity_uuid`
     rather than everything being read from a single row.
     """
-    t = f"{space_id}_entity_prop_sort"
+    t = f"{space_prefix(space_id)}_entity_prop_sort"
     params: List[Any] = []
     # $1 is the context. $2 is the entity type ONLY when typed -- in the untyped
     # form the column is not referenced at all, and a parameter that appears
@@ -497,7 +498,7 @@ async def fast_entity_prop_count(
         # Untyped and unfiltered: `fast_typed_subject_count` owns that.
         return None
 
-    t = f"{space_id}_entity_prop_sort"
+    t = f"{space_prefix(space_id)}_entity_prop_sort"
     params: List[Any] = []
     fixed = 2 if entity_type_uri is not None else 1
     def p(v):

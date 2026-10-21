@@ -2,6 +2,7 @@
 import asyncio
 import uuid as _uuid
 import asyncpg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 async def main():
@@ -23,7 +24,7 @@ async def main():
     mh = build_minhash(shingles, rule.num_perm)
     primary_ranges = compute_band_ranges(rule.num_perm, rule.lsh_threshold)
 
-    band_table = f'{space_id}_fuzzy_band'
+    band_table = f'{space_prefix(space_id)}_fuzzy_band'
     band_queries = build_band_queries([mh], primary_ranges)
     hits = {}
     for band_id, hashes in band_queries:
@@ -61,9 +62,9 @@ async def main():
         uuids = [_uuid.UUID(cid) for cid in candidate_ids]
         rows = await conn.fetch(
             f"SELECT q.subject_uuid, obj_t.term_text "
-            f"FROM {space_id}_rdf_quad q "
-            f"JOIN {space_id}_term pred_t ON pred_t.term_uuid = q.predicate_uuid "
-            f"JOIN {space_id}_term obj_t ON obj_t.term_uuid = q.object_uuid AND obj_t.term_type = 'L' "
+            f"FROM {space_prefix(space_id)}_rdf_quad q "
+            f"JOIN {space_prefix(space_id)}_term pred_t ON pred_t.term_uuid = q.predicate_uuid "
+            f"JOIN {space_prefix(space_id)}_term obj_t ON obj_t.term_uuid = q.object_uuid AND obj_t.term_type = 'L' "
             f"WHERE q.subject_uuid = ANY($1) AND pred_t.term_text = ANY($2)",
             uuids, all_property_uris,
         )

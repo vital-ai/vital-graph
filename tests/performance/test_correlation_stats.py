@@ -21,6 +21,7 @@ import pytest
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
 from .conftest import skip_no_pg, space_exists
 from .harness import explain_json, estimated_rows, actual_rows
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -39,10 +40,10 @@ async def _pick_loaded(conn):
 
 
 def _stats_ddl(space_id):
-    stat = f"stat_{space_id}_quad_po"
+    stat = f"stat_{space_prefix(space_id)}_quad_po"
     return (
         f"CREATE STATISTICS IF NOT EXISTS {stat} (mcv, ndistinct) "
-        f"ON predicate_uuid, object_uuid FROM {space_id}_rdf_quad",
+        f"ON predicate_uuid, object_uuid FROM {space_prefix(space_id)}_rdf_quad",
         f"ALTER STATISTICS {stat} SET STATISTICS 1000")
 
 
@@ -52,30 +53,30 @@ async def test_extended_stats_fix_correlation_estimate(perf_pool, perf_record):
         space_id = await _pick_loaded(conn)
         if not space_id:
             pytest.skip("no realistic lead dataset loaded")
-        stat = f"stat_{space_id}_quad_po"
+        stat = f"stat_{space_prefix(space_id)}_quad_po"
         create, tune = _stats_ddl(space_id)
 
         p_slot = _generate_term_uuid(SLOT_PRED, "U")
         # The most common object of the slot predicate is the correlated value.
         o_val = await conn.fetchval(
-            f"SELECT object_uuid FROM {space_id}_rdf_quad WHERE predicate_uuid = $1 "
+            f"SELECT object_uuid FROM {space_prefix(space_id)}_rdf_quad WHERE predicate_uuid = $1 "
             f"GROUP BY object_uuid ORDER BY count(*) DESC LIMIT 1", p_slot)
         if o_val is None:
             pytest.skip(f"{space_id} has no {SLOT_PRED} slot values")
 
-        sql = (f"SELECT 1 FROM {space_id}_rdf_quad "
+        sql = (f"SELECT 1 FROM {space_prefix(space_id)}_rdf_quad "
                f"WHERE predicate_uuid = $1 AND object_uuid = $2")
         try:
             # WITH extended stats.
             await conn.execute(create)
             await conn.execute(tune)
-            await conn.execute(f"ANALYZE {space_id}_rdf_quad")
+            await conn.execute(f"ANALYZE {space_prefix(space_id)}_rdf_quad")
             plan = await explain_json(conn, sql, p_slot, o_val)
             est_with, act = estimated_rows(plan), actual_rows(plan)
 
             # WITHOUT them -> the independence-assumption underestimate.
             await conn.execute(f"DROP STATISTICS IF EXISTS {stat}")
-            await conn.execute(f"ANALYZE {space_id}_rdf_quad")
+            await conn.execute(f"ANALYZE {space_prefix(space_id)}_rdf_quad")
             est_without = estimated_rows(await explain_json(conn, sql, p_slot, o_val))
 
             print(f"\n[{space_id}] correlated leaf: actual={act} "
@@ -95,4 +96,4 @@ async def test_extended_stats_fix_correlation_estimate(perf_pool, perf_record):
             # Restore the stats so the shared space is left improved, not degraded.
             await conn.execute(create)
             await conn.execute(tune)
-            await conn.execute(f"ANALYZE {space_id}_rdf_quad")
+            await conn.execute(f"ANALYZE {space_prefix(space_id)}_rdf_quad")

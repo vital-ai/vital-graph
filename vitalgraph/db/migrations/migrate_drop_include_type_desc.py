@@ -34,6 +34,7 @@ import sys
 from typing import List
 
 import asyncpg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ async def _migrate_space(
         Dict with migration stats for this space.
     """
     stats = {"space_id": space_id, "skipped": False, "upgraded": 0, "dropped": False}
-    mapping_table = f"{space_id}_search_mapping"
+    mapping_table = f"{space_prefix(space_id)}_search_mapping"
 
     # Check table exists
     if not await _table_exists(conn, mapping_table):

@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional, Tuple
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ async def quad_activity(pool, space_id: str) -> Tuple[Optional[int], Optional[ob
                        (SELECT stats_reset FROM pg_stat_database
                          WHERE datname = current_database()) AS stats_reset
                 """,
-                f"{space_id}_rdf_quad")
+                f"{space_prefix(space_id)}_rdf_quad")
         if row is None:
             return None, None
         return row["n_tup_ins"], row["stats_reset"]

@@ -30,6 +30,7 @@ from collections import Counter
 # The REPO's vitalgraph, not an installed copy, which resolves differently.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 HAS_KG_GRAPH_URI = 'http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI'
 VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
@@ -67,7 +68,7 @@ def _kind(vitaltype: str) -> str:
 
 
 async def census(conn, space: str) -> dict:
-    q, term = f"{space}_rdf_quad", f"{space}_term"
+    q, term = f"{space_prefix(space)}_rdf_quad", f"{space_prefix(space)}_term"
     p_kgg = _generate_term_uuid(HAS_KG_GRAPH_URI, 'U')
     p_vt = _generate_term_uuid(VITALTYPE, 'U')
     t0 = time.monotonic()
@@ -119,7 +120,7 @@ async def main() -> int:
             "SELECT space_id FROM space ORDER BY space_id")]
         total_roots, total = 0, Counter()
         for space in spaces:
-            if not await conn.fetchval("SELECT to_regclass($1)", f"{space}_rdf_quad"):
+            if not await conn.fetchval("SELECT to_regclass($1)", f"{space_prefix(space)}_rdf_quad"):
                 continue
             r = await census(conn, space)
             total_roots += r["orphan_roots"]

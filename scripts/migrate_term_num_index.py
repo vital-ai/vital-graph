@@ -45,6 +45,7 @@ from devtools.target import dsn  # noqa: E402
 
 from vitalgraph.db.sparql_sql.sparql_sql_schema import (  # noqa: E402
     numeric_term_column, NUMERIC_TERM_COLUMN)
+from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 
 
 async def find_targets(conn, only_space: str | None):
@@ -106,7 +107,7 @@ async def run(dsn: str, only_space: str | None, dry_run: bool,
               f"{len(done)} already present, {len(small)} below "
               f"--min-terms={min_terms:,}\n")
         for space, _t, n, _h in done:
-            print(f"  ⏭️  {space}: already has idx_{space}_term_num "
+            print(f"  ⏭️  {space}: already has idx_{space_prefix(space)}_term_num "
                   f"({n:,} literals)")
         for space, _t, n, _h in small:
             print(f"  ⏭️  {space}: {n:,} literals, below threshold")
@@ -117,7 +118,7 @@ async def run(dsn: str, only_space: str | None, dry_run: bool,
             # CONCURRENTLY cannot follow ADD COLUMN in the same transaction-less
             # sequence on a table just rewritten; the column add already took an
             # exclusive lock, so a plain CREATE INDEX costs nothing extra here.
-            mk_idx = (f"CREATE INDEX IF NOT EXISTS idx_{space}_term_num "
+            mk_idx = (f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space)}_term_num "
                       f"ON {table} ({NUMERIC_TERM_COLUMN})")
             print(f"  ➕ {space}: adding num_val + index ({n:,} literals)")
             if dry_run:
@@ -130,7 +131,7 @@ async def run(dsn: str, only_space: str | None, dry_run: bool,
             await conn.execute(f"ANALYZE {table}")
             size = await conn.fetchval(
                 "SELECT pg_size_pretty(pg_relation_size($1::regclass))",
-                f"idx_{space}_term_num")
+                f"idx_{space_prefix(space)}_term_num")
             print(f"    ✅ {space}: built in {time.time() - t0:.1f}s ({size})")
 
         return 0

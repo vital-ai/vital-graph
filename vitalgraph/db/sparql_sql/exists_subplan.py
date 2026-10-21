@@ -36,6 +36,7 @@ import logging
 from typing import Any, List, Optional
 
 from .ir import PlanV2, AliasGenerator
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ async def prepare_exists_subplans(plan: PlanV2, space_id: str, *,
     if not nodes:
         return 0
 
-    term_table = f"{space_id}_term"
+    term_table = f"{space_prefix(space_id)}_term"
     prepared = 0
 
     for i, node in enumerate(nodes):

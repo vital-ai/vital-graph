@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +66,9 @@ async def ensure_edge_table(space_id: str, conn=None, conn_params=None) -> bool:
 
     from . import db_provider as db
 
-    table_name = f"{space_id}_edge"
-    quad_table = f"{space_id}_rdf_quad"
-    term_table = f"{space_id}_term"
+    table_name = f"{space_prefix(space_id)}_edge"
+    quad_table = f"{space_prefix(space_id)}_rdf_quad"
+    term_table = f"{space_prefix(space_id)}_term"
 
     try:
         # Check if edge table exists

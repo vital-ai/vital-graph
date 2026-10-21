@@ -32,6 +32,7 @@ from ..model.vector_indexes_model import (
     VectorGetOut, VectorGetResponse,
     ReindexJobStatus, ReindexJobListResponse,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +117,7 @@ class VectorIndexesEndpoint:
         require_space_read(current_user, space_id)
         conn = await self._acquire()
         try:
-            table = f"{space_id}_vector_index"
+            table = f"{space_prefix(space_id)}_vector_index"
             rows = await conn.fetch(
                 f"SELECT * FROM {table} ORDER BY index_name"
             )
@@ -196,7 +197,7 @@ class VectorIndexesEndpoint:
 
         conn = await self._acquire()
         try:
-            table = f"{space_id}_vector_index"
+            table = f"{space_prefix(space_id)}_vector_index"
 
             # Check for duplicate → ALREADY_EXISTS (HTTP 200)
             existing = await conn.fetchrow(
@@ -275,7 +276,7 @@ class VectorIndexesEndpoint:
         require_space_read(current_user, space_id)
         conn = await self._acquire()
         try:
-            table = f"{space_id}_vector_index"
+            table = f"{space_prefix(space_id)}_vector_index"
             row = await conn.fetchrow(
                 f"SELECT * FROM {table} WHERE index_name = $1",
                 index_name,
@@ -316,7 +317,7 @@ class VectorIndexesEndpoint:
         require_space_write(current_user, space_id)
         conn = await self._acquire()
         try:
-            table = f"{space_id}_vector_index"
+            table = f"{space_prefix(space_id)}_vector_index"
 
             # Verify exists
             row = await conn.fetchrow(
@@ -336,8 +337,8 @@ class VectorIndexesEndpoint:
                 await conn.execute(stmt)
 
             # Delete dependent search mappings
-            search_mapping_table = f"{space_id}_search_mapping"
-            search_mapping_prop_table = f"{space_id}_search_mapping_property"
+            search_mapping_table = f"{space_prefix(space_id)}_search_mapping"
+            search_mapping_prop_table = f"{space_prefix(space_id)}_search_mapping_property"
             try:
                 # Delete mapping properties first, then mappings
                 await conn.execute(
@@ -386,7 +387,7 @@ class VectorIndexesEndpoint:
         conn = await self._acquire()
         try:
             # Verify index exists and check dimensions
-            table = f"{space_id}_vector_index"
+            table = f"{space_prefix(space_id)}_vector_index"
             idx_row = await conn.fetchrow(
                 f"SELECT dimensions FROM {table} WHERE index_name = $1", index_name,
             )
@@ -399,7 +400,7 @@ class VectorIndexesEndpoint:
 
             expected_dims = idx_row["dimensions"]
             vec_table = self.schema.vec_table_name(space_id, index_name)
-            term_table = f"{space_id}_term"
+            term_table = f"{space_prefix(space_id)}_term"
 
             ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
             upserted = 0
@@ -468,7 +469,7 @@ class VectorIndexesEndpoint:
         conn = await self._acquire()
         try:
             # Verify index exists
-            table = f"{space_id}_vector_index"
+            table = f"{space_prefix(space_id)}_vector_index"
             idx_row = await conn.fetchrow(
                 f"SELECT index_name FROM {table} WHERE index_name = $1", index_name,
             )
@@ -480,7 +481,7 @@ class VectorIndexesEndpoint:
                 )
 
             vec_table = self.schema.vec_table_name(space_id, index_name)
-            term_table = f"{space_id}_term"
+            term_table = f"{space_prefix(space_id)}_term"
             ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
             conditions = []
@@ -558,7 +559,7 @@ class VectorIndexesEndpoint:
         conn = await self._acquire()
         try:
             # Verify index exists (fail fast before spawning background work)
-            table = f"{space_id}_vector_index"
+            table = f"{space_prefix(space_id)}_vector_index"
             idx_row = await conn.fetchrow(
                 f"SELECT * FROM {table} WHERE index_name = $1",
                 index_name,

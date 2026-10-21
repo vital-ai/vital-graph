@@ -33,6 +33,7 @@ from vitalgraph.vectorization.search_text_builder import (
 from vitalgraph.vectorization.kgtype_description_lookup import (
     KGTypeDescriptionLookup,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -208,11 +209,11 @@ async def populate_fts_index(
 
     # Look up languages for batch tsv computation
     fts_row = await conn.fetchrow(
-        f"SELECT languages FROM {space_id}_fts_index WHERE index_name = $1",
+        f"SELECT languages FROM {space_prefix(space_id)}_fts_index WHERE index_name = $1",
         index_name,
     )
     if fts_row is None:
-        stats.errors.append(f"FTS index '{index_name}' not found in {space_id}_fts_index")
+        stats.errors.append(f"FTS index '{index_name}' not found in {space_prefix(space_id)}_fts_index")
         return stats
 
     languages = list(fts_row["languages"])
@@ -228,7 +229,7 @@ async def populate_fts_index(
 
     # Get subjects to index
     if subject_uuids is None:
-        tables = {"rdf_quad": f"{space_id}_rdf_quad", "term": f"{space_id}_term"}
+        tables = {"rdf_quad": f"{space_prefix(space_id)}_rdf_quad", "term": f"{space_prefix(space_id)}_term"}
         if slot_type_uri and type_uri:
             rows = await conn.fetch(
                 SLOT_AND_TYPE_SUBJECTS_SQL.format(**tables),
@@ -244,7 +245,7 @@ async def populate_fts_index(
                 TYPED_SUBJECTS_SQL.format(**tables), context_uuid, type_uri,
             )
         else:
-            sql = ALL_SUBJECTS_SQL.format(rdf_quad=f"{space_id}_rdf_quad")
+            sql = ALL_SUBJECTS_SQL.format(rdf_quad=f"{space_prefix(space_id)}_rdf_quad")
             rows = await conn.fetch(sql, context_uuid)
         subject_uuids = [r["subject_uuid"] for r in rows]
 
@@ -267,7 +268,7 @@ async def populate_fts_index(
         return stats
 
     # For full population: disable trigger for batch performance
-    trigger_name = f"trg_{space_id}_fts_{index_name}_tsv"
+    trigger_name = f"trg_{space_prefix(space_id)}_fts_{index_name}_tsv"
     if is_full_population:
         try:
             await conn.execute(

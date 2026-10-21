@@ -22,6 +22,7 @@ import pytest_asyncio
 from rdflib import Literal, URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -32,11 +33,11 @@ pytestmark = [
 
 async def _break(pg_conn, space: str) -> str:
     """Replace the space's `term_dt` with an INVALID index of the same name."""
-    name = f"idx_{space}_term_dt"
+    name = f"idx_{space_prefix(space)}_term_dt"
     await pg_conn.execute(f'DROP INDEX IF EXISTS "{name}"')
     with pytest.raises(asyncpg.UniqueViolationError):
         await pg_conn.execute(
-            f'CREATE UNIQUE INDEX CONCURRENTLY "{name}" ON {space}_term (term_type)')
+            f'CREATE UNIQUE INDEX CONCURRENTLY "{name}" ON {space_prefix(space)}_term (term_type)')
     assert await pg_conn.fetchval(
         "SELECT NOT i.indisvalid FROM pg_index i JOIN pg_class c "
         "ON c.oid = i.indexrelid WHERE c.relname = $1", name), (

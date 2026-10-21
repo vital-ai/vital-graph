@@ -23,6 +23,7 @@ from rdflib import URIRef, Literal
 
 from vitalgraph.db.sparql_sql.entity_lock import lock_entities
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -61,8 +62,8 @@ def _update(graph, slot, value):
 async def _values(space_impl, space_id, graph, slot):
     async with space_impl.db_impl.connection_pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT t.term_text FROM {space_id}_rdf_quad q "
-            f"  JOIN {space_id}_term t ON t.term_uuid = q.object_uuid "
+            f"SELECT t.term_text FROM {space_prefix(space_id)}_rdf_quad q "
+            f"  JOIN {space_prefix(space_id)}_term t ON t.term_uuid = q.object_uuid "
             f" WHERE q.subject_uuid = $1 AND q.predicate_uuid = $2 "
             f"   AND q.context_uuid = $3",
             _generate_term_uuid(slot, "U"), _generate_term_uuid(TXT, "U"),

@@ -11,6 +11,7 @@ separate from the entity_default index.
 
 import logging
 from typing import Optional
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,8 @@ async def ensure_document_segments_index(
     Returns:
         True if created or already exists, False on error.
     """
-    vector_index_table = f"{space_id}_vector_index"
-    vec_table = f"{space_id}_vec_{DOCUMENT_SEGMENTS_INDEX_NAME}"
+    vector_index_table = f"{space_prefix(space_id)}_vector_index"
+    vec_table = f"{space_prefix(space_id)}_vec_{DOCUMENT_SEGMENTS_INDEX_NAME}"
 
     try:
         # Check if already exists
@@ -135,8 +136,8 @@ async def ensure_document_segments_mapping(
     Returns:
         True if created/exists, False on error.
     """
-    mapping_table = f"{space_id}_search_mapping"
-    property_table = f"{space_id}_search_mapping_property"
+    mapping_table = f"{space_prefix(space_id)}_search_mapping"
+    property_table = f"{space_prefix(space_id)}_search_mapping_property"
 
     try:
         # Check if mapping already exists

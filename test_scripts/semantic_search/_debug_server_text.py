@@ -5,6 +5,7 @@ import asyncpg
 from vitalgraph.vectorization.search_text_builder import (
     build_search_text, resolve_search_mapping, fetch_literal_properties,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 async def main():
@@ -13,14 +14,14 @@ async def main():
     )
     space_id = "sp_semantic_search_test"
     ctx = await conn.fetchrow(
-        f"SELECT term_uuid FROM {space_id}_term "
+        f"SELECT term_uuid FROM {space_prefix(space_id)}_term "
         "WHERE term_text = 'urn:semantic_search_test'"
     )
     ctx_uuid = ctx["term_uuid"]
 
     # Sushi saito entity
     r = await conn.fetchrow(
-        f"SELECT term_uuid FROM {space_id}_term "
+        f"SELECT term_uuid FROM {space_prefix(space_id)}_term "
         "WHERE term_text = 'http://vital.ai/test/semantic/entity/sushi_saito'"
     )
     sushi_uuid = r["term_uuid"]

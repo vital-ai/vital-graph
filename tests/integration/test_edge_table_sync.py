@@ -17,6 +17,7 @@ import pytest
 from rdflib import URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -34,10 +35,10 @@ async def _edge_row(conn, space_id: str, edge_uri: str):
     return await conn.fetchrow(
         f"""
         SELECT ts.term_text AS src, td.term_text AS dst
-        FROM {space_id}_edge e
-        JOIN {space_id}_term te ON te.term_uuid = e.edge_uuid
-        JOIN {space_id}_term ts ON ts.term_uuid = e.source_node_uuid
-        JOIN {space_id}_term td ON td.term_uuid = e.dest_node_uuid
+        FROM {space_prefix(space_id)}_edge e
+        JOIN {space_prefix(space_id)}_term te ON te.term_uuid = e.edge_uuid
+        JOIN {space_prefix(space_id)}_term ts ON ts.term_uuid = e.source_node_uuid
+        JOIN {space_prefix(space_id)}_term td ON td.term_uuid = e.dest_node_uuid
         WHERE te.term_text = $1
         """,
         edge_uri,
@@ -76,7 +77,7 @@ class TestEdgeTableSync:
             quads.append((e, HAS_EDGE_DEST, URIRef(f"urn:test:cd:{i}"), GRAPH))
         await space_impl.add_rdf_quads_batch_bulk(sid, quads)
         async with space_impl.db_impl.connection_pool.acquire() as conn:
-            cnt = await conn.fetchval(f"SELECT count(*) FROM {sid}_edge")
+            cnt = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_edge")
         assert cnt == n, cnt  # every edge synced, no chunk dropped/double-counted
 
     async def test_edge_sync_across_batches(

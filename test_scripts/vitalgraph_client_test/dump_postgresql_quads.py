@@ -22,6 +22,7 @@ import logging
 from pathlib import Path
 from typing import List, Tuple, Optional
 import yaml
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 # Setup logging
 logging.basicConfig(
@@ -119,7 +120,7 @@ class PostgreSQLQuadDumper:
         Returns:
             Tuple of (term_table, quad_table)
         """
-        prefix = f"{space_id}_"
+        prefix = f"{space_prefix(space_id)}_"
         term_table = f"{prefix}term"
         quad_table = f"{prefix}rdf_quad"
         

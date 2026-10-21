@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 from vitalgraph.vectorization.search_mapping_manager import SearchMappingManager
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ async def ensure_index(
         )
         return False
 
-    vector_index_table = f"{space_id}_vector_index"
+    vector_index_table = f"{space_prefix(space_id)}_vector_index"
     try:
         row = await conn.fetchrow(
             f"SELECT index_name FROM {vector_index_table} WHERE index_name = $1",
@@ -197,9 +198,9 @@ async def teardown_index(conn, space_id: str, index_name: str) -> bool:
     Returns True on success.
     """
     try:
-        vec_table = f"{space_id}_vec_{index_name}"
-        mapping_table = f"{space_id}_search_mapping"
-        vector_index_table = f"{space_id}_vector_index"
+        vec_table = f"{space_prefix(space_id)}_vec_{index_name}"
+        mapping_table = f"{space_prefix(space_id)}_search_mapping"
+        vector_index_table = f"{space_prefix(space_id)}_vector_index"
 
         await conn.execute(f"DROP TABLE IF EXISTS {vec_table} CASCADE")
         await conn.execute(

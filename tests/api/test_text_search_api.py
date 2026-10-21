@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 import pytest
 import pytest_asyncio
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.api,
@@ -554,7 +555,7 @@ class TestTextSearchDbVerification:
     async def test_fuzzy_band_indexes_exist(self, pg_conn, text_env):
         """Verify lookup indexes on fuzzy band tables."""
         sid = text_env["space_id"]
-        for idx_name in [f"idx_{sid}_fuzzy_band_lookup", f"idx_{sid}_fuzzy_band_entity"]:
+        for idx_name in [f"idx_{space_prefix(sid)}_fuzzy_band_lookup", f"idx_{space_prefix(sid)}_fuzzy_band_entity"]:
             exists = await pg_conn.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = $1)",
                 idx_name,

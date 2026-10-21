@@ -23,6 +23,7 @@ import pytest
 
 from vitalgraph.kg_impl.kg_backend_utils import (
     _WRITE_PHASES, SparqlSQLBackendAdapter, _phase_breakdown)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 class TestTheBreakdown:
@@ -105,7 +106,7 @@ class FakeConn:
 class FakeSchema:
     @staticmethod
     def get_table_names(space_id):
-        return {"rdf_quad": f"{space_id}_rdf_quad"}
+        return {"rdf_quad": f"{space_prefix(space_id)}_rdf_quad"}
 
 
 class FakeBackend:

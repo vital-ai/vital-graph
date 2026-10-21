@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 from .ir import AliasGenerator
 from .sql_type_generation import TypeRegistry
+from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -323,15 +324,15 @@ class EmitContext:
 
     @property
     def quad_table(self) -> str:
-        return f"{self.space_id}_rdf_quad"
+        return f"{space_prefix(self.space_id)}_rdf_quad"
 
     @property
     def term_table(self) -> str:
-        return f"{self.space_id}_term"
+        return f"{space_prefix(self.space_id)}_term"
 
     @property
     def datatype_table(self) -> str:
-        return f"{self.space_id}_datatype"
+        return f"{space_prefix(self.space_id)}_datatype"
 
     def dt_case_expr(self, t_alias: str) -> str:
         """Build a SQL CASE expression resolving datatype_id → URI text.

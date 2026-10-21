@@ -22,6 +22,7 @@ import pytest_asyncio
 import asyncpg
 
 from . import perf_record as perf_record_mod
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 PG_HOST = os.environ.get("VG_TEST_PG_HOST", "localhost")
 # Defaults target the docker test stack (vg-test, port 5433), NOT the host
@@ -185,7 +186,7 @@ async def perf_conn(perf_pool):
 async def space_exists(conn, space_id: str) -> bool:
     """True if the space's rdf_quad table exists (i.e. the space is loaded)."""
     return bool(await conn.fetchval(
-        "SELECT 1 FROM pg_tables WHERE tablename = $1", f"{space_id}_rdf_quad"))
+        "SELECT 1 FROM pg_tables WHERE tablename = $1", f"{space_prefix(space_id)}_rdf_quad"))
 
 
 # ---------------------------------------------------------------------------
