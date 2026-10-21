@@ -2,7 +2,7 @@
 
 ## ARCHIVED 2026-10-20 — the rule released in 0.0.48 and deployed; the type-change follow-up fixed and verified on the vg test stack; the FileNode is not stamped by design (ontology); nothing remaining. Evidence: tests/integration/test_vectorize_policy.py; tests/api/test_kgdocument_vectorize_and_upload.py.
 
-## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production (reported by the deploy session). Type-change follow-up FIXED IN CODE 2026-10-20 (not yet released).
+## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production (reported by the deploy session). Type-change follow-up RELEASED IN v0.0.95, deployed to production 2026-10-21.
 
 **Related:** `issues/284` and `issues/286`, from the same request. `issues/219`
 (auto-sync scoped to each index's mapping, which this builds on). `issues/245`
@@ -131,7 +131,7 @@ sets descriptions on created documents and uses a type-on upload as a control,
 so that no "not embedded" assertion passes vacuously; the first version of the
 test did not, and passed for the wrong reason.
 
-## Follow-up fix (2026-10-20, not yet released)
+## Follow-up fix (2026-10-20, released in v0.0.95, deployed to production 2026-10-21)
 
 - **A config change that flips a type's default reaches its existing output.**
   Creating, updating or deleting a segmentation config compares the type's

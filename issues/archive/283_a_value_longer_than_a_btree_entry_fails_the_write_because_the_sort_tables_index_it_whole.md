@@ -1,6 +1,8 @@
 # 283 — A value longer than a btree entry fails the write, because the sort tables index it whole
 
-## Status: URI LIMIT ADDED 2026-10-20 (not yet released; local stacks migrated) — see the follow-up below. The value fix was RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production, with both migration phases run there (reported by the deploy session; not independently re-checked from this repo). The local vg test stack (303 spaces, 2,067 indexes rebuilt) and the host dev cluster (45 spaces) were migrated 2026-10-20.
+## ARCHIVED 2026-10-21 — the value fix and the URI limit are both in production and migrated there (URI limit in v0.0.95, deployed to production 2026-10-21: `migrate_term_uri_limit.py` 11/11 spaces, all validated, reported by the deploy session); nothing remaining. Evidence: tests/integration/test_uri_length_limit.py, tests/integration/test_space_rename.py.
+
+## Status: URI LIMIT RELEASED IN v0.0.95, deployed to production 2026-10-21, migrated (11/11 validated). The value fix was RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production, with both migration phases run there (reported by the deploy session; not independently re-checked from this repo). The local vg test stack (303 spaces, 2,067 indexes rebuilt) and the host dev cluster (45 spaces) were migrated 2026-10-20.
 
 **Related:** `issues/172`, which named this exact defect and its remedy and did
 not build it (see "This was predicted" below). `issues/194`, which wired the
@@ -218,5 +220,4 @@ about 2,120 of 2,704 bytes, even with a 256-character `value_key` made of
 
 ## Not done
 
-- Production: run `scripts/migrate_term_uri_limit.py --all --apply` after the
-  release that carries the limit, and after the rename fix with it.
+- Nothing. Production migrated in v0.0.95, deployed to production 2026-10-21.

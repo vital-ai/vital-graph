@@ -1,6 +1,8 @@
 # 292 — A text filter was declared empty from the wrong count, and from a cached zero
 
-## Status: FIXED IN CODE 2026-10-20 (not yet released). The defects shipped with `issues/202` and are presumably live in production.
+## ARCHIVED 2026-10-21 — fixed, verified locally, released in v0.0.95, deployed to production 2026-10-21; nothing remaining (production impact before the fix is unmeasured, not work). Evidence: tests/integration/test_text_filter_emptiness_is_measured_right.py.
+
+## Status: RELEASED IN v0.0.95, deployed to production 2026-10-21. The defects shipped with `issues/202` and were live in production until then.
 
 **Related:** `issues/202` (the "a required text filter that matches nothing
 makes the query provably empty" short-circuit these defects live in),

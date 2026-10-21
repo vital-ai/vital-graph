@@ -2,7 +2,7 @@
 
 ## ARCHIVED 2026-10-20 — the create path released in 0.0.48 and deployed; the PUT follow-up fixed and verified on the vg test stack; nothing remaining. Evidence: tests/api/test_kgdocument_vectorize_and_upload.py::TestAutoSegmentationOnCreate, ::TestUpdate; tests/unit/test_kgdocument_upload_and_policy.py::TestWorkerConfig.
 
-## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production (reported by the deploy session). PUT follow-up FIXED IN CODE 2026-10-20 (not yet released).
+## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production (reported by the deploy session). PUT follow-up RELEASED IN v0.0.95, deployed to production 2026-10-21.
 
 **Related:** `issues/285` (the same config's `auto_vectorize`), `issues/284`
 (uploads gain a `document_type`), `issues/287` (what the segmenter drops).
@@ -46,7 +46,7 @@ the API and the client, but nothing used it:
   the config fills what the job leaves unset, that the job's own values win, and
   that the defaults hold without a config.
 
-## Follow-up fix (2026-10-20, not yet released) — PUT
+## Follow-up fix (2026-10-20, released in v0.0.95, deployed to production 2026-10-21) — PUT
 
 - **`PUT /kgdocuments` re-segments on a content change** (`_auto_resegment`).
   A document qualifies when it is already segmented (the job reuses the

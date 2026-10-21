@@ -1,6 +1,6 @@
 # 291 — Auto-sync holds an internal-pool connection across the embedding call
 
-## Status: FIXED IN CODE 2026-10-20 (not yet released): step 1, a per-space Postgres queue with bounded consumers (`57d6a9a8`); step 2, a trigger on `rdf_quad` that queues each write's subjects in the write's own transaction. Found reviewing `issues/290`.
+## Status: RELEASED IN v0.0.95, deployed to production 2026-10-21, migrated (`migrate_index_sync_queue.py` 11/11 spaces, 22 triggers enabled, queue depth and failures 0, the direct-sync fallback WARNINGs gone after migration; workers up on both tasks, 4 consumers fleet-wide — reported by the deploy session). STAYS OPEN for the follow-ups under Not done. Step 1, a per-space Postgres queue with bounded consumers (`57d6a9a8`); step 2, a trigger on `rdf_quad` that queues each write's subjects in the write's own transaction. Found reviewing `issues/290`.
 
 **Related:** `issues/290` (the symptom: a worker's second acquire timed out),
 `issues/231` (the internal pool, its size of 3, and "whether 3 is right" left
@@ -257,5 +257,4 @@ indicative; the alternating A/B is what the comparison rests on.
 - **Monitoring.** `index_sync_queue.stats()` returns depth, claimed, failing
   and the oldest age; nothing reads it yet. The maintenance job, or the admin
   status endpoint, should report a backlog or a failing row.
-- **Production:** run `scripts/migrate_index_sync_queue.py --all --apply`
-  (queue + trigger). Order against the deploy does not matter.
+- ~~Production migration~~ — done in v0.0.95, deployed to production 2026-10-21.

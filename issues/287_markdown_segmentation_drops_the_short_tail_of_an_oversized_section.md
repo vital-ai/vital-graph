@@ -1,6 +1,6 @@
 # 287 — Markdown segmentation drops the short tail of an oversized section
 
-## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production. Splitter follow-up FIXED IN CODE 2026-10-20 (not yet released). STAYS OPEN: documents segmented before the fix keep their gaps until re-segmented.
+## Status: RELEASED IN 0.0.48 AND DEPLOYED 2026-10-20 to AWS test and AWS production. Splitter follow-up RELEASED IN v0.0.95, deployed to production 2026-10-21. STAYS OPEN: documents segmented before the fix keep their gaps until re-segmented.
 
 **Related:** `issues/286` (the worker now passes the type's real minimum).
 
@@ -35,7 +35,7 @@ outside pytest's `testpaths`.
 fails on the old segmenter, because the tail marker is missing, and passes on the
 new one. It also asserts that no segment exceeds the limit.
 
-## Follow-up fix (2026-10-20, not yet released) — the splitter itself
+## Follow-up fix (2026-10-20, released in v0.0.95, deployed to production 2026-10-21) — the splitter itself
 
 Four problems found in `_split_recursive` while reading it, left out of the
 first fix, are now fixed:
