@@ -19,6 +19,7 @@ dataset stays fixed.
 from __future__ import annotations
 
 from pathlib import Path
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 _ROOT = Path(__file__).resolve().parents[2]
 
@@ -156,7 +157,7 @@ async def has_grouping_uris(conn, fx) -> bool:
     # to detect -- would seq-scan the whole table to prove a absence. The
     # predicate is a fixed URI, so match it exactly.
     return bool(await conn.fetchval(
-        f"SELECT 1 FROM {fx.space}_term WHERE term_text = $1 LIMIT 1",
+        f"SELECT 1 FROM {space_prefix(fx.space)}_term WHERE term_text = $1 LIMIT 1",
         HAS_KG_GRAPH_URI))
 
 
@@ -170,7 +171,7 @@ async def duplicate_anchor_rows(conn, fx) -> int:
     """
     return await conn.fetchval(f"""
         SELECT COALESCE(sum(n) - count(*), 0) FROM (
-            SELECT count(*) AS n FROM {fx.space}_rdf_quad
+            SELECT count(*) AS n FROM {space_prefix(fx.space)}_rdf_quad
             GROUP BY subject_uuid, predicate_uuid, object_uuid, context_uuid
             HAVING count(*) > 1) x
     """)
@@ -192,17 +193,17 @@ async def require_usable(conn, fx) -> str | None:
     """
     exists = await conn.fetchval(
         "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
-        f"{fx.space}_rdf_quad")
+        f"{space_prefix(fx.space)}_rdf_quad")
     if not exists:
         return f"space {fx.space} does not exist"
-    if not await conn.fetchval(f"SELECT count(*) FROM {fx.space}_rdf_quad"):
+    if not await conn.fetchval(f"SELECT count(*) FROM {space_prefix(fx.space)}_rdf_quad"):
         return f"space {fx.space} exists but is empty — load it first"
     ns_present = await conn.fetchval(
-        f"SELECT 1 FROM {fx.space}_term WHERE term_text LIKE $1 LIMIT 1",
+        f"SELECT 1 FROM {space_prefix(fx.space)}_term WHERE term_text LIKE $1 LIMIT 1",
         f"{CRITERIA_NS}:slot:%")
     if not ns_present:
         other = await conn.fetchval(
-            f"SELECT split_part(term_text, ':slot:', 1) FROM {fx.space}_term "
+            f"SELECT split_part(term_text, ':slot:', 1) FROM {space_prefix(fx.space)}_term "
             f"WHERE term_text LIKE '%:slot:%' LIMIT 1")
         return (f"space {fx.space} uses namespace {other!r}, not "
                 f"{CRITERIA_NS!r} — the bench criteria cannot match it")

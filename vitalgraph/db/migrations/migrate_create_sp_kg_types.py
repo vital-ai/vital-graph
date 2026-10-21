@@ -62,7 +62,9 @@ async def migrate_create_sp_kg_types(
         return {"space_id": SP_KG_TYPES, "created": False, "skipped": False}
 
     # 1. Insert space row
+    from vitalgraph.db.sparql_sql.space_names import register_storage_key
     from vitalgraph.db.sparql_sql.space_storage_key import allocate_storage_key
+    key = await allocate_storage_key(conn)
     await conn.execute(
         """INSERT INTO space (space_id, space_name, space_description, update_time,
                               storage_key)
@@ -71,8 +73,10 @@ async def migrate_create_sp_kg_types(
         SP_KG_TYPES,
         "KG Types",
         "System space for centralized KG Type definitions",
-        await allocate_storage_key(conn),
+        key,
     )
+    # Before the DDL below: every name it generates comes from the key.
+    register_storage_key(SP_KG_TYPES, key)
     logger.info("Inserted space row: %s", SP_KG_TYPES)
 
     # 2. Create per-space tables (quads, terms, indexes, etc.)

@@ -32,6 +32,7 @@ from vitalgraph.db.sparql_sql.emit import emit
 from vitalgraph.db.sparql_sql.filter_pushdown import push_text_filters
 from vitalgraph.db.sparql_sql.generator import prepend_ctes
 from vitalgraph.db.sparql_sql.ir import KIND_FILTER
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "plan_trees" / "json"
@@ -83,7 +84,7 @@ def _generate_sql_from_fixture(fixture: dict) -> str:
     # PostgreSQL parser and still could not see it, because the prefix they
     # validate was never attached. See issues/070.
     sql = emit(plan, ctx)
-    return prepend_ctes(sql, aliases, f"{SPACE_ID}_term")
+    return prepend_ctes(sql, aliases, f"{space_prefix(SPACE_ID)}_term")
 
 
 FIXTURES = _load_fixtures()

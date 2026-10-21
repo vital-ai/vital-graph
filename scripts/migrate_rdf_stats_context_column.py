@@ -48,6 +48,7 @@ from vitalgraph.db.sparql_sql.sync_stats_tables import (  # noqa: E402
     recompute_stats_tables,
 )
 from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 logger = logging.getLogger("migrate_rdf_stats_context_column")
 
@@ -148,6 +149,7 @@ async def main() -> int:
     conn = await asyncpg.connect(host=args.host, port=args.port,
                                  database=args.database, user=args.user,
                                  password=args.password or None)
+    await load_storage_keys(conn)
     try:
         if args.all:
             spaces = [r[0] for r in await conn.fetch(

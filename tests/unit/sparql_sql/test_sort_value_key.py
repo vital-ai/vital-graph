@@ -25,6 +25,7 @@ import pytest
 
 from vitalgraph.db.sparql_sql.sort_value_key import (
     VALUE_KEY_CHARS, VALUE_KEY_COLUMN, fits_value_key)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 HALEY = "http://vital.ai/ontology/haley-ai-kg#"
 TEXT = HALEY + "KGTextSlot"
@@ -70,14 +71,14 @@ class TestTheSchema:
     def test_each_sort_table_generates_the_key(self, ddl, table):
         tables, _ = ddl
         stmt = next(s for s in tables
-                    if f"CREATE TABLE IF NOT EXISTS {SPACE}_{table} " in s)
+                    if f"CREATE TABLE IF NOT EXISTS {space_prefix(SPACE)}_{table} " in s)
         assert (f"{VALUE_KEY_COLUMN} TEXT GENERATED ALWAYS AS "
                 f"(left(value_text, {VALUE_KEY_CHARS})) STORED") in stmt
 
     def test_no_index_on_a_sort_table_covers_the_unbounded_text(self, ddl):
         _, indexes = ddl
         offenders = [s for s in indexes
-                     if re.search(rf"ON {SPACE}_(entity_slot|entity_prop|frame_prop)_sort\b", s)
+                     if re.search(rf"ON {space_prefix(SPACE)}_(entity_slot|entity_prop|frame_prop)_sort\b", s)
                      and "value_text" in s]
         assert not offenders, (
             "a btree over value_text fails the write of any value past ~2.7 KB:\n  "
@@ -89,7 +90,7 @@ class TestTheSchema:
     def test_every_text_index_is_on_the_key(self, ddl, suffix):
         _, indexes = ddl
         stmt = next(s for s in indexes
-                    if f"INDEX IF NOT EXISTS idx_{SPACE}_{suffix} " in s)
+                    if f"INDEX IF NOT EXISTS idx_{space_prefix(SPACE)}_{suffix} " in s)
         assert f'{VALUE_KEY_COLUMN} COLLATE "C"' in stmt
 
 
@@ -211,7 +212,7 @@ class TestTheFtsFramePathDeclines:
         c = _FtsCriteria([_Filter(self.NAME, "eq", SHORT)])
         c.graph_uri = "urn:g"
         assert fts_frame_decline_reason(c) is None
-        sql, _ = _build(SPACE, c, f"{SPACE}_fts_m", "english", for_count=False,
+        sql, _ = _build(SPACE, c, f"{space_prefix(SPACE)}_fts_m", "english", for_count=False,
                         cap=None, page_size=10, offset=0)
         assert 'e.value_key COLLATE "C" =' in sql
 

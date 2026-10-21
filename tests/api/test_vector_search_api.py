@@ -16,6 +16,7 @@ from __future__ import annotations
 import uuid
 import pytest
 import pytest_asyncio
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.api,
@@ -430,7 +431,7 @@ class TestVectorDbVerification:
 
     async def test_vector_index_registry_row(self, pg_conn, vector_env):
         """Verify the vector_index registry table has a row for our index."""
-        table = f"{vector_env['space_id']}_vector_index"
+        table = f"{space_prefix(vector_env['space_id'])}_vector_index"
         row = await pg_conn.fetchrow(
             f"SELECT index_name, dimensions, distance_metric FROM {table} WHERE index_name = $1",
             INDEX_NAME,
@@ -441,7 +442,7 @@ class TestVectorDbVerification:
 
     async def test_vector_data_table_exists(self, pg_conn, vector_env):
         """Verify the per-index vector data table was created."""
-        vec_table = f"{vector_env['space_id']}_vec_{INDEX_NAME}"
+        vec_table = f"{space_prefix(vector_env['space_id'])}_vec_{INDEX_NAME}"
         exists = await pg_conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
             "WHERE table_schema = 'public' AND table_name = $1)",
@@ -451,13 +452,13 @@ class TestVectorDbVerification:
 
     async def test_vector_data_row(self, pg_conn, vector_env):
         """Verify the upserted vector is in the data table."""
-        vec_table = f"{vector_env['space_id']}_vec_{INDEX_NAME}"
+        vec_table = f"{space_prefix(vector_env['space_id'])}_vec_{INDEX_NAME}"
         count = await pg_conn.fetchval(f"SELECT COUNT(*) FROM {vec_table}")
         assert count >= 1, f"Expected >=1 rows in {vec_table}, got {count}"
 
     async def test_hnsw_index_cosine_opclass(self, pg_conn, vector_env):
         """Verify HNSW index uses vector_cosine_ops for the cosine index."""
-        idx_name = f"idx_{vector_env['space_id']}_vec_{INDEX_NAME}_hnsw"
+        idx_name = f"idx_{space_prefix(vector_env['space_id'])}_vec_{INDEX_NAME}_hnsw"
         indexdef = await pg_conn.fetchval(
             "SELECT indexdef FROM pg_indexes WHERE indexname = $1",
             idx_name,
@@ -470,7 +471,7 @@ class TestVectorDbVerification:
 
     async def test_hnsw_index_l2_opclass(self, pg_conn, vector_env):
         """Verify HNSW index uses vector_l2_ops for the L2 index."""
-        idx_name = f"idx_{vector_env['space_id']}_vec_{INDEX_NAME_L2}_hnsw"
+        idx_name = f"idx_{space_prefix(vector_env['space_id'])}_vec_{INDEX_NAME_L2}_hnsw"
         indexdef = await pg_conn.fetchval(
             "SELECT indexdef FROM pg_indexes WHERE indexname = $1",
             idx_name,
@@ -483,7 +484,7 @@ class TestVectorDbVerification:
 
     async def test_vector_column_dimensions(self, pg_conn, vector_env):
         """Verify the embedding column type is vector(N) with correct dimensions."""
-        vec_table = f"{vector_env['space_id']}_vec_{INDEX_NAME}"
+        vec_table = f"{space_prefix(vector_env['space_id'])}_vec_{INDEX_NAME}"
         # atttypmod for pgvector encodes dimensions as (dims + 4) but we can
         # also just check the formatted type via format_type()
         col_type = await pg_conn.fetchval(
@@ -498,7 +499,7 @@ class TestVectorDbVerification:
 
     async def test_term_table_has_uris(self, pg_conn, vector_env):
         """Verify subject_uri and graph_uri were written to the term table (issue #008)."""
-        term_table = f"{vector_env['space_id']}_term"
+        term_table = f"{space_prefix(vector_env['space_id'])}_term"
         subj_row = await pg_conn.fetchrow(
             f"SELECT term_text FROM {term_table} WHERE term_text = $1",
             TEST_URI,
@@ -507,7 +508,7 @@ class TestVectorDbVerification:
 
     async def test_l2_data_table_exists(self, pg_conn, vector_env):
         """Verify the L2 vector data table was created."""
-        vec_table = f"{vector_env['space_id']}_vec_{INDEX_NAME_L2}"
+        vec_table = f"{space_prefix(vector_env['space_id'])}_vec_{INDEX_NAME_L2}"
         exists = await pg_conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
             "WHERE table_schema = 'public' AND table_name = $1)",
@@ -517,7 +518,7 @@ class TestVectorDbVerification:
 
     async def test_l2_column_dimensions(self, pg_conn, vector_env):
         """Verify L2 index embedding column also has correct dimensions."""
-        vec_table = f"{vector_env['space_id']}_vec_{INDEX_NAME_L2}"
+        vec_table = f"{space_prefix(vector_env['space_id'])}_vec_{INDEX_NAME_L2}"
         col_type = await pg_conn.fetchval(
             "SELECT format_type(atttypid, atttypmod) FROM pg_attribute "
             "JOIN pg_class ON pg_class.oid = pg_attribute.attrelid "
@@ -528,6 +529,6 @@ class TestVectorDbVerification:
 
     async def test_vector_row_count(self, pg_conn, vector_env):
         """Verify all 3 upserted vectors are in the cosine index data table."""
-        vec_table = f"{vector_env['space_id']}_vec_{INDEX_NAME}"
+        vec_table = f"{space_prefix(vector_env['space_id'])}_vec_{INDEX_NAME}"
         count = await pg_conn.fetchval(f"SELECT COUNT(*) FROM {vec_table}")
         assert count >= 3, f"Expected >=3 rows in {vec_table}, got {count}"

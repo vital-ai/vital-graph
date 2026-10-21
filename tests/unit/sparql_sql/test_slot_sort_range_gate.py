@@ -56,9 +56,9 @@ def _make(*, matches=1000, slot_total=100000, value_pred=f"{H}hasDoubleSlotValue
 
     b = PlanV2(kind=KIND_BGP,
                tables=[TableRef(ref_id="q0", kind="quad",
-                                table_name=f"{SPACE}_rdf_quad", alias="q0"),
+                                table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0"),
                        TableRef(ref_id="q1", kind="quad",
-                                table_name=f"{SPACE}_rdf_quad", alias="q1")],
+                                table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q1")],
                var_slots={"slot": VarSlot(name="slot",
                                           positions=[("q0", "subject_uuid"),
                                                      ("q1", "subject_uuid")]),
@@ -82,7 +82,7 @@ class TestItFiresWhenNarrow:
         assert got is not None
         alias, sql = got
         assert alias == "q0"
-        assert f"{SPACE}_entity_slot_sort" in sql
+        assert f"{space_prefix(SPACE)}_entity_slot_sort" in sql
         assert "slot_uuid" in sql, "it must anchor on the slot, not the entity"
         assert "value_num >= 99" in sql
         assert "__CONST_c_1__" in sql, "the slot type must be pinned"
@@ -178,6 +178,7 @@ from vitalgraph.db.sparql_sql.slot_sort_range import (      # noqa: E402
 from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (  # noqa: E402
     ENTITY_FRAME_EDGE_URI,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 VITALTYPE_U = "aaaaaaaa-0000-5000-8000-000000000004"
 ENTITY_TYPE = f"{H}KGEntity"
@@ -188,7 +189,7 @@ def _with_vitaltype(bgp, al, *, subjects):
     for i, (var, type_uri) in enumerate(subjects):
         a = f"v{i}"
         bgp.tables.append(TableRef(ref_id=a, kind="quad",
-                                   table_name=f"{SPACE}_rdf_quad", alias=a))
+                                   table_name=f"{space_prefix(SPACE)}_rdf_quad", alias=a))
         bgp.leaf_terms[(a, "predicate_uuid")] = (VITALTYPE_URI, "U")
         bgp.leaf_terms[(a, "object_uuid")] = (type_uri, "U")
         bgp.var_slots[var] = VarSlot(name=var, positions=[(a, "subject_uuid")])

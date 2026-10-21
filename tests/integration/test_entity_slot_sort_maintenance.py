@@ -187,7 +187,7 @@ async def test_drift_probe_sees_a_table_emptied_behind_its_back(
     """
     await space_impl.add_rdf_quads_batch(test_space, _quads(ENTITIES))
     async with pg_pool.acquire() as conn:
-        await conn.execute(f"DELETE FROM {test_space}_entity_slot_sort")
+        await conn.execute(f"DELETE FROM {space_prefix(test_space)}_entity_slot_sort")
 
     assert await _drift(pg_pool, test_space) == 3, (
         "the drift probe did not notice an emptied table — this is exactly "
@@ -247,8 +247,8 @@ async def test_a_slot_under_a_nested_frame_is_covered(
             SELECT s.value_text,
                    (SELECT array_agg(tt.term_text ORDER BY o)
                     FROM unnest(s.frame_type_path) WITH ORDINALITY u(x, o)
-                    JOIN {test_space}_term tt ON tt.term_uuid = u.x) AS path
-            FROM {test_space}_entity_slot_sort s
+                    JOIN {space_prefix(test_space)}_term tt ON tt.term_uuid = u.x) AS path
+            FROM {space_prefix(test_space)}_entity_slot_sort s
             WHERE s.value_text = 'nested'""")
 
     assert row is not None, (

@@ -99,12 +99,12 @@ async def test_cleanup_is_scoped_to_the_run(pg_conn, test_space):
     sp = test_space
     other_ctx = uuid.uuid4()
     await pg_conn.execute(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid,"
         f" object_uuid, context_uuid) VALUES ($1,$2,$3,$4) "
         f"ON CONFLICT DO NOTHING",
         uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), other_ctx)
     before_other = await pg_conn.fetchval(
-        f"SELECT count(*) FROM {sp}_rdf_quad WHERE context_uuid = $1", other_ctx)
+        f"SELECT count(*) FROM {space_prefix(sp)}_rdf_quad WHERE context_uuid = $1", other_ctx)
 
     scope = RunScope.new(sp)
     await snapshot(pg_conn, scope)
@@ -112,6 +112,6 @@ async def test_cleanup_is_scoped_to_the_run(pg_conn, test_space):
     await cleanup(pg_conn, scope)
 
     after_other = await pg_conn.fetchval(
-        f"SELECT count(*) FROM {sp}_rdf_quad WHERE context_uuid = $1", other_ctx)
+        f"SELECT count(*) FROM {space_prefix(sp)}_rdf_quad WHERE context_uuid = $1", other_ctx)
     assert after_other == before_other == 1, (
         "cleanup removed quads outside the run's graph")

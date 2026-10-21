@@ -46,6 +46,7 @@ from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (  # noqa: E402
     backfill_entity_slot_sort_batch,
     entity_slot_sort_all_types,
 )
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 logger = logging.getLogger("backfill_slot_sort_coverage")
 
@@ -169,6 +170,7 @@ async def main() -> int:
     conn = await asyncpg.connect(host=args.host, port=args.port,
                                  database=args.database, user=args.user,
                                  password=args.password or None)
+    await load_storage_keys(conn)
     try:
         if args.all:
             spaces = [r[0] for r in await conn.fetch(

@@ -16,6 +16,7 @@ import pytest
 from rdflib import BNode, Literal, URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -43,7 +44,7 @@ class TestWriteReadRoundTrip:
         await space_impl.add_rdf_quads_batch(
             test_space, [(BNode("rt1"), P, Literal("v"), GRAPH)])
         rows = await pg_conn.fetch(
-            f"SELECT term_text FROM {test_space}_term WHERE term_type = 'B'")
+            f"SELECT term_text FROM {space_prefix(test_space)}_term WHERE term_type = 'B'")
         assert rows, "no blank-node term was written at all"
         for r in rows:
             assert not r["term_text"].startswith("_:"), (
@@ -58,9 +59,9 @@ class TestWriteReadRoundTrip:
         await space_impl.add_rdf_quads_batch(
             test_space, [(b, P, Literal("findme"), GRAPH)])
         n = await pg_conn.fetchval(f"""
-            SELECT count(*) FROM {test_space}_rdf_quad q
-            JOIN {test_space}_term s ON s.term_uuid = q.subject_uuid
-            JOIN {test_space}_term o ON o.term_uuid = q.object_uuid
+            SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad q
+            JOIN {space_prefix(test_space)}_term s ON s.term_uuid = q.subject_uuid
+            JOIN {space_prefix(test_space)}_term o ON o.term_uuid = q.object_uuid
             WHERE s.term_type = 'B' AND o.term_text = 'findme'
         """)
         assert n == 1
@@ -85,7 +86,7 @@ class TestLoadUpdateAgreement:
         await space_impl.add_rdf_quads_batch(
             test_space, [(b, P, Literal("keep"), GRAPH)])
         before = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_rdf_quad")
+            f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad")
 
         update = (f"DELETE DATA {{ GRAPH <{GRAPH}> "
                   f"{{ _:agree1 <{P}> \"keep\" }} }}")
@@ -100,7 +101,7 @@ class TestLoadUpdateAgreement:
             refused = True
 
         after = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_rdf_quad")
+            f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad")
         assert after == before, (
             "DELETE DATA naming a blank node removed something; there is no "
             "way to name an existing blank node in a data block, so whatever "

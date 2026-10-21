@@ -92,9 +92,9 @@ async def test_the_table_refuses_a_uri_interned_in_sql(test_space, pg_pool):
     async with pg_pool.acquire() as conn:
         with pytest.raises(asyncpg.CheckViolationError):
             await conn.execute(
-                f"INSERT INTO {test_space}_term (term_uuid, term_text, term_type) "
+                f"INSERT INTO {space_prefix(test_space)}_term (term_uuid, term_text, term_type) "
                 f"VALUES (gen_random_uuid(), $1, 'U')", _uri(MAX_URI_BYTES + 1))
         # A literal of any length is not a URI and is not limited.
         await conn.execute(
-            f"INSERT INTO {test_space}_term (term_uuid, term_text, term_type) "
+            f"INSERT INTO {space_prefix(test_space)}_term (term_uuid, term_text, term_type) "
             f"VALUES (gen_random_uuid(), $1, 'L')", "v" * 5000)

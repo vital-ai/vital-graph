@@ -59,6 +59,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger("migrate_geo_config_defaults")
 
@@ -76,7 +77,7 @@ def schema_defaults() -> dict[str, str]:
     from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 
     probe = "\x00SPACE\x00"
-    tbl = f"{probe}_geo_config"
+    tbl = f"{space_prefix(probe)}_geo_config"
     stmts = [s for s in SparqlSQLSchema().create_space_tables_sql(probe)
              if f"{tbl} (" in s]
     if len(stmts) != 1:
@@ -133,10 +134,12 @@ async def main():
     import asyncpg
     conn = await asyncpg.connect(host=a.host, port=a.port, database=a.database,
                                  user=a.user, password=a.password or None)
+    from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+    await load_storage_keys(conn)
     try:
         want = schema_defaults()
         targets = (await geo_config_tables(conn) if a.all
-                   else [f"{a.space}_geo_config"])
+                   else [f"{space_prefix(a.space)}_geo_config"])
         drifted = 0
         for tbl in targets:
             diffs = await survey_table(conn, tbl, want)

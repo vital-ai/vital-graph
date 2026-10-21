@@ -863,6 +863,17 @@ class SpaceManager:
         if not space_id:
             return
 
+        # Created or re-keyed elsewhere: this process must learn the space's
+        # storage key before naming any of its objects.
+        if signal_type in ("created", "updated"):
+            backend = self.space_backend or self.db_impl
+            if hasattr(backend, "get_space_metadata"):
+                try:
+                    await backend.get_space_metadata(space_id)
+                except Exception as e:
+                    self.logger.error("Failed to load storage key for '%s' "
+                                      "from signal: %s", space_id, e)
+
         if signal_type == "created":
             if space_id in self._spaces:
                 self.logger.debug("Space '%s' already in local registry — ignoring created signal", space_id)

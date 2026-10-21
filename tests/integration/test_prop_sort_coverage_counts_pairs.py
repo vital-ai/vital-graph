@@ -23,6 +23,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -78,10 +79,10 @@ async def _load(pg_conn, sp, n=4):
             (e, _u(_STATUS), active, ctx),
         ]
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+        f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
         f"VALUES ($1,$2,$3) ON CONFLICT (term_uuid) DO NOTHING", terms)
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", quads)
     return n
 
@@ -141,10 +142,10 @@ async def _load_frames(pg_conn, sp, n=4):
             (f, _u(_STATUS), active, ctx),
         ]
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+        f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
         f"VALUES ($1,$2,$3) ON CONFLICT (term_uuid) DO NOTHING", terms)
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", quads)
     return n
 
@@ -175,10 +176,10 @@ async def test_a_missing_frame_PROPERTY_is_reported_short(pg_conn, test_space):
     n = await _load_frames(pg_conn, test_space)
     await _ffill(pg_conn, test_space)
     await pg_conn.execute(
-        f"DELETE FROM {test_space}_frame_prop_sort WHERE property_uuid = $1",
+        f"DELETE FROM {space_prefix(test_space)}_frame_prop_sort WHERE property_uuid = $1",
         _u(_STATUS))
     still = await pg_conn.fetchval(
-        f"SELECT count(DISTINCT frame_uuid) FROM {test_space}_frame_prop_sort")
+        f"SELECT count(DISTINCT frame_uuid) FROM {space_prefix(test_space)}_frame_prop_sort")
     assert still == n, "the per-frame view must be indistinguishable from whole"
     in_table, of_type = await _fcov(pg_conn, test_space)
     assert of_type == n * 3
@@ -189,7 +190,7 @@ async def test_the_frame_backfill_repairs_a_missing_PROPERTY(pg_conn, test_space
     n = await _load_frames(pg_conn, test_space)
     await _ffill(pg_conn, test_space)
     await pg_conn.execute(
-        f"DELETE FROM {test_space}_frame_prop_sort WHERE property_uuid = $1",
+        f"DELETE FROM {space_prefix(test_space)}_frame_prop_sort WHERE property_uuid = $1",
         _u(_STATUS))
     selected, written = await _ffill(pg_conn, test_space)
     assert selected == n and written > 0
@@ -222,12 +223,12 @@ async def test_a_missing_PROPERTY_is_reported_short(pg_conn, test_space):
     n = await _load(pg_conn, test_space)
     await _fill(pg_conn, test_space)
     await pg_conn.execute(
-        f"DELETE FROM {test_space}_entity_prop_sort WHERE property_uuid = $1",
+        f"DELETE FROM {space_prefix(test_space)}_entity_prop_sort WHERE property_uuid = $1",
         _u(_STATUS))
 
     # Precondition: every entity STILL has rows, so entity-presence is 100%.
     still = await pg_conn.fetchval(
-        f"SELECT count(DISTINCT entity_uuid) FROM {test_space}_entity_prop_sort")
+        f"SELECT count(DISTINCT entity_uuid) FROM {space_prefix(test_space)}_entity_prop_sort")
     assert still == n, "the per-entity view must be indistinguishable from whole"
 
     in_table, of_type = await _cov(pg_conn, test_space)
@@ -246,7 +247,7 @@ async def test_the_backfill_repairs_a_missing_PROPERTY(pg_conn, test_space):
     n = await _load(pg_conn, test_space)
     await _fill(pg_conn, test_space)
     await pg_conn.execute(
-        f"DELETE FROM {test_space}_entity_prop_sort WHERE property_uuid = $1",
+        f"DELETE FROM {space_prefix(test_space)}_entity_prop_sort WHERE property_uuid = $1",
         _u(_STATUS))
     selected, written = await _fill(pg_conn, test_space)
     assert selected == n, "entities with a missing PAIR must still be selected"

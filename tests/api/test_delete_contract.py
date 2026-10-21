@@ -160,7 +160,7 @@ async def test_a_batch_with_an_absent_entity_is_deleted_and_names_it(
     assert r.deleted_uris == [present]
     assert r.absent_uris == [absent]
     left = await pg_conn.fetchval(
-        f"SELECT count(*) FROM {test_space}_rdf_quad "
+        f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad "
         f"WHERE subject_uuid = vitalgraph_term_uuid($1, 'U')", present)
     assert left == 0, f"the present entity was reported deleted and has {left} quads"
 

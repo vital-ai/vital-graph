@@ -61,6 +61,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix  # noqa: E402
 
 logger = logging.getLogger("migrate_space_schema")
 
@@ -265,7 +266,7 @@ async def migrate_space(conn, space_id: str, dry_run: bool = True) -> dict:
 
 
 async def spaces_on(conn):
-    return [r["tablename"][: -len("_rdf_quad")] for r in await conn.fetch(
+    return [space_id_for_prefix(r["tablename"][: -len("_rdf_quad")]) for r in await conn.fetch(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' "
         "AND tablename LIKE '%\\_rdf\\_quad' ORDER BY tablename")]
 
@@ -287,6 +288,8 @@ async def main():
     conn = await asyncpg.connect(host=args.host, port=args.port,
                                  database=args.database, user=args.user,
                                  password=args.password or None)
+    from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+    await load_storage_keys(conn)
     try:
         targets = await spaces_on(conn) if args.all else [args.space]
         changed = 0

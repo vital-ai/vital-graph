@@ -58,6 +58,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from vitalgraph.db.sparql_sql.space_names import space_prefix
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
 
 KG = "http://vital.ai/ontology/haley-ai-kg#"
 VC = "http://vital.ai/ontology/vital-core#"
@@ -352,6 +353,7 @@ async def _sql_conn(prefix: str, use_ssl: bool):
         database=os.environ[f"{prefix}_DB_NAME"], user=os.environ[f"{prefix}_DB_USER"],
         password=os.environ[f"{prefix}_DB_PASSWORD"], ssl=ctx, timeout=30,
         command_timeout=None)
+    await load_storage_keys(conn)
     await conn.execute("SET default_transaction_read_only = on")
     await conn.execute("SET statement_timeout = '30min'")
     return conn

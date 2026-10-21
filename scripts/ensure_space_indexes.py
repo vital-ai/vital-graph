@@ -69,6 +69,8 @@ async def main() -> int:
     from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 
     conn = await asyncpg.connect(**pg_env())
+    from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+    await load_storage_keys(conn)
     try:
         stmts = SparqlSQLSchema().create_space_indexes_sql(a.space)
 

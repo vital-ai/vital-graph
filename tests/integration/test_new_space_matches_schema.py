@@ -87,7 +87,7 @@ class TestANewSpaceIsComplete:
 
         rows = await pg_conn.fetch(
             "SELECT indexname FROM pg_indexes WHERE schemaname='public' "
-            "AND tablename LIKE $1", f"{fresh_space}\\_%")
+            "AND tablename LIKE $1", f"{space_prefix(fresh_space)}\\_%")
         have = {r["indexname"] for r in rows}
         missing = sorted(n for n in expected if n not in have)
         assert not missing, (

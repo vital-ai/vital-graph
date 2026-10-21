@@ -24,9 +24,13 @@ differences:
 REVERSIBLE: `reverse=True` moves the objects from `vgs_<key>` back to the id
 prefix, by the same rule. The key stays recorded; it is never released.
 
-UNTIL THE CUTOVER, A RE-KEYED SPACE IS UNREACHABLE: `space_names.space_prefix`
-still returns the id. So before then this is run either as a round trip in one
-transaction (`round_trip`, which measures it and changes nothing) or not at all.
+A RE-KEYED SPACE IS REACHABLE ONLY BY CODE THAT READS KEYS (Stage 3 on): a
+process names a space by its key once its key map holds it. A committed move
+updates this process's map and NOTIFYs the space channel, so each running
+`SpaceManager` reloads the space; anything else picks it up on its next key
+load. Run it with writers stopped: the move takes ACCESS EXCLUSIVE on every
+object of the space, and a process that has not yet reloaded names the
+objects by the prefix they just left.
 """
 
 from __future__ import annotations
@@ -35,12 +39,14 @@ import logging
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .space_names import key_shaped_id_problem, space_prefix, storage_key_prefix
+from .space_names import (forget_storage_key, key_shaped_id_problem,
+                          register_storage_key, registered_storage_key,
+                          storage_key_prefix)
 from .space_rename import (SpaceRenameRefused, _DECORATORS, _MAX_IDENTIFIER_BYTES,
                            _lit, _renamed_sources, object_rename_statements,
                            refuse_overlong_targets)
 from .space_rename_enumerate import enumerate_space_objects
-from .space_storage_key import allocate_storage_key
+from .space_storage_key import allocate_storage_key, is_keyed
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +134,13 @@ async def fresh_names(conn, prefix: str,
     """
     from .sparql_sql_schema import SparqlSQLSchema
     names: Dict[Tuple, Optional[str]] = {}
+    # The generators name objects by `space_prefix(<the id they are given>)`, so
+    # the probe hands them the prefix as an id that the key map does not hold —
+    # which for a move BACK to the id prefix means taking the space out of the
+    # map for the duration.
+    held = registered_storage_key(prefix)
+    if held is not None:
+        forget_storage_key(prefix)
     try:
         async with conn.transaction():
             await SparqlSQLSchema.create_space_core(conn, prefix, partition_quads)
@@ -136,6 +149,9 @@ async def fresh_names(conn, prefix: str,
             raise _Discard
     except _Discard:
         pass
+    finally:
+        if held is not None:
+            register_storage_key(prefix, held)
     return names
 
 
@@ -172,7 +188,9 @@ async def plan_rekey(conn, space_id: str, *, key: Optional[str] = None,
             f"space {space_id!r} has no storage key, so nothing to move back from")
     key = recorded or key or await allocate_storage_key(conn)
 
-    id_prefix, key_prefix = space_prefix(space_id), storage_key_prefix(key)
+    # The id itself, not `space_prefix(space_id)`: for a keyed space that is
+    # already the key's prefix.
+    id_prefix, key_prefix = space_id, storage_key_prefix(key)
     old, new = (key_prefix, id_prefix) if reverse else (id_prefix, key_prefix)
 
     found = await enumerate_space_objects(conn, space_id, prefix=old)
@@ -280,29 +298,54 @@ async def rekey_space(conn, space_id: str, *, reverse: bool = False,
         t0 = time.monotonic()
         await _execute(conn, stmts)
         report["seconds"] = time.monotonic() - t0
+    # Committed: this process names the space by where its objects now are,
+    # and other instances are told to reload it (`SpaceManager`'s signal).
+    if reverse:
+        forget_storage_key(space_id)
+    else:
+        register_storage_key(space_id, plan["key"])
+    await notify_space_rekeyed(conn, space_id)
     logger.warning("re-keyed space %s: %s -> %s, %d statements in %.2fs",
                    space_id, plan["from_prefix"], plan["to_prefix"],
                    len(stmts), report["seconds"])
     return report
 
 
+async def notify_space_rekeyed(conn, space_id: str) -> None:
+    """Tell every instance's space manager to reload this space's key."""
+    import json
+    from vitalgraph.signal.signal_manager import CHANNEL_SPACE, SIGNAL_TYPE_UPDATED
+    await conn.execute(
+        "SELECT pg_notify($1, $2)", CHANNEL_SPACE,
+        json.dumps({"type": SIGNAL_TYPE_UPDATED, "space_id": space_id,
+                    "timestamp": str(time.time())}))
+
+
 async def round_trip(conn, space_id: str, *,
                      check: Optional[Callable] = None,
                      lock_timeout_ms: int = 5000) -> Dict[str, Any]:
-    """Re-key and move back in ONE transaction, then roll it all back.
+    """Move a space and move it back in ONE transaction, then roll it all back.
 
-    Measures the move on real data and proves it reversible without the space
-    ever being visible under its key — which, before the cutover, would make it
-    unreachable. `check(conn, plan)` runs while the objects sit under the key.
+    An unkeyed space goes onto its key and back; a keyed one goes to its id
+    prefix and back. Measures the move on real data and proves it reversible
+    with nothing ever committed. `check(conn, plan)` runs between the halves,
+    while the objects sit under the OTHER prefix; `report["under_key"]` is the
+    enumeration under the key in either case.
     """
     report: Dict[str, Any] = {"space_id": space_id}
     try:
         async with conn.transaction():
             await conn.execute(f"SET LOCAL lock_timeout = {int(lock_timeout_ms)}")
-            before = await enumerate_space_objects(conn, space_id)
+            keyed = await is_keyed(conn, space_id)
+            report["was_keyed"] = keyed
+            key_now = await conn.fetchval(
+                "SELECT storage_key FROM space WHERE space_id = $1", space_id)
+            start_prefix = storage_key_prefix(key_now) if keyed else space_id
+            before = await enumerate_space_objects(conn, space_id,
+                                                   prefix=start_prefix)
 
             t0 = time.monotonic()
-            fwd = await plan_rekey(conn, space_id)
+            fwd = await plan_rekey(conn, space_id, reverse=keyed)
             report["plan_forward_s"] = time.monotonic() - t0
             t0 = time.monotonic()
             await _execute(conn, fwd["statements"])
@@ -311,16 +354,18 @@ async def round_trip(conn, space_id: str, *,
             report["statements"] = len(fwd["statements"])
             report["by_kind"] = _by_kind(fwd["statements"])
             report["fresh_named"] = fwd["fresh_named"]
-            report["under_key"] = await enumerate_space_objects(
-                conn, space_id, prefix=fwd["to_prefix"])
+            report["under_key"] = (before if keyed else
+                                   await enumerate_space_objects(
+                                       conn, space_id, prefix=fwd["to_prefix"]))
             if check is not None:
                 await check(conn, fwd)
 
             t0 = time.monotonic()
-            back = await plan_rekey(conn, space_id, reverse=True)
+            back = await plan_rekey(conn, space_id, reverse=not keyed)
             await _execute(conn, back["statements"])
             report["reverse_s"] = time.monotonic() - t0
-            after = await enumerate_space_objects(conn, space_id)
+            after = await enumerate_space_objects(conn, space_id,
+                                                  prefix=start_prefix)
             report["restored"] = {
                 cls: after[cls] == before[cls]
                 for cls in ("tables", "partition_children", "indexes",

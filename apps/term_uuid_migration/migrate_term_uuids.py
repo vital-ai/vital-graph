@@ -53,6 +53,7 @@ import asyncpg
 
 from vitalgraph.config.config_loader import VitalGraphConfig
 from vitalgraph.db.sparql_sql.space_names import space_prefix
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
 
 logging.basicConfig(
     level=logging.INFO,
@@ -202,6 +203,8 @@ async def main():
     print(f"{LINE}\n")
 
     pool = await get_pool()
+    async with pool.acquire() as kc:
+        await load_storage_keys(kc)
 
     try:
         # Verify prerequisite function exists

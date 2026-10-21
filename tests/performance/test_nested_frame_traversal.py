@@ -36,6 +36,7 @@ import pytest
 from .conftest import skip_no_pg, space_exists
 from .graph_fixtures import (NESTED_CRITERIA, NESTED_EDGE_TYPE, SMALL,
                              chain_query, entity_indexes, nested_path_query)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -100,9 +101,9 @@ async def test_the_space_holds_the_nesting_the_manifest_describes(perf_conn):
     await _require(perf_conn)
     expected = SMALL.nesting()["n_nested_frames"]
     actual = await perf_conn.fetchval(f"""
-        SELECT count(*) FROM {SMALL.space}_rdf_quad q
-        JOIN {SMALL.space}_term p ON q.predicate_uuid = p.term_uuid
-        JOIN {SMALL.space}_term o ON q.object_uuid = o.term_uuid
+        SELECT count(*) FROM {space_prefix(SMALL.space)}_rdf_quad q
+        JOIN {space_prefix(SMALL.space)}_term p ON q.predicate_uuid = p.term_uuid
+        JOIN {space_prefix(SMALL.space)}_term o ON q.object_uuid = o.term_uuid
         WHERE p.term_text = 'http://vital.ai/ontology/vital-core#vitaltype'
           AND o.term_text = '{NESTED_EDGE_TYPE}'
     """)
@@ -275,12 +276,12 @@ async def test_a_tail_pinned_path_walks_backward_from_the_pin(perf_conn, quant):
 
     truth = await perf_conn.fetchval(f"""
         WITH RECURSIVE
-         src AS (SELECT term_uuid FROM {SMALL.space}_term WHERE term_text=$1),
-         dst AS (SELECT term_uuid FROM {SMALL.space}_term WHERE term_text=$2),
-         tgt AS (SELECT term_uuid FROM {SMALL.space}_term WHERE term_text=$3),
+         src AS (SELECT term_uuid FROM {space_prefix(SMALL.space)}_term WHERE term_text=$1),
+         dst AS (SELECT term_uuid FROM {space_prefix(SMALL.space)}_term WHERE term_text=$2),
+         tgt AS (SELECT term_uuid FROM {space_prefix(SMALL.space)}_term WHERE term_text=$3),
          step AS (SELECT a.object_uuid AS frm, b.object_uuid AS too
-                  FROM {SMALL.space}_rdf_quad a
-                  JOIN {SMALL.space}_rdf_quad b
+                  FROM {space_prefix(SMALL.space)}_rdf_quad a
+                  JOIN {space_prefix(SMALL.space)}_rdf_quad b
                     ON b.subject_uuid = a.subject_uuid
                   WHERE a.predicate_uuid=(SELECT * FROM src)
                     AND b.predicate_uuid=(SELECT * FROM dst)),

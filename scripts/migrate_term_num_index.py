@@ -45,7 +45,8 @@ from devtools.target import dsn  # noqa: E402
 
 from vitalgraph.db.sparql_sql.sparql_sql_schema import (  # noqa: E402
     numeric_term_column, NUMERIC_TERM_COLUMN)
-from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix, space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 
 async def find_targets(conn, only_space: str | None):
@@ -57,7 +58,7 @@ async def find_targets(conn, only_space: str | None):
     out = []
     for r in rows:
         table = r["tablename"]
-        space = table[:-len("_term")]
+        space = space_id_for_prefix(table[:-len("_term")])
         if only_space and space != only_space:
             continue
         has = await conn.fetchval(
@@ -79,6 +80,7 @@ async def check_invalid(conn) -> list[str]:
 async def run(dsn: str, only_space: str | None, dry_run: bool,
               min_terms: int) -> int:
     conn = await asyncpg.connect(dsn)      # autocommit — CONCURRENTLY needs it
+    await load_storage_keys(conn)
     try:
         db = await conn.fetchval("SELECT current_database()")
         host = await conn.fetchval("SELECT inet_server_addr()::text")

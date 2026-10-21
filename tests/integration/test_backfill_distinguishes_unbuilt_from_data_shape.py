@@ -25,6 +25,7 @@ import pytest_asyncio
 from rdflib import URIRef
 
 from .conftest import skip_no_infra, TEST_SPACE_PREFIX
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -63,7 +64,7 @@ async def test_quads_without_edges_reads_as_unbuilt(ub_space, space_impl, pg_con
     await backend.add_rdf_quads_batch(ub_space, [
         (URIRef(f"{EX}e"), URIRef(f"{CORE}vitaltype"), URIRef(f"{KG}KGEntity"), graph),
     ])
-    await pg_conn.execute(f"DELETE FROM {ub_space}_edge")
+    await pg_conn.execute(f"DELETE FROM {space_prefix(ub_space)}_edge")
     assert await edge_table_unbuilt(pg_conn, ub_space) is True, (
         "quads present and no edges is the precondition case: the walk cannot "
         "derive anything yet, and saying 'can never' there was wrong by 4M rows")
@@ -85,7 +86,7 @@ async def test_a_built_edge_table_reads_as_built(ub_space, space_impl, pg_conn):
         (edge, URIRef(f"{CORE}hasEdgeSource"), URIRef(f"{EX}e"), graph),
         (edge, URIRef(f"{CORE}hasEdgeDestination"), URIRef(f"{EX}s"), graph),
     ])
-    n = await pg_conn.fetchval(f"SELECT count(*) FROM {ub_space}_edge")
+    n = await pg_conn.fetchval(f"SELECT count(*) FROM {space_prefix(ub_space)}_edge")
     assert n > 0, "fixture failed: the write path should have built an edge row"
     assert await edge_table_unbuilt(pg_conn, ub_space) is False, (
         "with the edge table built, 0 rows derived IS a data shape and the "

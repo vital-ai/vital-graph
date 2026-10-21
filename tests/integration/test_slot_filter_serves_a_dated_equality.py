@@ -32,6 +32,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -81,12 +82,12 @@ async def _seed(pg_conn, sp):
     for e_uri, lexical in STORED:
         e = _term_uuid(e_uri)
         await pg_conn.execute(
-            f"INSERT INTO {sp}_term (term_uuid, term_text, term_type)"
+            f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type)"
             f" VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING", e, e_uri)
         # `value_dt` from `vitalgraph_iso_to_utc`, which is what `term.dt_val`
         # is -- the fixture must not invent its own normalisation.
         await pg_conn.execute(
-            f"INSERT INTO {sp}_entity_slot_sort (slot_uuid, context_uuid,"
+            f"INSERT INTO {space_prefix(sp)}_entity_slot_sort (slot_uuid, context_uuid,"
             f" entity_uuid, frame_uuid, entity_type_uuid, frame_type_path,"
             f" slot_type_uuid, value_text, value_dt)"
             f" VALUES ($1,$2,$3,$4,$5,$6,$7,$8, vitalgraph_iso_to_utc($8))"
@@ -95,7 +96,7 @@ async def _seed(pg_conn, sp):
             ent_t, fpath, when, lexical)
 
     await pg_conn.execute(
-        f"INSERT INTO {sp}_entity_slot_sort (slot_uuid, context_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_entity_slot_sort (slot_uuid, context_uuid,"
         f" entity_uuid, frame_uuid, entity_type_uuid, frame_type_path,"
         f" slot_type_uuid, value_text, value_num)"
         f" VALUES ($1,$2,$3,$4,$5,$6,$7,'3.5',3.5) ON CONFLICT DO NOTHING",
@@ -203,11 +204,11 @@ async def test_an_entity_matching_twice_is_one_entity(pg_conn, test_space):
     twice = "urn:dt:e:twice"
     e = _term_uuid(twice)
     await pg_conn.execute(
-        f"INSERT INTO {sp}_term (term_uuid, term_text, term_type)"
+        f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type)"
         f" VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING", e, twice)
     for n in ("one", "two"):
         await pg_conn.execute(
-            f"INSERT INTO {sp}_entity_slot_sort (slot_uuid, context_uuid,"
+            f"INSERT INTO {space_prefix(sp)}_entity_slot_sort (slot_uuid, context_uuid,"
             f" entity_uuid, frame_uuid, entity_type_uuid, frame_type_path,"
             f" slot_type_uuid, value_text, value_dt)"
             f" VALUES ($1,$2,$3,$4,$5,$6,$7,$8, vitalgraph_iso_to_utc($8))"

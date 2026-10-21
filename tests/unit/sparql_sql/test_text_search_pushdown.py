@@ -26,6 +26,7 @@ from vitalgraph.db.sparql_sql.ir import (
 )
 from vitalgraph.db.sparql_sql.filter_pushdown import push_text_search
 from vitalgraph.db.sparql_sql.vg_functions import VG_TEXT_SEARCH
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 SPACE = "test_space"
 
@@ -43,7 +44,7 @@ def _bgp(var="slot", alias="q0", col="subject_uuid"):
     return PlanV2(
         kind=KIND_BGP,
         tables=[TableRef(ref_id=alias, kind="quad",
-                         table_name=f"{SPACE}_rdf_quad", alias=alias)],
+                         table_name=f"{space_prefix(SPACE)}_rdf_quad", alias=alias)],
         var_slots={var: VarSlot(name=var, positions=[(alias, col)])},
     )
 
@@ -84,7 +85,7 @@ class TestItPushes:
         ref_id, sql = bgp.tagged_constraints[0]
         assert ref_id == "q0"
         assert "q0.subject_uuid IN" in sql
-        assert f"FROM {SPACE}_fts_message_content" in sql
+        assert f"FROM {space_prefix(SPACE)}_fts_message_content" in sql
         assert "tsv @@" in sql
 
     def test_it_uses_the_same_parser_as_the_scorer(self):

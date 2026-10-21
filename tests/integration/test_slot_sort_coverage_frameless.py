@@ -25,6 +25,7 @@ from __future__ import annotations
 import pytest
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -108,7 +109,7 @@ async def test_a_real_shortfall_is_still_reported(test_space, space_impl, pg_poo
 
     async with pg_pool.acquire() as conn:
         # Remove its rows behind the sync's back, exactly as a stale table looks.
-        await conn.execute(f"DELETE FROM {test_space}_entity_slot_sort")
+        await conn.execute(f"DELETE FROM {space_prefix(test_space)}_entity_slot_sort")
         gaps = await entity_slot_sort_coverage(conn, test_space)
 
     assert gaps, (

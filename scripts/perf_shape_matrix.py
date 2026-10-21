@@ -316,6 +316,8 @@ async def main() -> int:
 
     import asyncpg
     conn = await asyncpg.connect(a.dsn, command_timeout=600)
+    from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+    await load_storage_keys(conn)
     execute = not a.no_execute
     cells: list[Cell] = []
     t0 = time.time()

@@ -44,7 +44,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
-from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix, space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 logger = logging.getLogger("migrate_index_sync_queue")
 
@@ -98,8 +99,9 @@ async def main() -> int:
     import asyncpg
     conn = await asyncpg.connect(host=a.host, port=a.port, database=a.database,
                                  user=a.user, password=a.password or None)
+    await load_storage_keys(conn)
     try:
-        spaces = ([r[0] for r in await conn.fetch(
+        spaces = ([space_id_for_prefix(r[0]) for r in await conn.fetch(
             "SELECT regexp_replace(tablename, '_rdf_quad$', '') FROM pg_tables "
             "WHERE schemaname='public' AND tablename LIKE '%\\_rdf\\_quad' "
             "ORDER BY 1")] if a.all else [a.space])

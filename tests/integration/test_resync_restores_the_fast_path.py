@@ -30,6 +30,7 @@ from vitalgraph.db.sparql_sql.fast_slot_filter import (
     clear_slot_sort_coverage, slot_sort_coverage_is_complete)
 from vitalgraph.db.sparql_sql.resync_all import (
     resync_all_auxiliary_tables as resync_all)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -44,19 +45,19 @@ async def kg_space(pg_conn, test_space):
     sp = test_space
     g = uuid.uuid4()
     await pg_conn.execute(
-        f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+        f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
         f"VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING",
         g, f"urn:g:{uuid.uuid4()}")
     pred, typ = uuid.uuid4(), uuid.uuid4()
     for tid, text in ((pred, _VITALTYPE), (typ, _TYPE)):
         await pg_conn.execute(
-            f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+            f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
             f"VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING", tid, text)
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
         [(uuid.uuid4(), pred, typ, g) for _ in range(5)])
-    await pg_conn.execute(f"ANALYZE {sp}_rdf_quad")
+    await pg_conn.execute(f"ANALYZE {space_prefix(sp)}_rdf_quad")
     yield sp
 
 

@@ -20,6 +20,7 @@ import pytest
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.api, pytest.mark.asyncio(loop_scope="session")]
 
@@ -48,15 +49,15 @@ async def test_entity_graph_delete_leaves_no_residue(vg_client, test_space,
 
     async def rows(uri):
         return await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_rdf_quad q "
-            f"JOIN {test_space}_term t ON t.term_uuid = q.subject_uuid "
+            f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad q "
+            f"JOIN {space_prefix(test_space)}_term t ON t.term_uuid = q.subject_uuid "
             f"WHERE t.term_text = $1", uri)
 
     async def pointing_at(uri):
         return await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_rdf_quad q "
-            f"JOIN {test_space}_term tp ON tp.term_uuid = q.predicate_uuid "
-            f"JOIN {test_space}_term to_ ON to_.term_uuid = q.object_uuid "
+            f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad q "
+            f"JOIN {space_prefix(test_space)}_term tp ON tp.term_uuid = q.predicate_uuid "
+            f"JOIN {space_prefix(test_space)}_term to_ ON to_.term_uuid = q.object_uuid "
             f"WHERE tp.term_text = $1 AND to_.term_text = $2", HGU, uri)
 
     before_e, before_f = await rows(entity_uri), await rows(str(frame.URI))

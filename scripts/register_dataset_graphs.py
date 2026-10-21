@@ -48,7 +48,8 @@ from datetime import datetime
 sys.path.insert(0, os.getcwd())
 from devtools.target import dsn, sidecar_url  # noqa: E402
 import asyncpg  # noqa: E402
-from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix, space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 DSN = dsn()
 # EVERY dataset lives in a graph. No size threshold and no exclusions.
@@ -70,7 +71,7 @@ async def _spaces_with_quads(conn):
         WHERE table_schema = 'public' AND table_name LIKE '%\\_rdf\\_quad'
         ORDER BY 1
     """)
-    return [r["table_name"][:-len("_rdf_quad")] for r in rows]
+    return [space_id_for_prefix(r["table_name"][:-len("_rdf_quad")]) for r in rows]
 
 
 async def _contexts(conn, space_id):
@@ -88,6 +89,7 @@ async def _contexts(conn, space_id):
 
 async def main(apply: bool, register_spaces: bool) -> int:
     conn = await asyncpg.connect(DSN)
+    await load_storage_keys(conn)
     registered = await conn.fetch("SELECT space_id, graph_uri FROM graph")
     have = {r["space_id"] for r in registered}
     known_spaces = {r["space_id"] for r in

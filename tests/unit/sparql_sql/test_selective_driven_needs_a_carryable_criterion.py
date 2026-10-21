@@ -43,6 +43,7 @@ from vitalgraph.db.sparql_sql.ir import (
     PlanV2, TableRef, VarSlot, AliasGenerator, KIND_BGP,
 )
 from vitalgraph.db.sparql_sql.semijoin import _leaf_rows
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 SPACE = "test_space"
 PRED = "11111111-1111-5111-8111-111111111111"
@@ -52,7 +53,7 @@ def _bgp_with_predicate():
     """A BGP binding one constant predicate leaf — the shape both stats key on."""
     b = PlanV2(kind=KIND_BGP,
                tables=[TableRef(ref_id="q0", kind="quad",
-                                table_name=f"{SPACE}_rdf_quad", alias="q0")],
+                                table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0")],
                var_slots={"v": VarSlot(name="v",
                                        positions=[("q0", "object_uuid")])})
     b.leaf_terms[("q0", "predicate_uuid")] = ("http://ex/mql", "U")

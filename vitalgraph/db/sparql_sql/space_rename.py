@@ -192,6 +192,13 @@ async def plan_rename(conn, old: str, new: str, *,
     """
     await _validate(conn, old, new)
 
+    # A KEYED SPACE'S OBJECTS ARE NAMED BY ITS STORAGE KEY, which a rename does
+    # not touch: the rename is the registry rows and nothing else — no DDL, no
+    # truncation hazard, no lock on the space's tables.
+    from .space_storage_key import is_keyed
+    if await is_keyed(conn, old):
+        return _registry_statements(old, new)
+
     found = await enumerate_space_objects(conn, old)
     unmappable: List[str] = []
 
@@ -203,17 +210,7 @@ async def plan_rename(conn, old: str, new: str, *,
         return out
 
     stmts = await object_rename_statements(conn, found, mapped)
-
-    # 6. THE REGISTRY. One UPDATE, and the eleven FK children plus
-    #    `user_space_access` follow via ON UPDATE CASCADE (`issues/232` step 3).
-    stmts.append(("registry",
-                  f"UPDATE space SET space_id = {_lit(new)} "
-                  f"WHERE space_id = {_lit(old)}"))
-    # `process.process_subtype` holds the space id with NO foreign key, so
-    # nothing carries it. Missed, it strands process rows against a dead id.
-    stmts.append(("process",
-                  f"UPDATE process SET process_subtype = {_lit(new)} "
-                  f"WHERE process_subtype = {_lit(old)}"))
+    stmts += _registry_statements(old, new)
 
     # ALREADY-TRUNCATED NAMES, when the length would change (`issues/246`).
     #
@@ -254,6 +251,20 @@ async def plan_rename(conn, old: str, new: str, *,
             f"to {new!r}, and skipping one would orphan it under the old id: "
             + ", ".join(sorted(unmappable)[:10]))
     return stmts
+
+
+def _registry_statements(old: str, new: str) -> List[Tuple[str, str]]:
+    """The rows that carry a space's id outside its own objects."""
+    return [
+        # 6. THE REGISTRY. One UPDATE, and the eleven FK children plus
+        #    `user_space_access` follow via ON UPDATE CASCADE (`issues/232` step 3).
+        ("registry", f"UPDATE space SET space_id = {_lit(new)} "
+                     f"WHERE space_id = {_lit(old)}"),
+        # `process.process_subtype` holds the space id with NO foreign key, so
+        # nothing carries it. Missed, it strands process rows against a dead id.
+        ("process", f"UPDATE process SET process_subtype = {_lit(new)} "
+                    f"WHERE process_subtype = {_lit(old)}"),
+    ]
 
 
 def refuse_overlong_targets(stmts: List[Tuple[str, str]], advice: str) -> None:
@@ -438,6 +449,15 @@ async def rename_space(conn, old: str, new: str, *,
     async with conn.transaction():
         for kind, sql in stmts:
             await conn.execute(sql)
+
+    # A keyed space's objects did not move; this process now finds them under
+    # the new id. Other processes learn it from their next key load.
+    from .space_names import forget_storage_key, register_storage_key
+    from .space_storage_key import is_keyed
+    forget_storage_key(old)
+    if await is_keyed(conn, new):
+        register_storage_key(new, await conn.fetchval(
+            "SELECT storage_key FROM space WHERE space_id = $1", new))
 
     # BOTH IDS. The old id's entries describe a space that no longer exists; the
     # new id's were cached before the space existed under that name, which is the

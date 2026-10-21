@@ -184,8 +184,8 @@ class TestEdgeTableSyncOnDelete:
         # And specifically: nothing left for that context.
         left = await pg_conn.fetchval(
             f"""
-            SELECT count(*) FROM {test_space}_edge e
-            JOIN {test_space}_term t ON t.term_uuid = e.context_uuid
+            SELECT count(*) FROM {space_prefix(test_space)}_edge e
+            JOIN {space_prefix(test_space)}_term t ON t.term_uuid = e.context_uuid
             WHERE t.term_text = $1
             """, str(GRAPH))
         assert left == 0, f"{left} edge row(s) survived DROP GRAPH"
@@ -210,8 +210,8 @@ class TestEdgeTableSyncOnDelete:
 
         found = await pg_conn.fetchval(
             f"""
-            SELECT count(*) FROM {test_space}_edge e
-            JOIN {test_space}_term t ON t.term_uuid = e.edge_uuid
+            SELECT count(*) FROM {space_prefix(test_space)}_edge e
+            JOIN {space_prefix(test_space)}_term t ON t.term_uuid = e.edge_uuid
             WHERE t.term_text = $1
             """, str(e))
         assert found == 1, (
@@ -284,10 +284,10 @@ class TestRestDeletePathsSyncTheEdgeTable:
         uris = await _seed(space_impl, test_space, 4, "reststats")
         await TestSingleQuadInsertMaintainsStats._refresh(pg_conn, test_space)
         src_pred = await pg_conn.fetchval(
-            f"SELECT term_uuid FROM {test_space}_term WHERE term_text = $1",
+            f"SELECT term_uuid FROM {space_prefix(test_space)}_term WHERE term_text = $1",
             str(HAS_EDGE_SOURCE))
         before = await pg_conn.fetchval(
-            f"SELECT row_count FROM {test_space}_rdf_pred_stats "
+            f"SELECT row_count FROM {space_prefix(test_space)}_rdf_pred_stats "
             f"WHERE predicate_uuid = $1", src_pred)
         assert before and before >= 4
 
@@ -297,10 +297,10 @@ class TestRestDeletePathsSyncTheEdgeTable:
         await TestSingleQuadInsertMaintainsStats._refresh(pg_conn, test_space)
 
         after = await pg_conn.fetchval(
-            f"SELECT row_count FROM {test_space}_rdf_pred_stats "
+            f"SELECT row_count FROM {space_prefix(test_space)}_rdf_pred_stats "
             f"WHERE predicate_uuid = $1", src_pred)
         actual = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_rdf_quad WHERE predicate_uuid = $1",
+            f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad WHERE predicate_uuid = $1",
             src_pred)
         assert after == before - 4 and after == actual, (
             f"pred_stats went {before} -> {after} after deleting 4 quads "
@@ -339,8 +339,8 @@ class TestSingleQuadInsertMaintainsStats:
     ):
         pred = URIRef("urn:test:singlequad:pred")
         before = await pg_conn.fetchval(
-            f"SELECT coalesce(row_count, 0) FROM {test_space}_rdf_pred_stats ps "
-            f"JOIN {test_space}_term t ON t.term_uuid = ps.predicate_uuid "
+            f"SELECT coalesce(row_count, 0) FROM {space_prefix(test_space)}_rdf_pred_stats ps "
+            f"JOIN {space_prefix(test_space)}_term t ON t.term_uuid = ps.predicate_uuid "
             f"WHERE t.term_text = $1", str(pred)) or 0
 
         for i in range(3):
@@ -351,8 +351,8 @@ class TestSingleQuadInsertMaintainsStats:
         await self._refresh(pg_conn, test_space)
 
         after = await pg_conn.fetchval(
-            f"SELECT row_count FROM {test_space}_rdf_pred_stats ps "
-            f"JOIN {test_space}_term t ON t.term_uuid = ps.predicate_uuid "
+            f"SELECT row_count FROM {space_prefix(test_space)}_rdf_pred_stats ps "
+            f"JOIN {space_prefix(test_space)}_term t ON t.term_uuid = ps.predicate_uuid "
             f"WHERE t.term_text = $1", str(pred))
         assert after == before + 3, (
             f"pred_stats went {before} -> {after} after three single-quad "
@@ -377,10 +377,10 @@ class TestSingleQuadInsertMaintainsStats:
 
         recorded, actual = await pg_conn.fetchrow(
             f"""SELECT
-                  (SELECT row_count FROM {test_space}_rdf_pred_stats ps
+                  (SELECT row_count FROM {space_prefix(test_space)}_rdf_pred_stats ps
                    WHERE ps.predicate_uuid = t.term_uuid) AS recorded,
-                  (SELECT count(*) FROM {test_space}_rdf_quad q
+                  (SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad q
                    WHERE q.predicate_uuid = t.term_uuid) AS actual
-                FROM {test_space}_term t WHERE t.term_text = $1""", str(pred))
+                FROM {space_prefix(test_space)}_term t WHERE t.term_text = $1""", str(pred))
         assert recorded == actual, (
             f"rdf_pred_stats says {recorded}, the quad table holds {actual}")

@@ -31,6 +31,7 @@ from tests.load.entity_graph_reads import (
     prepare_entity_graph_sql, sample_entity_uris, sql_rotation)
 from tests.load.run_scoped_data import (
     RunScope, cleanup, snapshot, verify_clean)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
@@ -138,17 +139,17 @@ async def test_reads_stay_fast_while_writes_and_jobs_run(pg_pool, scope):
         async with pg_pool.acquire() as c:
             async with c.transaction():
                 g = await c.fetchval(
-                    f"SELECT term_uuid FROM {SPACE}_term WHERE term_text=$1 LIMIT 1",
+                    f"SELECT term_uuid FROM {space_prefix(SPACE)}_term WHERE term_text=$1 LIMIT 1",
                     scope.graph_uri)
                 if g is None:
                     g = uuid.uuid4()
                     await c.execute(
-                        f"INSERT INTO {SPACE}_term (term_uuid, term_text, term_type)"
+                        f"INSERT INTO {space_prefix(SPACE)}_term (term_uuid, term_text, term_type)"
                         f" VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING",
                         g, scope.graph_uri)
                 subj = uuid.uuid4()
                 await c.execute(
-                    f"INSERT INTO {SPACE}_rdf_quad (subject_uuid, predicate_uuid,"
+                    f"INSERT INTO {space_prefix(SPACE)}_rdf_quad (subject_uuid, predicate_uuid,"
                     f" object_uuid, context_uuid) VALUES ($1,$2,$3,$4)"
                     f" ON CONFLICT DO NOTHING",
                     subj, uuid.uuid4(), uuid.uuid4(), g)

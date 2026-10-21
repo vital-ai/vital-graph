@@ -59,6 +59,7 @@ from devtools.target import pg_kwargs  # noqa: E402
 from check_space_datatypes import (  # noqa: E402
     INCOMPLETE, NOT_EXPOSED, OK, check_space)
 from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 
 async def plan_repair(conn, space: str):
@@ -214,6 +215,7 @@ async def main() -> int:
 
     import asyncpg
     conn = await asyncpg.connect(**pg_kwargs())
+    await load_storage_keys(conn)
     try:
         if a.all:
             spaces = [r["table_name"][: -len("_datatype")] for r in await conn.fetch(

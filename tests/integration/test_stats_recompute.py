@@ -30,6 +30,7 @@ import pytest
 import pytest_asyncio
 
 from vitalgraph.db.sparql_sql import sync_stats_tables as S
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -56,9 +57,9 @@ async def skewed_space(pg_conn, test_space):
         o = uuid.uuid4()
         quads += [(uuid.uuid4(), P[2], o, ctx) for _ in range(2)]
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", quads)
-    await pg_conn.execute(f"ANALYZE {sp}_rdf_quad")
+    await pg_conn.execute(f"ANALYZE {space_prefix(sp)}_rdf_quad")
     yield sp, P
 
 
@@ -71,7 +72,7 @@ async def test_every_predicate_is_represented_even_under_a_tight_cap(
 
     rows = await pg_conn.fetch(
         f"SELECT predicate_uuid, count(*) n, max(row_count) mx "
-        f"FROM {sp}_rdf_stats GROUP BY 1")
+        f"FROM {space_prefix(sp)}_rdf_stats GROUP BY 1")
     by_pred = {r["predicate_uuid"]: (r["n"], r["mx"]) for r in rows}
     assert set(by_pred) == set(P), (
         f"all three predicates must appear; got {len(by_pred)} — a global "
@@ -83,7 +84,7 @@ async def test_large_pairs_survive_there_is_no_upper_bound(pg_conn, skewed_space
     sp, P = skewed_space
     await S.recompute_stats_tables(pg_conn, sp, keep_top_n=100)
     mx = await pg_conn.fetchval(
-        f"SELECT max(row_count) FROM {sp}_rdf_stats WHERE predicate_uuid = $1",
+        f"SELECT max(row_count) FROM {space_prefix(sp)}_rdf_stats WHERE predicate_uuid = $1",
         P[0])
     assert mx == 3000, (
         "the large pair must be recorded with its TRUE count; absent, the "
@@ -106,11 +107,11 @@ async def test_it_replaces_rather_than_accumulates(pg_conn, skewed_space):
     sp, P = skewed_space
     await S.recompute_stats_tables(pg_conn, sp, keep_top_n=100)
     await pg_conn.execute(
-        f"UPDATE {sp}_rdf_stats SET row_count = 999999 WHERE predicate_uuid = $1",
+        f"UPDATE {space_prefix(sp)}_rdf_stats SET row_count = 999999 WHERE predicate_uuid = $1",
         P[0])
     await S.recompute_stats_tables(pg_conn, sp, keep_top_n=100)
     mx = await pg_conn.fetchval(
-        f"SELECT max(row_count) FROM {sp}_rdf_stats WHERE predicate_uuid = $1",
+        f"SELECT max(row_count) FROM {space_prefix(sp)}_rdf_stats WHERE predicate_uuid = $1",
         P[0])
     assert mx == 3000, "a recompute must not inherit the previous contents"
 
@@ -119,7 +120,7 @@ async def test_pred_stats_is_rebuilt_too(pg_conn, skewed_space):
     sp, P = skewed_space
     await S.recompute_stats_tables(pg_conn, sp, keep_top_n=100)
     n = await pg_conn.fetchval(
-        f"SELECT row_count FROM {sp}_rdf_pred_stats WHERE predicate_uuid = $1",
+        f"SELECT row_count FROM {space_prefix(sp)}_rdf_pred_stats WHERE predicate_uuid = $1",
         P[0])
     assert n == 3000
 
@@ -144,10 +145,10 @@ async def test_below_the_cap_it_matches_the_quads_exactly(pg_conn, skewed_space)
     truth = {(r["predicate_uuid"], r["object_uuid"]): r["rc"] for r in
              await pg_conn.fetch(
                  f"SELECT predicate_uuid, object_uuid, count(*) AS rc "
-                 f"FROM {sp}_rdf_quad GROUP BY 1, 2 HAVING count(*) >= 2")}
+                 f"FROM {space_prefix(sp)}_rdf_quad GROUP BY 1, 2 HAVING count(*) >= 2")}
     got = {(r["predicate_uuid"], r["object_uuid"]): r["row_count"] for r in
            await pg_conn.fetch(
-               f"SELECT predicate_uuid, object_uuid, row_count FROM {sp}_rdf_stats")}
+               f"SELECT predicate_uuid, object_uuid, row_count FROM {space_prefix(sp)}_rdf_stats")}
 
     assert got == truth, (
         f"missing={len(set(truth) - set(got))} extra={len(set(got) - set(truth))} "
@@ -166,16 +167,16 @@ async def test_singletons_are_excluded_and_that_is_the_only_exclusion(
     ctx = uuid.uuid4()
     lone = uuid.uuid4()
     await pg_conn.execute(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
         uuid.uuid4(), P[0], lone, ctx)
     await S.recompute_stats_tables(pg_conn, sp, keep_top_n=10_000)
 
     assert not await pg_conn.fetchval(
-        f"SELECT EXISTS(SELECT 1 FROM {sp}_rdf_stats WHERE object_uuid = $1)", lone), \
+        f"SELECT EXISTS(SELECT 1 FROM {space_prefix(sp)}_rdf_stats WHERE object_uuid = $1)", lone), \
         "a row_count=1 pair must not be stored"
     assert 0 == await pg_conn.fetchval(
-        f"SELECT count(*) FROM {sp}_rdf_stats WHERE row_count < $1",
+        f"SELECT count(*) FROM {space_prefix(sp)}_rdf_stats WHERE row_count < $1",
         S.STATS_MIN_ROW_COUNT), "nothing below the floor may survive"
 
 
@@ -201,9 +202,9 @@ async def anchor_space(pg_conn, test_space):
         o = uuid.uuid4()
         quads += [(uuid.uuid4(), P, o, ctx) for _ in range(2)]
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", quads)
-    await pg_conn.execute(f"ANALYZE {sp}_rdf_quad")
+    await pg_conn.execute(f"ANALYZE {space_prefix(sp)}_rdf_quad")
     yield sp, P, anchor
 
 
@@ -228,7 +229,7 @@ async def test_the_anchor_survives_a_cap_far_below_its_predicates_pair_count(
     await S.recompute_stats_tables(pg_conn, sp, keep_top_n=1000)
 
     stored = await pg_conn.fetchval(
-        f"SELECT row_count FROM {sp}_rdf_stats "
+        f"SELECT row_count FROM {space_prefix(sp)}_rdf_stats "
         f"WHERE predicate_uuid = $1 AND object_uuid = $2", P, anchor)
     assert stored == 5000, (
         f"the anchor is {stored!r}, not 5000. The cap is keeping this "
@@ -237,7 +238,7 @@ async def test_the_anchor_survives_a_cap_far_below_its_predicates_pair_count(
 
     # And what it kept is the top of the distribution, not the bottom.
     assert 2 != await pg_conn.fetchval(
-        f"SELECT max(row_count) FROM {sp}_rdf_stats WHERE predicate_uuid = $1", P)
+        f"SELECT max(row_count) FROM {space_prefix(sp)}_rdf_stats WHERE predicate_uuid = $1", P)
 
 
 async def test_every_predicate_gets_its_biggest_before_any_gets_its_second(
@@ -273,14 +274,14 @@ async def test_every_predicate_gets_its_biggest_before_any_gets_its_second(
         o = uuid.uuid4()
         q_quads += [(uuid.uuid4(), Q, o, q_ctx) for _ in range(2)]
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", q_quads)
-    await pg_conn.execute(f"ANALYZE {sp}_rdf_quad")
+    await pg_conn.execute(f"ANALYZE {space_prefix(sp)}_rdf_quad")
 
     truth = {r["predicate_uuid"]: r["mx"] for r in await pg_conn.fetch(
         f"SELECT predicate_uuid, max(rc) AS mx FROM ("
         f"  SELECT predicate_uuid, object_uuid, count(*) AS rc "
-        f"  FROM {sp}_rdf_quad GROUP BY 1, 2 HAVING count(*) >= 2) x "
+        f"  FROM {space_prefix(sp)}_rdf_quad GROUP BY 1, 2 HAVING count(*) >= 2) x "
         f"GROUP BY 1")}
     assert len(truth) >= 2, (
         "need at least two predicates to show fairness — this test now inserts "
@@ -291,7 +292,7 @@ async def test_every_predicate_gets_its_biggest_before_any_gets_its_second(
     await S.recompute_stats_tables(pg_conn, sp, keep_top_n=len(truth))
 
     kept = await pg_conn.fetch(
-        f"SELECT predicate_uuid, row_count FROM {sp}_rdf_stats")
+        f"SELECT predicate_uuid, row_count FROM {space_prefix(sp)}_rdf_stats")
     assert {r["predicate_uuid"] for r in kept} == set(truth), (
         f"{len(truth) - len({r['predicate_uuid'] for r in kept})} predicate(s) "
         f"got nothing while another took a second slot")

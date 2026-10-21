@@ -24,6 +24,7 @@ import pytest
 
 from .conftest import skip_no_pg
 from .lead_fixtures import ALL, DUP, DEPTH1, EMPTY, TYPES, has_grouping_uris
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -47,7 +48,7 @@ KNOWN_UNGROUPED = {
 async def test_declared_grouping_matches_loaded_data(perf_conn, fx):
     exists = await perf_conn.fetchval(
         "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
-        f"{fx.space}_rdf_quad")
+        f"{space_prefix(fx.space)}_rdf_quad")
     if not exists:
         pytest.skip(f"space {fx.space} is not loaded here")
 

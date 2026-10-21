@@ -32,6 +32,7 @@ from test_scripts.data.generate_scale_data import (load_scale_space, HASTAG,
 from .conftest import skip_no_pg
 from .harness import (explain_json, total_shared_buffers, node_types,
                       index_only_heap_fetches, has_seq_scan_on)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 # DROPs an index to measure the pre-index behavior and drops the space after:
 # a modification, so ingest tier.
@@ -53,7 +54,7 @@ async def _scan_buffers(conn, sql, *params):
 async def test_covering_index_advantage_holds_with_growth(perf_pool, perf_record):
     g_uuid = _generate_term_uuid(GRAPH, "U")
     p_uuid = _generate_term_uuid(HASTAG, "U")
-    sql = (f"SELECT subject_uuid, object_uuid FROM {SPACE}_rdf_quad "
+    sql = (f"SELECT subject_uuid, object_uuid FROM {space_prefix(SPACE)}_rdf_quad "
            f"WHERE context_uuid = $1 AND predicate_uuid = $2")
 
     rows = []  # (n, with_buf, with_node, without_buf, without_node, ratio)
@@ -72,7 +73,7 @@ async def test_covering_index_advantage_holds_with_growth(perf_pool, perf_record
                 # PG18 correctly costed a bitmap heap scan cheaper and the two
                 # arms measured byte-identical, which is why this bench was
                 # skipped rather than gating anything.
-                assert has_seq_scan_on(w_plan, [f"{SPACE}_rdf_quad"]) is None, (
+                assert has_seq_scan_on(w_plan, [f"{space_prefix(SPACE)}_rdf_quad"]) is None, (
                     f"seq scan on rdf_quad at n={n}; nodes={node_types(w_plan)}")
                 assert w_node == "Index Only Scan", (
                     f"expected an index-only scan on the covering index at n={n}, "
@@ -82,7 +83,7 @@ async def test_covering_index_advantage_holds_with_growth(perf_pool, perf_record
                     f"visibility map is stale, so buffers overstate the cost")
                 last_with_plan = w_plan
                 # Remove the covering index → pre-P1 behavior.
-                await conn.execute(f"DROP INDEX IF EXISTS idx_{SPACE}_quad_ctx_pred")
+                await conn.execute(f"DROP INDEX IF EXISTS idx_{space_prefix(SPACE)}_quad_ctx_pred")
                 o_buf, o_node, _, _ = await _scan_buffers(conn, sql, g_uuid, p_uuid)
                 ratio = o_buf / w_buf if w_buf else 0.0
                 rows.append((n, w_buf, w_node, o_buf, o_node, ratio))

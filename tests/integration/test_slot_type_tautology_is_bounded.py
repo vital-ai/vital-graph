@@ -26,6 +26,7 @@ import pytest
 from vitalgraph.db.sparql_sql import slot_type_tautology as stt
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -52,11 +53,11 @@ async def _require_loaded(pg_conn):
     connection reached from two loops.
     """
     ok = await pg_conn.fetchval(
-        "SELECT to_regclass($1) IS NOT NULL", f"{SPACE}_rdf_quad")
+        "SELECT to_regclass($1) IS NOT NULL", f"{space_prefix(SPACE)}_rdf_quad")
     if not ok:
         pytest.skip(f"{SPACE} not loaded")
     if not await pg_conn.fetchval(
-            f"SELECT EXISTS (SELECT 1 FROM {SPACE}_rdf_quad)"):
+            f"SELECT EXISTS (SELECT 1 FROM {space_prefix(SPACE)}_rdf_quad)"):
         pytest.skip(f"{SPACE} is empty")
     return SPACE
 

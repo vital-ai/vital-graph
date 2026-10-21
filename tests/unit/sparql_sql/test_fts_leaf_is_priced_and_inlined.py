@@ -37,6 +37,7 @@ from vitalgraph.db.sparql_sql.ir import (
     PlanV2, TableRef, VarSlot, KIND_BGP, KIND_FILTER,
 )
 from vitalgraph.db.sparql_sql.vg_functions import VG_TEXT_MATCH, _context_clause
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 SPACE = "test_space"
 U1 = "11111111-1111-5111-8111-111111111111"
@@ -62,7 +63,7 @@ def _match(text="saved application"):
 def _plan(expr):
     bgp = PlanV2(kind=KIND_BGP,
                  tables=[TableRef(ref_id="q1", kind="quad",
-                                  table_name=f"{SPACE}_rdf_quad", alias="q1")],
+                                  table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q1")],
                  var_slots={"slot": VarSlot(name="slot",
                                             positions=[("q1", "subject_uuid")])})
     return PlanV2(kind=KIND_FILTER, children=[bgp], filter_exprs=[expr]), bgp

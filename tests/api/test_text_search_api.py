@@ -440,7 +440,7 @@ class TestTextSearchDbVerification:
 
     async def test_fts_index_registry_row(self, pg_conn, text_env):
         """Verify the fts_index registry table has rows for both indexes."""
-        table = f"{text_env['space_id']}_fts_index"
+        table = f"{space_prefix(text_env['space_id'])}_fts_index"
         for idx_name in [FTS_INDEX, FTS_INDEX_MULTI]:
             row = await pg_conn.fetchrow(
                 f"SELECT index_name, languages FROM {table} WHERE index_name = $1",
@@ -451,7 +451,7 @@ class TestTextSearchDbVerification:
     async def test_fts_data_tables_exist(self, pg_conn, text_env):
         """Verify per-index FTS data tables were created for both indexes."""
         for idx_name in [FTS_INDEX, FTS_INDEX_MULTI]:
-            fts_table = f"{text_env['space_id']}_fts_{idx_name}"
+            fts_table = f"{space_prefix(text_env['space_id'])}_fts_{idx_name}"
             exists = await pg_conn.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
                 "WHERE table_schema = 'public' AND table_name = $1)",
@@ -461,7 +461,7 @@ class TestTextSearchDbVerification:
 
     async def test_fts_tsv_column_type(self, pg_conn, text_env):
         """Verify FTS data table 'tsv' column is of type tsvector."""
-        fts_table = f"{text_env['space_id']}_fts_{FTS_INDEX}"
+        fts_table = f"{space_prefix(text_env['space_id'])}_fts_{FTS_INDEX}"
         col_type = await pg_conn.fetchval(
             "SELECT data_type FROM information_schema.columns "
             "WHERE table_name = $1 AND column_name = 'tsv'",
@@ -473,7 +473,7 @@ class TestTextSearchDbVerification:
     async def test_fts_gin_index_definition(self, pg_conn, text_env):
         """Verify a GIN index exists on the tsv column of each FTS data table."""
         for idx_name in [FTS_INDEX, FTS_INDEX_MULTI]:
-            fts_table = f"{text_env['space_id']}_fts_{idx_name}"
+            fts_table = f"{space_prefix(text_env['space_id'])}_fts_{idx_name}"
             indexdef = await pg_conn.fetchval(
                 "SELECT indexdef FROM pg_indexes "
                 "WHERE tablename = $1 AND indexdef LIKE '%gin%'",
@@ -485,7 +485,7 @@ class TestTextSearchDbVerification:
 
     async def test_fts_registry_languages_match(self, pg_conn, text_env):
         """Verify registry stores correct languages for each index."""
-        table = f"{text_env['space_id']}_fts_index"
+        table = f"{space_prefix(text_env['space_id'])}_fts_index"
         # Multi-language index should have 3 languages stored
         row = await pg_conn.fetchrow(
             f"SELECT languages FROM {table} WHERE index_name = $1",
@@ -503,13 +503,13 @@ class TestTextSearchDbVerification:
 
     async def test_search_mapping_row_count(self, pg_conn, text_env):
         """Verify both search mappings exist in the DB."""
-        table = f"{text_env['space_id']}_search_mapping"
+        table = f"{space_prefix(text_env['space_id'])}_search_mapping"
         count = await pg_conn.fetchval(f"SELECT COUNT(*) FROM {table}")
         assert count >= 2, f"Expected >=2 search mappings, got {count}"
 
     async def test_search_mapping_row(self, pg_conn, text_env):
         """Verify the search_mapping table has a row for our mapping."""
-        table = f"{text_env['space_id']}_search_mapping"
+        table = f"{space_prefix(text_env['space_id'])}_search_mapping"
         row = await pg_conn.fetchrow(
             f"SELECT mapping_type, enabled FROM {table} WHERE mapping_id = $1",
             text_env["search_mapping"].mapping_id,
@@ -519,7 +519,7 @@ class TestTextSearchDbVerification:
 
     async def test_fuzzy_mapping_config_in_db(self, pg_conn, text_env):
         """Verify the fuzzy_mapping table stores the custom config values."""
-        table = f"{text_env['space_id']}_fuzzy_mapping"
+        table = f"{space_prefix(text_env['space_id'])}_fuzzy_mapping"
         row = await pg_conn.fetchrow(
             f"SELECT mapping_type, enabled, shingle_k, num_perm, lsh_threshold, phonetic_bonus "
             f"FROM {table} WHERE mapping_id = $1",
@@ -534,7 +534,7 @@ class TestTextSearchDbVerification:
 
     async def test_fuzzy_band_table_exists(self, pg_conn, text_env):
         """Verify the fuzzy band table was created."""
-        band_table = f"{text_env['space_id']}_fuzzy_band"
+        band_table = f"{space_prefix(text_env['space_id'])}_fuzzy_band"
         exists = await pg_conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
             "WHERE table_schema = 'public' AND table_name = $1)",
@@ -544,7 +544,7 @@ class TestTextSearchDbVerification:
 
     async def test_fuzzy_phonetic_band_table_exists(self, pg_conn, text_env):
         """Verify phonetic band table created (phonetic_bonus > 0)."""
-        table = f"{text_env['space_id']}_fuzzy_phonetic_band"
+        table = f"{space_prefix(text_env['space_id'])}_fuzzy_phonetic_band"
         exists = await pg_conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
             "WHERE table_schema = 'public' AND table_name = $1)",

@@ -75,7 +75,7 @@ async def frame_space(pg_conn, test_space):
             "e_ef", "e_cf", "e_s1", "e_s2")}
 
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_edge "
+        f"INSERT INTO {space_prefix(sp)}_edge "
         f"(edge_uuid, source_node_uuid, dest_node_uuid, context_uuid, edge_type_uuid) "
         f"VALUES ($1,$2,$3,$4,$5)",
         [
@@ -91,14 +91,14 @@ async def frame_space(pg_conn, test_space):
     # equivalence assertion vacuously true.
     ids["val1"], ids["val2"] = uuid.uuid4(), uuid.uuid4()
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+        f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
         f"VALUES ($1,$2,'L') ON CONFLICT DO NOTHING",
         [(ids["val1"], "alpha"), (ids["val2"], "beta")])
 
     # Frame and slot TYPE quads, plus the slot values.
     value_pred = E._SLOT_VALUE_PREDS[0]
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad "
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad "
         f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) VALUES ($1,$2,$3,$4) "
         f"ON CONFLICT DO NOTHING",
         [

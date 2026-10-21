@@ -40,7 +40,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
-from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix, space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 logger = logging.getLogger("migrate_quad_pk_dedup")
 
@@ -116,7 +117,7 @@ async def spaces_on(conn):
     # EXCLUSIVE, and the largest here is 24 GB / 50M rows. Ordering by size
     # means a mistake in this script surfaces on a 300-row table rather than
     # after twenty minutes of index build on the biggest one.
-    return [r["tablename"][: -len("_rdf_quad")] for r in await conn.fetch(
+    return [space_id_for_prefix(r["tablename"][: -len("_rdf_quad")]) for r in await conn.fetch(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' "
         "AND tablename LIKE '%\\_rdf\\_quad' "
         "ORDER BY pg_total_relation_size(tablename::regclass) ASC, tablename")]
@@ -137,6 +138,7 @@ async def main():
     import asyncpg
     conn = await asyncpg.connect(host=a.host, port=a.port, database=a.database,
                                  user=a.user, password=a.password or None)
+    await load_storage_keys(conn)
     try:
         targets = await spaces_on(conn) if a.all else [a.space]
         n = total_dupes = 0

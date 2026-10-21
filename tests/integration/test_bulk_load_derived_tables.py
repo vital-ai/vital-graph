@@ -151,7 +151,7 @@ class TestBulkLoadDerivedTables:
         truth = {(r["predicate_uuid"], r["object_uuid"]): r["n"]
                  for r in await pg_conn.fetch(
                      f"SELECT predicate_uuid, object_uuid, count(*) AS n "
-                     f"FROM {test_space}_rdf_quad GROUP BY 1, 2 "
+                     f"FROM {space_prefix(test_space)}_rdf_quad GROUP BY 1, 2 "
                      f"HAVING count(*) >= 2")}
         assert rebuilt == truth, (
             f"rebuilt rdf_stats does not match the quads: "
@@ -165,7 +165,7 @@ class TestBulkLoadDerivedTables:
         rebuilt_preds = dict(after_rebuild["pred_stats"])
         true_preds = {r["predicate_uuid"]: r["n"] for r in await pg_conn.fetch(
             f"SELECT predicate_uuid, count(*) AS n "
-            f"FROM {test_space}_rdf_quad GROUP BY 1")}
+            f"FROM {space_prefix(test_space)}_rdf_quad GROUP BY 1")}
         assert rebuilt_preds == true_preds, (
             f"rebuilt rdf_pred_stats does not match the quads: "
             f"{len(set(true_preds) - set(rebuilt_preds))} predicate(s) missing")

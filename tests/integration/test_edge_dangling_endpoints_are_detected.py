@@ -28,6 +28,7 @@ import pytest_asyncio
 from rdflib import URIRef
 
 from .conftest import skip_no_infra, TEST_SPACE_PREFIX
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -83,7 +84,7 @@ async def test_deleting_the_source_node_is_detected(dang_space, space_impl,
     before = await _probe(pg_conn, dang_space)
 
     await pg_conn.execute(
-        f"DELETE FROM {dang_space}_rdf_quad q USING {dang_space}_term t "
+        f"DELETE FROM {space_prefix(dang_space)}_rdf_quad q USING {space_prefix(dang_space)}_term t "
         f" WHERE t.term_uuid = q.subject_uuid AND t.term_text = $1",
         f"{EX}src")
 

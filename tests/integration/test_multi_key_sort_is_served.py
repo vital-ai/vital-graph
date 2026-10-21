@@ -21,6 +21,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -66,13 +67,13 @@ async def _load(pg_conn, sp):
     for e_uri, a_val, b_val in people:
         e = _term_uuid(e_uri)
         await pg_conn.execute(
-            f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+            f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
             f"VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING", e, e_uri)
         rows.append((uuid.uuid4(), ctx, e, uuid.uuid4(), ent_t, fpath, a, a_val))
         if b_val is not None:
             rows.append((uuid.uuid4(), ctx, e, uuid.uuid4(), ent_t, fpath, b, b_val))
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_entity_slot_sort (slot_uuid, context_uuid, entity_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_entity_slot_sort (slot_uuid, context_uuid, entity_uuid,"
         f" frame_uuid, entity_type_uuid, frame_type_path, slot_type_uuid, value_text)"
         f" VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING", rows)
     return ctx
@@ -120,12 +121,12 @@ async def _load_disagreeing(pg_conn, sp):
     for e_uri, a_val, b_val in (("urn:mk:d:1", "b", "a"), ("urn:mk:d:2", "a", "b")):
         e = _term_uuid(e_uri)
         await pg_conn.execute(
-            f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+            f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
             f"VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING", e, e_uri)
         rows += [(uuid.uuid4(), ctx, e, uuid.uuid4(), ent_t, fpath, a, a_val),
                  (uuid.uuid4(), ctx, e, uuid.uuid4(), ent_t, fpath, b, b_val)]
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_entity_slot_sort (slot_uuid, context_uuid, entity_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_entity_slot_sort (slot_uuid, context_uuid, entity_uuid,"
         f" frame_uuid, entity_type_uuid, frame_type_path, slot_type_uuid, value_text)"
         f" VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING", rows)
 
@@ -213,7 +214,7 @@ async def _load_with_status(pg_conn, sp):
                           ("urn:mk:e:3", _ACTIVE), ("urn:mk:e:4", _ARCHIVED)):
         rows.append((_term_uuid(e_uri), pred, _term_uuid(status), ctx))
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", rows)
 
 

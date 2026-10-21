@@ -28,6 +28,7 @@ from vitalgraph.db.sparql_sql.config_export import (
     CONFIG_VERSION, config_to_json, export_space_config)
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -57,18 +58,18 @@ async def _add_mapping(conn, sp, *, type_uri, index_name, props):
     look like an export bug.
     """
     mid = await conn.fetchval(
-        f"INSERT INTO {sp}_search_mapping "
+        f"INSERT INTO {space_prefix(sp)}_search_mapping "
         f"(mapping_type, type_uri, index_name, enabled, source_type, separator,"
         f" include_pred_name) VALUES "
         f"('kgslot', $1, $2, true, 'properties', '. ', false) "
         f"RETURNING mapping_id", type_uri, index_name)
     for ordinal, uri in enumerate(props):
         await conn.execute(
-            f"INSERT INTO {sp}_search_mapping_property "
+            f"INSERT INTO {space_prefix(sp)}_search_mapping_property "
             f"(mapping_id, property_uri, property_role, ordinal) "
             f"VALUES ($1, $2, 'include', $3)", mid, uri, ordinal)
     await conn.execute(
-        f"INSERT INTO {sp}_search_mapping_index "
+        f"INSERT INTO {space_prefix(sp)}_search_mapping_index "
         f"(mapping_id, index_type, index_name) VALUES ($1, 'fts', $2)",
         mid, index_name)
     return mid
@@ -154,7 +155,7 @@ class TestDiffability:
                                  index_name="content", props=["urn:p:zero"])
         for ordinal, uri in ((5, "urn:p:five"), (2, "urn:p:two")):
             await pg_conn.execute(
-                f"INSERT INTO {sp}_search_mapping_property "
+                f"INSERT INTO {space_prefix(sp)}_search_mapping_property "
                 f"(mapping_id, property_uri, property_role, ordinal) "
                 f"VALUES ($1, $2, 'include', $3)", mid, uri, ordinal)
         doc = await export_space_config(pg_conn, sp)
@@ -168,7 +169,7 @@ class TestSecrets:
             self, pg_conn, make_space):
         sp = await make_space()
         await pg_conn.execute(
-            f"INSERT INTO {sp}_vector_index "
+            f"INSERT INTO {space_prefix(sp)}_vector_index "
             f"(index_name, dimensions, distance_metric, provider, model_name, "
             f" provider_config) VALUES "
             f"('secret_idx', 8, 'cosine', 'openai', 'm', "
@@ -189,7 +190,7 @@ class TestSecrets:
         the result is a credential."""
         sp = await make_space()
         await pg_conn.execute(
-            f"INSERT INTO {sp}_vector_index "
+            f"INSERT INTO {space_prefix(sp)}_vector_index "
             f"(index_name, dimensions, distance_metric, provider, model_name, "
             f" provider_config) VALUES ('secret_idx', 8, 'cosine', 'openai', "
             f" 'm', '{{\"api_key\": \"sk-live-123\"}}')")
@@ -208,7 +209,7 @@ class TestOlderSpaces:
         the export would break the tool exactly on the space that most needs
         reading."""
         sp = await make_space()
-        await pg_conn.execute(f"DROP TABLE {sp}_geo_config")
+        await pg_conn.execute(f"DROP TABLE {space_prefix(sp)}_geo_config")
         doc = await export_space_config(pg_conn, sp)
         assert doc["absent_tables"] == ["geo_config"]
         assert doc["geo_config"] is None
@@ -245,7 +246,7 @@ class TestDiffAgainstALiveSpace:
         from vitalgraph.db.sparql_sql.config_diff import diff_space_config
         sp = await make_space()
         await pg_conn.execute(
-            f"INSERT INTO {sp}_vector_index "
+            f"INSERT INTO {space_prefix(sp)}_vector_index "
             f"(index_name, dimensions, distance_metric, provider, model_name, "
             f" provider_config) VALUES ('secret_idx', 8, 'cosine', 'openai', "
             f" 'm', '{{\"api_key\": \"sk-live-123\"}}')")
@@ -263,7 +264,7 @@ class TestDiffAgainstALiveSpace:
         doc = await export_space_config(pg_conn, sp)
         # The issue's named case, performed for real: flip source_type.
         await pg_conn.execute(
-            f"UPDATE {sp}_search_mapping SET source_type = 'default' "
+            f"UPDATE {space_prefix(sp)}_search_mapping SET source_type = 'default' "
             f"WHERE mapping_id = $1", mid)
         report = await diff_space_config(pg_conn, sp, doc)
         assert report["differs"] is True
@@ -296,7 +297,7 @@ class TestDiffAgainstALiveSpace:
         from vitalgraph.db.sparql_sql.config_diff import diff_space_config
         source = await make_space()
         target = await make_space()
-        await pg_conn.execute(f"DELETE FROM {target}_search_mapping")
+        await pg_conn.execute(f"DELETE FROM {space_prefix(target)}_search_mapping")
         doc = await export_space_config(pg_conn, source)
         report = await diff_space_config(pg_conn, target, doc)
         assert report["sections"]["mappings"]["only_in_document"], report
@@ -343,7 +344,7 @@ class TestApplyToASpace:
         mid = await _add_mapping(pg_conn, source, type_uri="urn:t:Trap",
                                  index_name="content", props=["urn:p:a"])
         await pg_conn.execute(
-            f"UPDATE {source}_search_mapping SET source_type = 'default' "
+            f"UPDATE {space_prefix(source)}_search_mapping SET source_type = 'default' "
             f"WHERE mapping_id = $1", mid)
         doc = await export_space_config(pg_conn, source, include_secrets=True)
         assert [m for m in doc["mappings"]
@@ -352,7 +353,7 @@ class TestApplyToASpace:
         await apply_space_config(pg_conn, target, doc)
 
         got = await pg_conn.fetchval(
-            f"SELECT source_type FROM {target}_search_mapping "
+            f"SELECT source_type FROM {space_prefix(target)}_search_mapping "
             f"WHERE type_uri = 'urn:t:Trap'")
         assert got == "default", (
             "add_property's side effect won — the scalars are not being "
@@ -390,7 +391,7 @@ class TestApplyToASpace:
         await apply_space_config(pg_conn, target, doc)
 
         survived = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {target}_search_mapping "
+            f"SELECT count(*) FROM {space_prefix(target)}_search_mapping "
             f"WHERE type_uri = 'urn:t:OnlyHere'")
         assert survived == 1
         report = await diff_space_config(pg_conn, target, doc)
@@ -407,7 +408,7 @@ class TestApplyToASpace:
         source = await make_space()
         target = await make_space()
         await pg_conn.execute(
-            f"INSERT INTO {source}_vector_index (index_name, dimensions, "
+            f"INSERT INTO {space_prefix(source)}_vector_index (index_name, dimensions, "
             f"distance_metric, provider, model_name) VALUES "
             f"('extra_idx', 1536, 'cosine', 'openai', 'text-embedding-3-small')")
         doc = await export_space_config(pg_conn, source, include_secrets=True)
@@ -417,7 +418,7 @@ class TestApplyToASpace:
 
         exists = await pg_conn.fetchval(
             "SELECT count(*) FROM pg_class WHERE relname = $1",
-            f"{target}_vec_extra_idx")
+            f"{space_prefix(target)}_vec_extra_idx")
         assert exists == 1, "registry row written without its data table"
 
     async def test_a_redacted_document_is_refused_before_anything_changes(
@@ -430,20 +431,20 @@ class TestApplyToASpace:
         source = await make_space()
         target = await make_space()
         await pg_conn.execute(
-            f"INSERT INTO {source}_vector_index (index_name, dimensions, "
+            f"INSERT INTO {space_prefix(source)}_vector_index (index_name, dimensions, "
             f"distance_metric, provider, model_name, provider_config) VALUES "
             f"('secret_idx', 1536, 'cosine', 'openai', "
             f" 'text-embedding-3-small', '{{\"api_key\": \"sk-live-1\"}}')")
         doc = await export_space_config(pg_conn, source)       # redacted
 
         before = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {target}_vector_index")
+            f"SELECT count(*) FROM {space_prefix(target)}_vector_index")
         with pytest.raises(ConfigApplyRefused) as exc:
             await apply_space_config(pg_conn, target, doc)
         assert "api_key" in str(exc.value)
         assert "include_secrets" in str(exc.value)
         assert await pg_conn.fetchval(
-            f"SELECT count(*) FROM {target}_vector_index") == before, \
+            f"SELECT count(*) FROM {space_prefix(target)}_vector_index") == before, \
             "refused, but something was already written"
 
     async def test_a_wrong_version_is_refused(self, pg_conn, make_space):
@@ -491,7 +492,7 @@ class TestReplaceSemantics:
         report = await apply_space_config(pg_conn, target, doc)
         assert report["removed"] == []
         assert await pg_conn.fetchval(
-            f"SELECT count(*) FROM {target}_search_mapping "
+            f"SELECT count(*) FROM {space_prefix(target)}_search_mapping "
             f"WHERE type_uri = 'urn:t:Extra'") == 1
 
     async def test_replace_removes_a_mapping_the_document_omits(
@@ -507,7 +508,7 @@ class TestReplaceSemantics:
         report = await apply_space_config(pg_conn, target, doc, replace=True)
         assert any("urn:t:Extra" in r["what"] for r in report["removed"]), report
         assert await pg_conn.fetchval(
-            f"SELECT count(*) FROM {target}_search_mapping "
+            f"SELECT count(*) FROM {space_prefix(target)}_search_mapping "
             f"WHERE type_uri = 'urn:t:Extra'") == 0
         # And now the space MATCHES the document, which merge could not achieve.
         assert (await diff_space_config(pg_conn, target, doc))["differs"] is False
@@ -523,7 +524,7 @@ class TestReplaceSemantics:
             "provider": "openai", "model_name": "text-embedding-3-small"})
         assert await pg_conn.fetchval(
             "SELECT count(*) FROM pg_class WHERE relname = $1",
-            f"{target}_vec_doomed_idx") == 1
+            f"{space_prefix(target)}_vec_doomed_idx") == 1
 
         doc = await export_space_config(pg_conn, source, include_secrets=True)
         report = await apply_space_config(pg_conn, target, doc, replace=True)
@@ -532,9 +533,9 @@ class TestReplaceSemantics:
                    for r in report["removed"]), report["removed"]
         assert await pg_conn.fetchval(
             "SELECT count(*) FROM pg_class WHERE relname = $1",
-            f"{target}_vec_doomed_idx") == 0, "registry row went, table stayed"
+            f"{space_prefix(target)}_vec_doomed_idx") == 0, "registry row went, table stayed"
         assert await pg_conn.fetchval(
-            f"SELECT count(*) FROM {target}_vector_index "
+            f"SELECT count(*) FROM {space_prefix(target)}_vector_index "
             f"WHERE index_name = 'doomed_idx'") == 0
 
     async def test_the_report_names_the_rows_it_destroyed(
@@ -550,14 +551,14 @@ class TestReplaceSemantics:
             "provider": "openai", "model_name": "text-embedding-3-small"})
         cols = await pg_conn.fetch(
             "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = $1", f"{target}_vec_doomed_idx")
+            "WHERE table_name = $1", f"{space_prefix(target)}_vec_doomed_idx")
         assert cols, "index table missing, cannot test the count"
 
         doc = await export_space_config(pg_conn, source, include_secrets=True)
         report = await apply_space_config(pg_conn, target, doc, replace=True)
         entry = [r for r in report["removed"]
                  if r["what"] == "vector_index/doomed_idx"][0]
-        assert entry["table"] == f"{target}_vec_doomed_idx"
+        assert entry["table"] == f"{space_prefix(target)}_vec_doomed_idx"
         assert entry["rows_destroyed"] == 0, entry
 
     async def test_a_replace_dry_run_destroys_nothing_and_still_reports_counts(
@@ -579,7 +580,7 @@ class TestReplaceSemantics:
         assert entry["rows_destroyed"] is not None, "a dry run must price it"
         assert await pg_conn.fetchval(
             "SELECT count(*) FROM pg_class WHERE relname = $1",
-            f"{target}_vec_doomed_idx") == 1, "dry run dropped the table"
+            f"{space_prefix(target)}_vec_doomed_idx") == 1, "dry run dropped the table"
 
     async def test_replace_is_idempotent(self, pg_conn, make_space):
         from vitalgraph.db.sparql_sql.config_apply import apply_space_config
@@ -617,7 +618,7 @@ class TestReplaceSemantics:
         await apply_space_config(pg_conn, target, doc, replace=True)
 
         assert await pg_conn.fetchval(
-            f"SELECT count(*) FROM {target}_search_mapping "
+            f"SELECT count(*) FROM {space_prefix(target)}_search_mapping "
             f"WHERE type_uri = 'urn:t:Wanted'") == 1, \
             "the mapping this apply created was deleted by a later teardown"
         assert (await diff_space_config(pg_conn, target, doc))["differs"] is False
@@ -687,7 +688,7 @@ class TestBulkExportCarriesTheConfig:
         await import_space(pg_conn, target, paths)
 
         assert await pg_conn.fetchval(
-            f"SELECT count(*) FROM {target}_search_mapping "
+            f"SELECT count(*) FROM {space_prefix(target)}_search_mapping "
             f"WHERE type_uri = 'urn:t:Stale'") == 0, \
             "config from the previous contents survived the restore"
 

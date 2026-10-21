@@ -26,6 +26,7 @@ import secrets
 import pytest
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -112,14 +113,14 @@ async def test_long_values_are_written_to_all_three_tables(
 
     async with pg_pool.acquire() as conn:
         ess = await conn.fetchrow(
-            f"SELECT value_text, value_key FROM {test_space}_entity_slot_sort "
+            f"SELECT value_text, value_key FROM {space_prefix(test_space)}_entity_slot_sort "
             f"WHERE entity_uuid = $1", _u(f"{EX}big"))
         eps = await conn.fetchrow(
-            f"SELECT value_text, value_key, value_all FROM {test_space}_entity_prop_sort "
+            f"SELECT value_text, value_key, value_all FROM {space_prefix(test_space)}_entity_prop_sort "
             f"WHERE entity_uuid = $1 AND property_uuid = $2",
             _u(f"{EX}big"), _u(f"{CORE}hasName"))
         fps = await conn.fetchrow(
-            f"SELECT value_text, value_key, value_all FROM {test_space}_frame_prop_sort "
+            f"SELECT value_text, value_key, value_all FROM {space_prefix(test_space)}_frame_prop_sort "
             f"WHERE frame_uuid = $1 AND property_uuid = $2",
             _u(f"{EX}big_frame"), _u(f"{KG}hasKGFrameTypeDescription"))
 
@@ -206,12 +207,12 @@ async def test_the_text_sort_is_an_index_only_scan_on_the_key(
     `value_key` must not lose it."""
     from vitalgraph.db.sparql_sql.fast_slot_sort import _term_uuid
     async with pg_pool.acquire() as conn:
-        await conn.execute(f"ANALYZE {test_space}_entity_slot_sort")
+        await conn.execute(f"ANALYZE {space_prefix(test_space)}_entity_slot_sort")
         async with conn.transaction():
             await conn.execute("SET LOCAL enable_seqscan = off")
             await conn.execute("SET LOCAL enable_bitmapscan = off")
             plan = "\n".join(r[0] for r in await conn.fetch(
-                f"EXPLAIN SELECT entity_uuid FROM {test_space}_entity_slot_sort "
+                f"EXPLAIN SELECT entity_uuid FROM {space_prefix(test_space)}_entity_slot_sort "
                 f"WHERE context_uuid = $1 AND entity_type_uuid = $2 "
                 f"AND frame_type_path = $3 AND slot_type_uuid = $4 "
                 f'ORDER BY value_key COLLATE "C", entity_uuid LIMIT 10',

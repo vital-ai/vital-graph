@@ -24,6 +24,7 @@ from vitalgraph.db.sparql_sql.ir import (
     PlanV2, TableRef, VarSlot, KIND_BGP, KIND_FILTER,
 )
 from vitalgraph.db.sparql_sql.semijoin import needed_texts
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 SPACE = "test_space"
@@ -57,7 +58,7 @@ def _plan(*exprs) -> PlanV2:
     bgp = PlanV2(
         kind=KIND_BGP,
         tables=[TableRef(ref_id="q0", kind="quad",
-                         table_name=f"{SPACE}_rdf_quad", alias="q0")],
+                         table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0")],
         var_slots={"x": VarSlot(name="x", positions=[("q0", "object_uuid")])},
         leaf_terms={("q0", "predicate_uuid"): (PRED_TEXT, "U")},
     )

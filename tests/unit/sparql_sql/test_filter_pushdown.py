@@ -14,6 +14,7 @@ from vitalgraph.db.sparql_sql.ir import (
     KIND_BGP, KIND_FILTER, KIND_EXTEND, KIND_JOIN,
 )
 from vitalgraph.db.sparql_sql.filter_pushdown import push_text_filters
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 SPACE = "test_space"
@@ -23,7 +24,7 @@ def _make_bgp_with_var(var_name: str = "x", alias: str = "q0") -> PlanV2:
     """Create a BGP with one quad table and one variable."""
     return PlanV2(
         kind=KIND_BGP,
-        tables=[TableRef(ref_id=alias, kind="quad", table_name=f"{SPACE}_rdf_quad", alias=alias)],
+        tables=[TableRef(ref_id=alias, kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias=alias)],
         var_slots={var_name: VarSlot(name=var_name, positions=[(alias, "object_uuid")])},
     )
 
@@ -83,7 +84,7 @@ class TestPushTextFilters:
         tag, sql = bgp.tagged_constraints[0]
         assert tag == "q0"
         assert "LIKE '%hello%'" in sql
-        assert f"{SPACE}_term" in sql
+        assert f"{space_prefix(SPACE)}_term" in sql
         assert plan.filter_exprs is None  # consumed
 
     def test_contains_pushdown_escapes_like_metachars(self):

@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncpg  # noqa: E402
 
 from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 # (old suffix on the TABLE name, new short name after the space id)
 RENAMES = [
@@ -81,6 +82,7 @@ async def main() -> int:
         database=os.getenv("VG_TEST_PG_DATABASE", "sparql_sql_graph"),
         user=os.getenv("VG_TEST_PG_USER", "postgres"),
         password=os.getenv("VG_TEST_PG_PASSWORD", "testpass"))
+    await load_storage_keys(conn)
     try:
         plan = await spaces_with_old_names(conn)
         total = sum(len(v) for v in plan.values())

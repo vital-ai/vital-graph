@@ -21,6 +21,7 @@ from vitalgraph.db.sparql_sql.rewrite_frame_slot_table import (
     rewrite_frame_slot_table,
     SLOT_TYPE_URI, SLOT_VALUE_URI,
 )
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 # SAMPLE role values, defined here rather than imported. They are
 # `hasKGSlotType` OBJECT values — data a query supplies — and the rewrite no
@@ -84,7 +85,7 @@ class TestRewriteEdgeTableDetection:
             "c_0": ("http://example.org/someProperty", "U"),
         })
         tables = [
-            TableRef(ref_id="q0", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q0"),
+            TableRef(ref_id="q0", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0"),
         ]
         tagged = [("q0", "q0.predicate_uuid = __CONST_c_0__")]
         plan = _make_bgp_plan(tables, {}, tagged)
@@ -99,8 +100,8 @@ class TestRewriteEdgeTableDetection:
             "c_1": (EDGE_DEST_URI, "U"),
         })
         tables = [
-            TableRef(ref_id="q0", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q0"),
-            TableRef(ref_id="q1", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q1"),
+            TableRef(ref_id="q0", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0"),
+            TableRef(ref_id="q1", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q1"),
         ]
         tagged = [
             ("q0", "q0.predicate_uuid = __CONST_c_0__"),
@@ -120,7 +121,7 @@ class TestRewriteEdgeTableDetection:
         quad_tables = [t for t in result.tables if t.kind == "quad"]
         assert len(edge_tables) == 1
         assert len(quad_tables) == 0
-        assert edge_tables[0].table_name == f"{SPACE}_edge"
+        assert edge_tables[0].table_name == f"{space_prefix(SPACE)}_edge"
 
     def test_detects_edge_pair_via_var_slots(self):
         """Detects edge pair via var_slots transitive co-reference."""
@@ -129,8 +130,8 @@ class TestRewriteEdgeTableDetection:
             "c_1": (EDGE_DEST_URI, "U"),
         })
         tables = [
-            TableRef(ref_id="q0", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q0"),
-            TableRef(ref_id="q1", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q1"),
+            TableRef(ref_id="q0", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0"),
+            TableRef(ref_id="q1", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q1"),
         ]
         tagged = [
             ("q0", "q0.predicate_uuid = __CONST_c_0__"),
@@ -154,7 +155,7 @@ class TestRewriteEdgeTableDetection:
             "c_0": (EDGE_SOURCE_URI, "U"),
         })
         tables = [
-            TableRef(ref_id="q0", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q0"),
+            TableRef(ref_id="q0", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0"),
         ]
         tagged = [("q0", "q0.predicate_uuid = __CONST_c_0__")]
         plan = _make_bgp_plan(tables, {}, tagged)
@@ -171,8 +172,8 @@ class TestRewriteEdgeTableVarSlots:
             "c_1": (EDGE_DEST_URI, "U"),
         })
         tables = [
-            TableRef(ref_id="q0", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q0"),
-            TableRef(ref_id="q1", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q1"),
+            TableRef(ref_id="q0", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0"),
+            TableRef(ref_id="q1", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q1"),
         ]
         tagged = [
             ("q0", "q0.predicate_uuid = __CONST_c_0__"),
@@ -217,8 +218,8 @@ class TestRewriteEdgeTableConstraints:
             "c_2": ("http://example.org/ctx", "U"),
         })
         tables = [
-            TableRef(ref_id="q0", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q0"),
-            TableRef(ref_id="q1", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q1"),
+            TableRef(ref_id="q0", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0"),
+            TableRef(ref_id="q1", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q1"),
         ]
         tagged = [
             ("q0", "q0.predicate_uuid = __CONST_c_0__"),
@@ -261,8 +262,8 @@ class TestRewriteEdgeTableRecursive:
         })
         # Inner BGP with edge pair
         inner_tables = [
-            TableRef(ref_id="q0", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q0"),
-            TableRef(ref_id="q1", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q1"),
+            TableRef(ref_id="q0", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0"),
+            TableRef(ref_id="q1", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q1"),
         ]
         inner_tagged = [
             ("q0", "q0.predicate_uuid = __CONST_c_0__"),
@@ -347,14 +348,14 @@ def _build_frame_pattern():
     # edge0: frame → srcSlot
     # edge1: frame → dstSlot
     tables = [
-        TableRef(ref_id="mv0", kind="edge", table_name=f"{SPACE}_edge", alias="mv0"),
-        TableRef(ref_id="mv1", kind="edge", table_name=f"{SPACE}_edge", alias="mv1"),
+        TableRef(ref_id="mv0", kind="edge", table_name=f"{space_prefix(SPACE)}_edge", alias="mv0"),
+        TableRef(ref_id="mv1", kind="edge", table_name=f"{space_prefix(SPACE)}_edge", alias="mv1"),
         # slot_type quads
-        TableRef(ref_id="q2", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q2"),
-        TableRef(ref_id="q3", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q3"),
+        TableRef(ref_id="q2", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q2"),
+        TableRef(ref_id="q3", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q3"),
         # slot_value quads
-        TableRef(ref_id="q4", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q4"),
-        TableRef(ref_id="q5", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q5"),
+        TableRef(ref_id="q4", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q4"),
+        TableRef(ref_id="q5", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q5"),
     ]
 
     var_slots = {
@@ -401,7 +402,7 @@ class TestRewriteFrameEntityDetection:
             "c_st": (SLOT_TYPE_URI, "U"),
         })
         tables = [
-            TableRef(ref_id="q0", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q0"),
+            TableRef(ref_id="q0", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0"),
         ]
         tagged = [("q0", "q0.predicate_uuid = __CONST_c_st__")]
         plan = _make_bgp_plan(tables, {}, tagged)
@@ -416,7 +417,7 @@ class TestRewriteFrameEntityDetection:
         fs_tables = [t for t in result.tables if t.kind == "frame_slot"]
         # One join per ARM — two here, because this fixture has two slots.
         assert len(fs_tables) == 2
-        assert all(t.table_name == f"{SPACE}_frame_slot" for t in fs_tables)
+        assert all(t.table_name == f"{space_prefix(SPACE)}_frame_slot" for t in fs_tables)
 
     def test_removes_all_six_tables(self):
         """All 6 original tables are removed."""
@@ -436,8 +437,8 @@ class TestRewriteFrameEntityDetection:
             "c_22": (DEST_ENTITY_URI, "U"),
         })
         tables = [
-            TableRef(ref_id="mv0", kind="edge", table_name=f"{SPACE}_edge", alias="mv0"),
-            TableRef(ref_id="q2", kind="quad", table_name=f"{SPACE}_rdf_quad", alias="q2"),
+            TableRef(ref_id="mv0", kind="edge", table_name=f"{space_prefix(SPACE)}_edge", alias="mv0"),
+            TableRef(ref_id="q2", kind="quad", table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q2"),
         ]
         var_slots = {
             "frame": VarSlot(name="frame", positions=[("mv0", "source_node_uuid")]),

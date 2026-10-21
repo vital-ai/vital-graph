@@ -22,6 +22,7 @@ from rdflib import Literal, URIRef
 from .conftest import skip_no_infra
 
 from vitalgraph.process import analytics_job as A
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -77,7 +78,7 @@ async def test_a_large_space_counts_predicates_from_the_stats_table(
     async with pg_pool.acquire() as c:
         await recompute_stats_tables(c, seeded)
         exact = await c.fetchval(
-            f"SELECT COUNT(DISTINCT predicate_uuid) FROM {seeded}_rdf_quad")
+            f"SELECT COUNT(DISTINCT predicate_uuid) FROM {space_prefix(seeded)}_rdf_quad")
         job = A.AnalyticsJob(pg_pool)
 
         # Small as it is, treat the space as above the guard.

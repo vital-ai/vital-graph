@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -71,7 +72,7 @@ async def test_the_rule(test_space, space_impl, pg_pool, docs):
     await space_impl.add_rdf_quads_batch(test_space, quads)
 
     async with pg_pool.acquire() as conn:
-        t = f"{test_space}_document_segmentation_config"
+        t = f"{space_prefix(test_space)}_document_segmentation_config"
         for doc_type, method, auto in (
                 (TYPE_ON, "urn:m:a", True), (TYPE_OFF, "urn:m:a", False),
                 # Mixed: one config on, one off -> on (off only when NONE is on).

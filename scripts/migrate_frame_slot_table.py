@@ -28,7 +28,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
-from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix, space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 logger = logging.getLogger("migrate_frame_slot_table")
 
@@ -98,9 +99,10 @@ async def main() -> int:
     conn = await asyncpg.connect(host=args.host, port=args.port,
                                  database=args.database, user=args.user,
                                  password=args.password or None)
+    await load_storage_keys(conn)
     try:
         await conn.execute("SET statement_timeout='1800s'")
-        spaces = ([r[0] for r in await conn.fetch(
+        spaces = ([space_id_for_prefix(r[0]) for r in await conn.fetch(
             "SELECT replace(tablename,'_rdf_quad','') FROM pg_tables "
             "WHERE schemaname='public' AND tablename LIKE '%\\_rdf\\_quad' "
             "ORDER BY 1")] if args.all else [args.space])

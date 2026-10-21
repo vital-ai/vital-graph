@@ -27,6 +27,7 @@ from .conftest import skip_no_pg, space_exists
 from .graph_fixtures import (
     SMALL, CRITERIA, HALEY, VITAL, chain_query, frame_hop, relation_hop,
     entity_indexes)
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -167,9 +168,9 @@ async def test_the_collapse_applies_per_hop(perf_conn):
         # is one row per (frame, slot) keyed by `role_uuid`, so a hop is a
         # self-join: the source slot and the dest slot. Counting 1 per hop is
         # what the retired table looked like, not what a collapsed hop costs.
-        assert sql.count(f"{fx.space}_frame_slot") == 2 * depth, (
+        assert sql.count(f"{space_prefix(fx.space)}_frame_slot") == 2 * depth, (
             f"depth {depth} collapsed "
-            f"{sql.count(f'{fx.space}_frame_slot') / 2:.1f} hop(s)")
+            f"{sql.count(f'{space_prefix(fx.space)}_frame_slot') / 2:.1f} hop(s)")
 
 
 # ---------------------------------------------------------------------------
@@ -198,14 +199,14 @@ async def test_a_multi_valued_criterion_estimates_quads_not_subjects(perf_conn):
     S = fx.space
 
     tag_pred = await perf_conn.fetchval(
-        f"SELECT term_uuid FROM {S}_term WHERE term_text = $1", TAG)
+        f"SELECT term_uuid FROM {space_prefix(S)}_term WHERE term_text = $1", TAG)
     if tag_pred is None:
         pytest.skip("fixture predates the multi-valued tag criterion; regenerate")
 
     quads = await perf_conn.fetchval(
-        f"SELECT count(*) FROM {S}_rdf_quad WHERE predicate_uuid = $1", tag_pred)
+        f"SELECT count(*) FROM {space_prefix(S)}_rdf_quad WHERE predicate_uuid = $1", tag_pred)
     subjects = await perf_conn.fetchval(
-        f"SELECT count(DISTINCT subject_uuid) FROM {S}_rdf_quad "
+        f"SELECT count(DISTINCT subject_uuid) FROM {space_prefix(S)}_rdf_quad "
         f"WHERE predicate_uuid = $1", tag_pred)
     assert quads > subjects, (
         f"hasTag is not multi-valued in this fixture ({quads} quads over "
@@ -213,20 +214,20 @@ async def test_a_multi_valued_criterion_estimates_quads_not_subjects(perf_conn):
 
     pair = [fx.tag_uri("urgent"), fx.tag_uri("review")]
     in_quads = await perf_conn.fetchval(
-        f"SELECT count(*) FROM {S}_rdf_quad q JOIN {S}_term t "
+        f"SELECT count(*) FROM {space_prefix(S)}_rdf_quad q JOIN {space_prefix(S)}_term t "
         f"ON t.term_uuid = q.object_uuid "
         f"WHERE q.predicate_uuid = $1 AND t.term_text = ANY($2::text[])",
         tag_pred, pair)
     in_subjects = await perf_conn.fetchval(
-        f"SELECT count(DISTINCT q.subject_uuid) FROM {S}_rdf_quad q "
-        f"JOIN {S}_term t ON t.term_uuid = q.object_uuid "
+        f"SELECT count(DISTINCT q.subject_uuid) FROM {space_prefix(S)}_rdf_quad q "
+        f"JOIN {space_prefix(S)}_term t ON t.term_uuid = q.object_uuid "
         f"WHERE q.predicate_uuid = $1 AND t.term_text = ANY($2::text[])",
         tag_pred, pair)
 
     # What the estimator would report: the stored per-(predicate, object) sum.
     estimate = await perf_conn.fetchval(
-        f"SELECT COALESCE(sum(s.row_count), 0)::bigint FROM {S}_term t "
-        f"JOIN {S}_rdf_stats s ON s.object_uuid = t.term_uuid "
+        f"SELECT COALESCE(sum(s.row_count), 0)::bigint FROM {space_prefix(S)}_term t "
+        f"JOIN {space_prefix(S)}_rdf_stats s ON s.object_uuid = t.term_uuid "
         f" AND s.predicate_uuid = $1 "
         f"WHERE t.term_text = ANY($2::text[])", tag_pred, pair)
 
@@ -275,8 +276,8 @@ async def test_the_fixture_has_hub_structure(perf_conn):
     top_out = await perf_conn.fetchval(
         f"SELECT max(n) FROM ("
         f"  SELECT count(DISTINCT b.entity_uuid) n"
-        f"  FROM {fx.space}_frame_slot a"
-        f"  JOIN {fx.space}_frame_slot b"
+        f"  FROM {space_prefix(fx.space)}_frame_slot a"
+        f"  JOIN {space_prefix(fx.space)}_frame_slot b"
         f"    ON b.frame_uuid = a.frame_uuid"
         f"   AND b.context_uuid = a.context_uuid"
         f"   AND b.entity_uuid IS DISTINCT FROM a.entity_uuid"

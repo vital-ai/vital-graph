@@ -34,6 +34,7 @@ import time
 import pytest
 
 from .conftest import skip_no_pg, space_exists
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -49,7 +50,7 @@ async def test_the_frame_slot_sync_does_not_degrade_after_five_calls(perf_conn):
         pytest.skip(f"space {SPACE} not loaded")
 
     frames = [r["frame_uuid"] for r in await perf_conn.fetch(
-        f"SELECT frame_uuid FROM {SPACE}_frame_slot LIMIT 5")]
+        f"SELECT frame_uuid FROM {space_prefix(SPACE)}_frame_slot LIMIT 5")]
     assert frames, "fixture has no frames to sync"
 
     times = []

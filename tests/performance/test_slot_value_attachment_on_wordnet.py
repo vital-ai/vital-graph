@@ -29,6 +29,7 @@ import os
 import pytest
 
 from .conftest import skip_no_pg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -45,22 +46,22 @@ DEST = "urn:hasDestinationEntity"
 
 GROUND_TRUTH_SQL = f"""
 SELECT count(DISTINCT val.object_uuid)
-FROM {SPACE}_rdf_quad ft
-JOIN {SPACE}_term pft ON pft.term_uuid = ft.predicate_uuid
+FROM {space_prefix(SPACE)}_rdf_quad ft
+JOIN {space_prefix(SPACE)}_term pft ON pft.term_uuid = ft.predicate_uuid
  AND pft.term_text = '{HALEY}hasKGFrameType'
-JOIN {SPACE}_term oft ON oft.term_uuid = ft.object_uuid AND oft.term_text = $1
-JOIN {SPACE}_rdf_quad es ON es.object_uuid = ft.subject_uuid
-JOIN {SPACE}_term pes ON pes.term_uuid = es.predicate_uuid
+JOIN {space_prefix(SPACE)}_term oft ON oft.term_uuid = ft.object_uuid AND oft.term_text = $1
+JOIN {space_prefix(SPACE)}_rdf_quad es ON es.object_uuid = ft.subject_uuid
+JOIN {space_prefix(SPACE)}_term pes ON pes.term_uuid = es.predicate_uuid
  AND pes.term_text = '{CORE}hasEdgeSource'
-JOIN {SPACE}_rdf_quad ed ON ed.subject_uuid = es.subject_uuid
-JOIN {SPACE}_term ped ON ped.term_uuid = ed.predicate_uuid
+JOIN {space_prefix(SPACE)}_rdf_quad ed ON ed.subject_uuid = es.subject_uuid
+JOIN {space_prefix(SPACE)}_term ped ON ped.term_uuid = ed.predicate_uuid
  AND ped.term_text = '{CORE}hasEdgeDestination'
-JOIN {SPACE}_rdf_quad st ON st.subject_uuid = ed.object_uuid
-JOIN {SPACE}_term pst ON pst.term_uuid = st.predicate_uuid
+JOIN {space_prefix(SPACE)}_rdf_quad st ON st.subject_uuid = ed.object_uuid
+JOIN {space_prefix(SPACE)}_term pst ON pst.term_uuid = st.predicate_uuid
  AND pst.term_text = '{HALEY}hasKGSlotType'
-JOIN {SPACE}_term role ON role.term_uuid = st.object_uuid
-JOIN {SPACE}_rdf_quad val ON val.subject_uuid = ed.object_uuid
-JOIN {SPACE}_term pval ON pval.term_uuid = val.predicate_uuid
+JOIN {space_prefix(SPACE)}_term role ON role.term_uuid = st.object_uuid
+JOIN {space_prefix(SPACE)}_rdf_quad val ON val.subject_uuid = ed.object_uuid
+JOIN {space_prefix(SPACE)}_term pval ON pval.term_uuid = val.predicate_uuid
  AND pval.term_text = '{HALEY}hasEntitySlotValue'
 WHERE ($2::text IS NULL OR role.term_text = $2)
 """
@@ -69,7 +70,7 @@ WHERE ($2::text IS NULL OR role.term_text = $2)
 async def _skip_unless_loaded(conn):
     present = await conn.fetchval(
         "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
-        f"{SPACE}_rdf_quad")
+        f"{space_prefix(SPACE)}_rdf_quad")
     if not present:
         pytest.skip(f"{SPACE} is not loaded on this stack")
 

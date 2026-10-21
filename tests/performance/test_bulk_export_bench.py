@@ -26,6 +26,7 @@ import pytest
 import pytest_asyncio
 
 from .conftest import skip_no_pg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -84,7 +85,7 @@ async def test_export_import_round_trip(restore_target, perf_conn, perf_record):
 
     dst, impl = restore_target
     src_quads = await perf_conn.fetchval(
-        f"SELECT count(*) FROM {SOURCE_SPACE}_rdf_quad")
+        f"SELECT count(*) FROM {space_prefix(SOURCE_SPACE)}_rdf_quad")
     if not src_quads:
         pytest.skip(f"{SOURCE_SPACE} holds no quads, so a round-trip measures "
                     f"nothing")
@@ -101,8 +102,8 @@ async def test_export_import_round_trip(restore_target, perf_conn, perf_record):
             t0 = time.perf_counter()
             counts = await import_space(conn, dst, paths)
             import_s = time.perf_counter() - t0
-            restored = await conn.fetchval(f"SELECT count(*) FROM {dst}_rdf_quad")
-            edges = await conn.fetchval(f"SELECT count(*) FROM {dst}_edge")
+            restored = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(dst)}_rdf_quad")
+            edges = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(dst)}_edge")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

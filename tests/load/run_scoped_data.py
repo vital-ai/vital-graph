@@ -25,6 +25,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 @dataclass
@@ -54,10 +55,10 @@ class RunScope:
 
 async def snapshot(conn, scope: RunScope) -> Dict[str, object]:
     """What the space looked like before the run. The basis for verification."""
-    q = await conn.fetchval(f"SELECT count(*) FROM {scope.space_id}_rdf_quad")
+    q = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(scope.space_id)}_rdf_quad")
     try:
         ess = await conn.fetchval(
-            f"SELECT count(*) FROM {scope.space_id}_entity_slot_sort")
+            f"SELECT count(*) FROM {space_prefix(scope.space_id)}_entity_slot_sort")
     except Exception:
         ess = None
     blocks = await conn.fetchval(
@@ -72,7 +73,7 @@ async def resolve_context(conn, scope: RunScope) -> Optional[uuid.UUID]:
     if scope.context_uuid is not None:
         return scope.context_uuid
     row = await conn.fetchval(
-        f"SELECT term_uuid FROM {scope.space_id}_term "
+        f"SELECT term_uuid FROM {space_prefix(scope.space_id)}_term "
         f" WHERE term_text = $1 AND term_type = 'U' LIMIT 1", scope.graph_uri)
     scope.context_uuid = row
     return row
@@ -101,9 +102,9 @@ async def cleanup(conn, scope: RunScope) -> Dict[str, int]:
     except Exception:
         removed["entity_slot_sort"] = -1
 
-    for table, col in ((f"{scope.space_id}_edge", "context_uuid"),
-                       (f"{scope.space_id}_frame_entity", "context_uuid"),
-                       (f"{scope.space_id}_rdf_quad", "context_uuid")):
+    for table, col in ((f"{space_prefix(scope.space_id)}_edge", "context_uuid"),
+                       (f"{space_prefix(scope.space_id)}_frame_entity", "context_uuid"),
+                       (f"{space_prefix(scope.space_id)}_rdf_quad", "context_uuid")):
         try:
             r = await conn.execute(
                 f"DELETE FROM {table} WHERE {col} = $1", ctx)
@@ -155,13 +156,13 @@ async def verify_clean(conn, scope: RunScope) -> List[str]:
     ctx = await resolve_context(conn, scope)
     if ctx is not None:
         left = await conn.fetchval(
-            f"SELECT count(*) FROM {scope.space_id}_rdf_quad "
+            f"SELECT count(*) FROM {space_prefix(scope.space_id)}_rdf_quad "
             f" WHERE context_uuid = $1", ctx)
         if left:
             findings.append(f"{left} quads still in the run's graph")
         try:
             left_e = await conn.fetchval(
-                f"SELECT count(*) FROM {scope.space_id}_entity_slot_sort "
+                f"SELECT count(*) FROM {space_prefix(scope.space_id)}_entity_slot_sort "
                 f" WHERE context_uuid = $1", ctx)
             if left_e:
                 findings.append(
@@ -169,7 +170,7 @@ async def verify_clean(conn, scope: RunScope) -> List[str]:
         except Exception:
             pass
 
-    now_q = await conn.fetchval(f"SELECT count(*) FROM {scope.space_id}_rdf_quad")
+    now_q = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(scope.space_id)}_rdf_quad")
     if before.get("quads") is not None and now_q != before["quads"]:
         scope.before["space_drift"] = now_q - before["quads"]
 

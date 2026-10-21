@@ -31,6 +31,7 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid  # noqa: E402
 from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 HAS_KG_GRAPH_URI = 'http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI'
 VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
@@ -49,6 +50,7 @@ async def _conn(prefix: str, use_ssl: bool):
         database=os.environ[f"{prefix}_DB_NAME"], user=os.environ[f"{prefix}_DB_USER"],
         password=os.environ[f"{prefix}_DB_PASSWORD"], ssl=ctx, timeout=30,
         command_timeout=None)
+    await load_storage_keys(conn)
     await conn.execute("SET default_transaction_read_only = on")
     await conn.execute("SET statement_timeout = '30min'")
     return conn

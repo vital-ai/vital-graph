@@ -19,6 +19,7 @@ import pytest
 from rdflib import BNode, URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -55,8 +56,8 @@ class TestEdgeTableWithBlankNodes:
         await resync_edge_table(pg_conn, test_space)
 
         n = await pg_conn.fetchval(f"""
-            SELECT count(*) FROM {test_space}_edge e
-            JOIN {test_space}_term t ON t.term_uuid = e.dest_node_uuid
+            SELECT count(*) FROM {space_prefix(test_space)}_edge e
+            JOIN {space_prefix(test_space)}_term t ON t.term_uuid = e.dest_node_uuid
             WHERE t.term_type = 'B'
         """)
         # MEASURED, not assumed: the edge table DOES project a blank-node
@@ -96,7 +97,7 @@ class TestFrameSlotWithBlankNodes:
             resync_frame_slot_table)
 
         before = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_frame_slot")
+            f"SELECT count(*) FROM {space_prefix(test_space)}_frame_slot")
         edge = URIRef("urn:test:bnode_derived:edge2")
         await space_impl.add_rdf_quads_batch(test_space, [
             (edge, EDGE_SRC, BNode("bnfe1"), GRAPH),
@@ -104,7 +105,7 @@ class TestFrameSlotWithBlankNodes:
         ])
         await resync_frame_slot_table(pg_conn, test_space)
         after = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_frame_slot")
+            f"SELECT count(*) FROM {space_prefix(test_space)}_frame_slot")
         assert after == before, (
             "a pair of blank-node endpoints produced a frame_slot row; that "
             "table indexes connector frames keyed on entity slots, which a "

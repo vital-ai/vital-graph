@@ -36,6 +36,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import pg_kwargs  # noqa: E402
 from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 _XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
 
@@ -153,6 +154,7 @@ async def main() -> int:
 
     import asyncpg
     conn = await asyncpg.connect(**pg_kwargs())
+    await load_storage_keys(conn)
     try:
         if a.all:
             spaces = [r["table_name"][: -len("_datatype")] for r in await conn.fetch(

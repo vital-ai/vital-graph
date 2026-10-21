@@ -156,6 +156,8 @@ async def main() -> int:
     conn = await asyncpg.connect(host=args.host, port=args.port,
                                  database=args.database, user=args.user,
                                  password=args.password or None)
+    from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+    await load_storage_keys(conn)
     try:
         # BEFORE ANY READ. See `_ensure_admin_tables`.
         if not args.dry_run:

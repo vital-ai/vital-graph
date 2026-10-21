@@ -106,6 +106,7 @@ class TestTheListIsKeptHonest:
         "compile_cache",            # keyed by SPARQL hash, not by space
         "_instance_by_signature",   # keyed by (provider, config)
         "_IN_FLIGHT",               # quiesce CANCELS these; dropping would leak
+        "_KEYS",                    # rename MOVES the entry; see the module
     }
 
     @staticmethod

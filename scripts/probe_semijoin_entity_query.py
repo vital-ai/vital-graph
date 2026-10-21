@@ -151,6 +151,8 @@ async def main() -> int:
         return 2
 
     conn = await asyncpg.connect(DSN, command_timeout=300)
+    from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+    await load_storage_keys(conn)
     try:
         t0 = time.time()
         gen = await generate_sql(cr, SPACE, conn=conn)

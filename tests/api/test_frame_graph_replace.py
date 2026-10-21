@@ -154,7 +154,7 @@ async def test_updating_a_parent_leaves_its_child_alone(vg_client, test_space, t
         parent_uri=parent)
     assert r.is_success, r.error_message
     links = await pg_conn.fetchval(
-        f"SELECT count(*) FROM {test_space}_rdf_quad q "
+        f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad q "
         f"WHERE q.predicate_uuid = vitalgraph_term_uuid($1, 'U') "
         f"AND q.object_uuid = vitalgraph_term_uuid($2, 'U')",
         "http://vital.ai/ontology/vital-core#hasEdgeDestination", child)
@@ -168,7 +168,7 @@ async def test_updating_a_parent_leaves_its_child_alone(vg_client, test_space, t
     assert await _quads(pg_conn, test_space, child), "the parent's update deleted the CHILD frame"
     assert await _value(pg_conn, test_space, cs) == "c", "the parent's update reached the child's slot"
     after = await pg_conn.fetchval(
-        f"SELECT count(*) FROM {test_space}_rdf_quad q "
+        f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad q "
         f"WHERE q.predicate_uuid = vitalgraph_term_uuid($1, 'U') "
         f"AND q.object_uuid = vitalgraph_term_uuid($2, 'U')",
         "http://vital.ai/ontology/vital-core#hasEdgeDestination", child)
@@ -217,7 +217,7 @@ async def test_a_removed_slots_derived_rows_go_with_it(vg_client, test_space, te
         objects=_frame_graph(f, {keep: "k", drop: "d"}))
     assert r.is_success, r.error_message
     await pg_conn.execute(
-        f"INSERT INTO {test_space}_geo (subject_uuid, location, latitude, longitude, context_uuid) "
+        f"INSERT INTO {space_prefix(test_space)}_geo (subject_uuid, location, latitude, longitude, context_uuid) "
         f"VALUES (vitalgraph_term_uuid($1, 'U'), "
         f"ST_SetSRID(ST_MakePoint(-73.98, 40.75), 4326)::geography, 40.75, -73.98, "
         f"vitalgraph_term_uuid($2, 'U'))", drop, test_graph)
@@ -231,7 +231,7 @@ async def test_a_removed_slots_derived_rows_go_with_it(vg_client, test_space, te
     deadline = asyncio.get_running_loop().time() + 15
     while left and asyncio.get_running_loop().time() < deadline:
         left = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_geo "
+            f"SELECT count(*) FROM {space_prefix(test_space)}_geo "
             f"WHERE subject_uuid = vitalgraph_term_uuid($1, 'U')", drop)
         if left:
             await asyncio.sleep(0.25)

@@ -147,6 +147,20 @@ async def test_space(vg_client):
     cr = await vg_client.spaces.create_space(space)
     assert cr.is_success, f"Failed to create test space: {cr.error_message}"
 
+    # The SERVER named the space's objects under a storage key this process
+    # has never seen; tests that query the tables directly build those names
+    # with `space_prefix`, so load the key before any of them run.
+    try:
+        from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+        kc = await asyncpg.connect(host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
+                                   user=PG_USER, password=PG_PASSWORD)
+        try:
+            await load_storage_keys(kc, space_id)
+        finally:
+            await kc.close()
+    except OSError:
+        pass        # no direct database: no test here can build a name either
+
     yield space_id
 
     await vg_client.spaces.delete_space(space_id)

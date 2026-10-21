@@ -112,6 +112,10 @@ def _pop(module_path: str, attr: str) -> Callable[[str], int]:
 #:                              tasks rather than forgetting them; dropping the
 #:                              dict would leak running work
 #:   Redis metric keys          TTL'd, self-healing
+#:   `_KEYS` (space_names)      the storage-key map is not a cache of anything
+#:                              a rename invalidates: `rename_space` MOVES the
+#:                              entry to the new id, and dropping it instead
+#:                              would name the space's objects by its id
 CACHE_INVALIDATORS: List[Tuple[str, Callable[[str], int]]] = [
     ("generator.term/datatype/stats/value_stats", _generator_caches),
     ("count_cache", _count_cache),

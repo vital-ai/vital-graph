@@ -170,7 +170,7 @@ async def test_snapshot_watermark_identifies_post_export_delta(
     async with space_impl.db_impl.connection_pool.acquire() as conn:
         after = await _quad_uuids(conn, src)
         delta = {r["quad_uuid"] for r in await conn.fetch(
-            f"SELECT quad_uuid FROM {src}_rdf_quad "
+            f"SELECT quad_uuid FROM {space_prefix(src)}_rdf_quad "
             f"WHERE NOT pg_visible_in_snapshot(xmin::text::xid8, $1::text::pg_snapshot)",
             snap)}
 
@@ -231,11 +231,11 @@ async def test_export_is_self_consistent_under_concurrent_writes(
         async with conn.transaction():
             await import_space(conn, dst, paths)
         dangling = await conn.fetchval(f"""
-            SELECT count(*) FROM {dst}_rdf_quad q
-            WHERE NOT EXISTS (SELECT 1 FROM {dst}_term WHERE term_uuid = q.subject_uuid)
-               OR NOT EXISTS (SELECT 1 FROM {dst}_term WHERE term_uuid = q.predicate_uuid)
-               OR NOT EXISTS (SELECT 1 FROM {dst}_term WHERE term_uuid = q.object_uuid)
-               OR NOT EXISTS (SELECT 1 FROM {dst}_term WHERE term_uuid = q.context_uuid)
+            SELECT count(*) FROM {space_prefix(dst)}_rdf_quad q
+            WHERE NOT EXISTS (SELECT 1 FROM {space_prefix(dst)}_term WHERE term_uuid = q.subject_uuid)
+               OR NOT EXISTS (SELECT 1 FROM {space_prefix(dst)}_term WHERE term_uuid = q.predicate_uuid)
+               OR NOT EXISTS (SELECT 1 FROM {space_prefix(dst)}_term WHERE term_uuid = q.object_uuid)
+               OR NOT EXISTS (SELECT 1 FROM {space_prefix(dst)}_term WHERE term_uuid = q.context_uuid)
         """)
 
     assert dangling == 0, f"{dangling} exported quads reference unexported terms"
@@ -273,8 +273,8 @@ async def test_import_registers_the_graphs_it_restored(space_impl, two_spaces, t
             "SELECT graph_uri FROM graph WHERE space_id = $1", dst)}
         contexts = {r["term_text"] for r in await conn.fetch(
             f"""SELECT t.term_text
-                FROM (SELECT DISTINCT context_uuid FROM {dst}_rdf_quad) c
-                JOIN {dst}_term t ON t.term_uuid = c.context_uuid""")}
+                FROM (SELECT DISTINCT context_uuid FROM {space_prefix(dst)}_rdf_quad) c
+                JOIN {space_prefix(dst)}_term t ON t.term_uuid = c.context_uuid""")}
 
     assert dst_graphs == src_graphs, (
         f"round-trip lost graph registrations: src={src_graphs} dst={dst_graphs}")

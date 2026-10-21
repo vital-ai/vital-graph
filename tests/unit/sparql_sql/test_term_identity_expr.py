@@ -17,6 +17,7 @@ import re
 import pytest
 
 from vitalgraph.db.sparql_sql.sql_type_generation import term_identity_expr
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 SPACE = "testspace"
 
@@ -39,7 +40,7 @@ class TestTermIdentityExpr:
 
     def test_resolves_datatype_id_from_the_space_datatype_table(self):
         sql = term_identity_expr("ml0", "v0", SPACE)
-        assert f"FROM {SPACE}_datatype dt" in sql
+        assert f"FROM {space_prefix(SPACE)}_datatype dt" in sql
         assert "dt.datatype_uri = ml0.v0__datatype" in sql
 
     def test_unbound_stays_null(self):

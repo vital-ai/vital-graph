@@ -22,6 +22,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -69,13 +70,13 @@ async def _load(pg_conn, sp, tag, n=3, with_b=True, valueless=0):
         quads.append((sl, _SLOT_TYPE, _u(_A), ctx))   # type, but NO value
 
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+        f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
         f"VALUES ($1,$2,$3) ON CONFLICT (term_uuid) DO NOTHING", terms)
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", quads)
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_entity_slot_sort (slot_uuid, context_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_entity_slot_sort (slot_uuid, context_uuid,"
         f" entity_uuid, frame_uuid, entity_type_uuid, frame_type_path,"
         f" slot_type_uuid, value_text) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) "
         f"ON CONFLICT DO NOTHING", rows)
@@ -209,12 +210,12 @@ async def test_the_repair_selects_EXACTLY_the_absent_slots(pg_conn, test_space):
     # (`issues/277`). A valueless slot in the shared space is absent too, and
     # the repair must NOT select it.
     absent = await pg_conn.fetchval(
-        f"SELECT count(*) FROM {test_space}_rdf_quad q "
+        f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad q "
         f" WHERE q.predicate_uuid = $1 "
-        f"   AND NOT EXISTS (SELECT 1 FROM {test_space}_entity_slot_sort e "
+        f"   AND NOT EXISTS (SELECT 1 FROM {space_prefix(test_space)}_entity_slot_sort e "
         f"                    WHERE e.slot_uuid = q.subject_uuid "
         f"                      AND e.context_uuid = q.context_uuid) "
-        f"   AND EXISTS (SELECT 1 FROM {test_space}_rdf_quad v "
+        f"   AND EXISTS (SELECT 1 FROM {space_prefix(test_space)}_rdf_quad v "
         f"                WHERE v.subject_uuid = q.subject_uuid "
         f"                  AND v.predicate_uuid = ANY($2::uuid[]))",
         _SLOT_TYPE, _SLOT_VALUE_PREDS)
@@ -260,7 +261,7 @@ async def test_an_attributable_slot_is_repaired(pg_conn, test_space):
             (uuid.uuid4(), e, frame, ctx, _ENTITY_FRAME_EDGE),
         ]
     await pg_conn.executemany(
-        f"INSERT INTO {test_space}_edge (edge_uuid, source_node_uuid,"
+        f"INSERT INTO {space_prefix(test_space)}_edge (edge_uuid, source_node_uuid,"
         f" dest_node_uuid, context_uuid, edge_type_uuid) "
         f"VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING", edges)
 

@@ -211,8 +211,8 @@ async def test_a_repointed_entity_slot_moves_the_connection_row(
 
     async with pg_pool.acquire() as c:
         targets = {r[0] for r in await c.fetch(
-            f"SELECT t.term_text FROM {test_space}_frame_slot fs "
-            f"JOIN {test_space}_term t ON t.term_uuid = fs.entity_uuid")}
+            f"SELECT t.term_text FROM {space_prefix(test_space)}_frame_slot fs "
+            f"JOIN {space_prefix(test_space)}_term t ON t.term_uuid = fs.entity_uuid")}
     assert f"{EX}z" in targets and f"{EX}y" not in targets, targets
     await _assert_derived_exact(pg_pool, test_space)
 
@@ -261,8 +261,8 @@ async def test_a_value_gaining_a_datatype_is_rewritten(
         "the slot's value changed type but the subject was skipped as unchanged")
     async with pg_pool.acquire() as c:
         dt = await c.fetchval(
-            f"SELECT t.datatype_id FROM {test_space}_rdf_quad q "
-            f"JOIN {test_space}_term t ON t.term_uuid = q.object_uuid "
+            f"SELECT t.datatype_id FROM {space_prefix(test_space)}_rdf_quad q "
+            f"JOIN {space_prefix(test_space)}_term t ON t.term_uuid = q.object_uuid "
             f"WHERE q.subject_uuid = $1 AND q.predicate_uuid = $2",
             _generate_term_uuid(f"{EX}slot_b", 'U'),
             _generate_term_uuid(f"{KG}hasTextSlotValue", 'U'))

@@ -257,16 +257,16 @@ class TestThePlanNoLongerScansTheTable:
         """
         sp = await make_space()
         await pg_conn.execute(
-            f"INSERT INTO {sp}_entity_slot_sort "
+            f"INSERT INTO {space_prefix(sp)}_entity_slot_sort "
             f"(slot_uuid, context_uuid, entity_uuid, frame_uuid) "
             f"SELECT gen_random_uuid(), $1, gen_random_uuid(), gen_random_uuid() "
             f"FROM generate_series(1, 20000)", ctx)
-        await pg_conn.execute(f"ANALYZE {sp}_entity_slot_sort")
+        await pg_conn.execute(f"ANALYZE {space_prefix(sp)}_entity_slot_sort")
 
         touched = [uuid.uuid4() for _ in range(20)]
         dests = [uuid.uuid4() for _ in range(5)]
         plan = "\n".join(r["QUERY PLAN"] for r in await pg_conn.fetch(
-            f"EXPLAIN DELETE FROM {sp}_entity_slot_sort WHERE {_TOUCHED_FILTER}",
+            f"EXPLAIN DELETE FROM {space_prefix(sp)}_entity_slot_sort WHERE {_TOUCHED_FILTER}",
             touched, dests))
 
         assert "Seq Scan" not in plan, plan
@@ -283,15 +283,15 @@ class TestThePlanNoLongerScansTheTable:
         """
         sp = await make_space()
         await pg_conn.execute(
-            f"INSERT INTO {sp}_entity_slot_sort "
+            f"INSERT INTO {space_prefix(sp)}_entity_slot_sort "
             f"(slot_uuid, context_uuid, entity_uuid, frame_uuid) "
             f"SELECT gen_random_uuid(), $1, gen_random_uuid(), gen_random_uuid() "
             f"FROM generate_series(1, 20000)", ctx)
-        await pg_conn.execute(f"ANALYZE {sp}_entity_slot_sort")
+        await pg_conn.execute(f"ANALYZE {space_prefix(sp)}_entity_slot_sort")
 
-        where = _SUBQUERY_FILTER_ORACLE.format(t_edge=f"{sp}_edge")
+        where = _SUBQUERY_FILTER_ORACLE.format(t_edge=f"{space_prefix(sp)}_edge")
         plan = "\n".join(r["QUERY PLAN"] for r in await pg_conn.fetch(
-            f"EXPLAIN DELETE FROM {sp}_entity_slot_sort WHERE {where}",
+            f"EXPLAIN DELETE FROM {space_prefix(sp)}_entity_slot_sort WHERE {where}",
             [uuid.uuid4() for _ in range(20)]))
 
         assert "Seq Scan" in plan, plan

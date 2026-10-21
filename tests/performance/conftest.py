@@ -124,6 +124,11 @@ async def perf_pool():
     pool = await asyncpg.create_pool(
         host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
         user=PG_USER, password=PG_PASSWORD, min_size=1, max_size=4)
+    # The fixture spaces already exist; their object names come from their
+    # storage keys, which this process has to load before naming anything.
+    from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+    async with pool.acquire() as conn:
+        await load_storage_keys(conn)
     yield pool
     await pool.close()
 

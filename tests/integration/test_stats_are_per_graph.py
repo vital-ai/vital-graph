@@ -23,15 +23,16 @@ import pytest
 import pytest_asyncio
 
 from vitalgraph.db.sparql_sql import sync_stats_tables as S
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 async def _insert(conn, sp, quads):
     await conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", quads)
-    await conn.execute(f"ANALYZE {sp}_rdf_quad")
+    await conn.execute(f"ANALYZE {space_prefix(sp)}_rdf_quad")
 
 
 @pytest_asyncio.fixture(loop_scope="session")
@@ -53,7 +54,7 @@ async def two_graph_space(pg_conn, test_space):
     g1, g2 = uuid.uuid4(), uuid.uuid4()
     for gid, uri in ((g1, g1_uri), (g2, g2_uri)):
         await pg_conn.execute(
-            f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+            f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
             f"VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING", gid, uri)
     P0, P1 = uuid.uuid4(), uuid.uuid4()
     shared, only1, only2 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
@@ -86,11 +87,11 @@ async def test_a_single_graph_space_is_unchanged(pg_conn, test_space):
 
     await S.recompute_stats_tables(pg_conn, sp)
 
-    stored = await pg_conn.fetchval(f"SELECT count(*) FROM {sp}_rdf_stats")
+    stored = await pg_conn.fetchval(f"SELECT count(*) FROM {space_prefix(sp)}_rdf_stats")
     # What the OLD, space-wide group key would have produced, computed the old
     # way rather than asserted as a literal.
     space_wide = await pg_conn.fetchval(f"""
-        SELECT count(*) FROM (SELECT 1 FROM {sp}_rdf_quad
+        SELECT count(*) FROM (SELECT 1 FROM {space_prefix(sp)}_rdf_quad
           GROUP BY predicate_uuid, object_uuid
           HAVING count(*) >= {S.STATS_MIN_ROW_COUNT}) x""")
     assert stored == space_wide, (
@@ -98,7 +99,7 @@ async def test_a_single_graph_space_is_unchanged(pg_conn, test_space):
         f"({stored} vs {space_wide}); it must be free where there is only one "
         f"graph to split by")
     assert await pg_conn.fetchval(
-        f"SELECT count(DISTINCT context_uuid) FROM {sp}_rdf_stats") == 1
+        f"SELECT count(DISTINCT context_uuid) FROM {space_prefix(sp)}_rdf_stats") == 1
 
 
 async def test_counts_are_per_graph_and_sum_to_the_space(pg_conn, two_graph_space):
@@ -107,7 +108,7 @@ async def test_counts_are_per_graph_and_sum_to_the_space(pg_conn, two_graph_spac
     await S.recompute_stats_tables(pg_conn, sp)
 
     rows = {r["context_uuid"]: r["row_count"] for r in await pg_conn.fetch(
-        f"SELECT context_uuid, row_count FROM {sp}_rdf_stats "
+        f"SELECT context_uuid, row_count FROM {space_prefix(sp)}_rdf_stats "
         f"WHERE predicate_uuid = $1 AND object_uuid = $2", P0, shared)}
     assert rows == {g1: 30, g2: 5}, (
         f"expected each graph's own count, got {rows} — a space-wide 35 would "
@@ -126,7 +127,7 @@ async def test_a_pair_in_one_graph_is_not_credited_to_the_other(
     await S.recompute_stats_tables(pg_conn, sp)
 
     ctxs = [r["context_uuid"] for r in await pg_conn.fetch(
-        f"SELECT context_uuid FROM {sp}_rdf_stats "
+        f"SELECT context_uuid FROM {space_prefix(sp)}_rdf_stats "
         f"WHERE predicate_uuid = $1 AND object_uuid = $2", P1, only1)]
     assert ctxs == [g1], f"expected a G1 row only, got {ctxs}"
 
@@ -160,7 +161,7 @@ async def test_the_cap_is_fair_per_graph_not_just_per_predicate(pg_conn, test_sp
     await S.recompute_stats_tables(pg_conn, sp, keep_top_n=50)
 
     ctxs = {r["context_uuid"]: r["n"] for r in await pg_conn.fetch(
-        f"SELECT context_uuid, count(*) n FROM {sp}_rdf_stats GROUP BY 1")}
+        f"SELECT context_uuid, count(*) n FROM {space_prefix(sp)}_rdf_stats GROUP BY 1")}
     assert quiet in ctxs, (
         f"the quiet graph got no stored pair at all, so every query scoped to "
         f"it prices this predicate as unknown; got {ctxs}")

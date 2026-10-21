@@ -114,8 +114,8 @@ class TestFrameEntitySync:
 
         # Simulate drift: delete the frame_slot row while the quads remain.
         await pg_conn.execute(
-            f"DELETE FROM {test_space}_frame_slot WHERE frame_uuid IN "
-            f"(SELECT term_uuid FROM {test_space}_term WHERE term_text = $1)",
+            f"DELETE FROM {space_prefix(test_space)}_frame_slot WHERE frame_uuid IN "
+            f"(SELECT term_uuid FROM {space_prefix(test_space)}_term WHERE term_text = $1)",
             str(frame),
         )
         assert await _fe_row(pg_conn, test_space, str(frame)) is None

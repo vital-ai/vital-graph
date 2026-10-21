@@ -20,6 +20,7 @@ import pytest
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 from .conftest import skip_no_pg
 from .harness import assert_plan, node_types
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 # Creates a space and COPYs edge rows into it: a modification, so ingest tier.
 pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, skip_no_pg,
@@ -92,17 +93,17 @@ async def test_edge_hops_are_index_only_both_directions(
             # parent -> child hop
             p1 = await assert_plan(
                 conn,
-                f"SELECT dest_node_uuid FROM {SPACE}_edge WHERE source_node_uuid = $1", src,
-                must_use_index=f"idx_{SPACE}_edge_src_dst",
+                f"SELECT dest_node_uuid FROM {space_prefix(SPACE)}_edge WHERE source_node_uuid = $1", src,
+                must_use_index=f"idx_{space_prefix(SPACE)}_edge_src_dst",
                 index_only=True, require_zero_heap_fetches=False,
-                no_seq_scan_on=[f"{SPACE}_edge"], no_spill=True)
+                no_seq_scan_on=[f"{space_prefix(SPACE)}_edge"], no_spill=True)
             # child -> parent hop
             p2 = await assert_plan(
                 conn,
-                f"SELECT source_node_uuid FROM {SPACE}_edge WHERE dest_node_uuid = $1", dst,
-                must_use_index=f"idx_{SPACE}_edge_dst_src",
+                f"SELECT source_node_uuid FROM {space_prefix(SPACE)}_edge WHERE dest_node_uuid = $1", dst,
+                must_use_index=f"idx_{space_prefix(SPACE)}_edge_dst_src",
                 index_only=True, require_zero_heap_fetches=False,
-                no_seq_scan_on=[f"{SPACE}_edge"], no_spill=True)
+                no_seq_scan_on=[f"{space_prefix(SPACE)}_edge"], no_spill=True)
             perf_record(plan=p1, dataset="synthetic:edges",
                         notes="forward hop (source→dest)")
             print(f"\nedge hops: fwd={node_types(p1)} rev={node_types(p2)}")

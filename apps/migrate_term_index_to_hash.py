@@ -26,6 +26,7 @@ import sys
 
 import asyncpg
 from vitalgraph.db.sparql_sql.space_names import space_prefix
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
 
 
 async def migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool) -> bool:
@@ -90,6 +91,7 @@ async def main():
         host=db_host, port=db_port, database=db_name,
         user=db_user, password=db_pass,
     )
+    await load_storage_keys(conn)
 
     try:
         # Discover all *_term tables → derive space IDs

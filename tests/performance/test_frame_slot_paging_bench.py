@@ -29,6 +29,7 @@ import pytest
 import pytest_asyncio
 
 from .conftest import skip_no_api
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, pytest.mark.slow, skip_no_api,
               pytest.mark.asyncio(loop_scope="session")]
@@ -87,8 +88,8 @@ async def paging_space(perf_client, perf_pool):
     from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
     async with perf_pool.acquire() as conn:
         await recompute_stats_tables(conn, SPACE_ID)
-        await conn.execute(f"ANALYZE {SPACE_ID}_rdf_quad")
-        await conn.execute(f"ANALYZE {SPACE_ID}_term")
+        await conn.execute(f"ANALYZE {space_prefix(SPACE_ID)}_rdf_quad")
+        await conn.execute(f"ANALYZE {space_prefix(SPACE_ID)}_term")
 
     yield SPACE_ID
     try:

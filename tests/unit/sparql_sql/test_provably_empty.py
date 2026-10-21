@@ -20,6 +20,7 @@ from vitalgraph.db.sparql_sql.ir import (
     KIND_FILTER, KIND_PROJECT, KIND_SLICE,
 )
 from vitalgraph.db.sparql_sql.prune_union import query_is_provably_empty
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 SPACE = "test_space"
 
@@ -36,7 +37,7 @@ def _aliases(resolve: bool):
 def _bgp(constraint: str = "") -> PlanV2:
     p = PlanV2(kind=KIND_BGP,
                tables=[TableRef(ref_id="q0", kind="quad",
-                                table_name=f"{SPACE}_rdf_quad", alias="q0")])
+                                table_name=f"{space_prefix(SPACE)}_rdf_quad", alias="q0")])
     if constraint:
         p.constraints.append(constraint)
     return p

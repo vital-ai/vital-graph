@@ -63,7 +63,7 @@ class TestQuadSetSemantics:
             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
             WHERE c.conrelid = $1::regclass AND c.contype = 'p'
             ORDER BY array_position(c.conkey, a.attnum)
-        """, f"{test_space}_rdf_quad")
+        """, f"{space_prefix(test_space)}_rdf_quad")
         cols = [r["attname"] for r in pk]
         assert cols == ["subject_uuid", "predicate_uuid", "object_uuid",
                         "context_uuid"], (

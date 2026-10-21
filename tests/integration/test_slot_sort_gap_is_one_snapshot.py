@@ -22,6 +22,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -48,10 +49,10 @@ async def _seed(pg_conn, sp, tag):
               (slots["entity_elsewhere"], _ENTITY_SLOT_VALUE,
                _u(f"urn:other-space:{tag}:entity:remote"), ctx)]
     await pg_conn.execute(
-        f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) VALUES ($1,$2,'L') "
+        f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) VALUES ($1,$2,'L') "
         f"ON CONFLICT DO NOTHING", val, f"value {tag}")
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid, context_uuid) "
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid, context_uuid) "
         f"VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", quads)
     return slots
 

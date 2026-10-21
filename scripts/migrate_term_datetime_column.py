@@ -50,7 +50,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
-from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix, space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 logger = logging.getLogger("migrate_term_datetime_column")
 
@@ -106,7 +107,7 @@ async def migrate_space(conn, space_id: str, dry_run: bool = True) -> dict:
 
 
 async def spaces_on(conn):
-    return [r["tablename"][: -len("_rdf_quad")] for r in await conn.fetch(
+    return [space_id_for_prefix(r["tablename"][: -len("_rdf_quad")]) for r in await conn.fetch(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' "
         "AND tablename LIKE '%\\_rdf\\_quad' ORDER BY tablename")]
 
@@ -126,6 +127,7 @@ async def main():
     import asyncpg
     conn = await asyncpg.connect(host=a.host, port=a.port, database=a.database,
                                  user=a.user, password=a.password or None)
+    await load_storage_keys(conn)
     try:
         if not await conn.fetchval(
                 "SELECT count(*) FROM pg_proc WHERE proname='vitalgraph_iso_to_utc'"):

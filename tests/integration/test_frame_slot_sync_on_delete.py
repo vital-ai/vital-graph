@@ -232,8 +232,8 @@ class TestFrameSlotSyncOnDelete:
         await _seed_value_frames(space_impl, test_space, 6, "valueslot")
         before = await pg_conn.fetchval(
             f"""
-            SELECT count(*) FROM {test_space}_frame_slot fs
-            JOIN {test_space}_term t ON t.term_uuid = fs.frame_uuid
+            SELECT count(*) FROM {space_prefix(test_space)}_frame_slot fs
+            JOIN {space_prefix(test_space)}_term t ON t.term_uuid = fs.frame_uuid
             WHERE t.term_text LIKE 'urn:test:valueslot:%'
               AND fs.entity_uuid IS NULL""")
         assert before == 6, (
@@ -245,8 +245,8 @@ class TestFrameSlotSyncOnDelete:
 
         after = await pg_conn.fetchval(
             f"""
-            SELECT count(*) FROM {test_space}_frame_slot fs
-            JOIN {test_space}_term t ON t.term_uuid = fs.frame_uuid
+            SELECT count(*) FROM {space_prefix(test_space)}_frame_slot fs
+            JOIN {space_prefix(test_space)}_term t ON t.term_uuid = fs.frame_uuid
             WHERE t.term_text LIKE 'urn:test:valueslot:%'""")
         assert after == before, (
             f"the sweep removed {before - after} valid value-slot row(s) "
@@ -266,8 +266,8 @@ class TestFrameSlotSyncOnDelete:
 
         left = await pg_conn.fetchval(
             f"""
-            SELECT count(*) FROM {test_space}_frame_slot fe
-            JOIN {test_space}_term t ON t.term_uuid = fe.context_uuid
+            SELECT count(*) FROM {space_prefix(test_space)}_frame_slot fe
+            JOIN {space_prefix(test_space)}_term t ON t.term_uuid = fe.context_uuid
             WHERE t.term_text = $1
             """, str(GRAPH))
         assert left == 0, (
@@ -331,10 +331,10 @@ class TestFrameSlotSyncOnDelete:
         # rather than read off a column named after it (`issues/183`).
         row = await pg_conn.fetchrow(
             f"""
-            SELECT t.term_text AS src FROM {test_space}_frame_slot fe
-            JOIN {test_space}_term t ON t.term_uuid = fe.entity_uuid
-            JOIN {test_space}_term tf ON tf.term_uuid = fe.frame_uuid
-            JOIN {test_space}_term tr ON tr.term_uuid = fe.role_uuid
+            SELECT t.term_text AS src FROM {space_prefix(test_space)}_frame_slot fe
+            JOIN {space_prefix(test_space)}_term t ON t.term_uuid = fe.entity_uuid
+            JOIN {space_prefix(test_space)}_term tf ON tf.term_uuid = fe.frame_uuid
+            JOIN {space_prefix(test_space)}_term tr ON tr.term_uuid = fe.role_uuid
             WHERE tf.term_text = $1 AND tr.term_text = $2
             """, str(frame), str(SOURCE_ENTITY))
         assert row and row["src"] == str(new_entity), (

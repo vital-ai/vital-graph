@@ -108,6 +108,11 @@ async def pg_pool():
         database=PG_DATABASE, user=PG_USER, password=PG_PASSWORD,
         min_size=2, max_size=5,
     )
+    # Spaces that predate the session (`sp_kg_types`) are named by their
+    # storage keys, which this process has to load before naming anything.
+    from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+    async with pool.acquire() as conn:
+        await load_storage_keys(conn)
     yield pool
     await pool.close()
 
@@ -214,6 +219,42 @@ async def test_space(space_manager):
 # ---------------------------------------------------------------------------
 # SparqlSQLSpaceImpl + BackendAdapter fixture (for KG CRUD tests)
 # ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def make_legacy_space(pg_conn):
+    """Factory for a PRE-CUTOVER space: tables named by its id, a `space` row
+    with no storage key — what every database held before the storage-key
+    cutover, and what the temporary id fallback still serves. The behaviour
+    that applies only to such spaces (renames that move objects, prefix
+    shadowing between ids) is tested on these. Dropped at teardown."""
+    from vitalgraph.db.sparql_sql.space_names import forget_storage_key
+    from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+    from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+    made = []
+
+    async def _drop(sid: str) -> None:
+        await load_storage_keys(pg_conn, sid)
+        await SparqlSQLSchema.drop_space(pg_conn, sid)
+        await pg_conn.execute("DELETE FROM space WHERE space_id = $1", sid)
+        forget_storage_key(sid)
+
+    async def _make(space_id: str = None, partition_quads: int = 0) -> str:
+        # Short by default: a legacy space's id is in every object name.
+        space_id = space_id or f"{TEST_SPACE_PREFIX}lg{uuid.uuid4().hex[:8]}"
+        # A fixed name survives an interrupted run; clear it first, as
+        # `make_space` does.
+        await _drop(space_id)
+        await SparqlSQLSchema.create_space(pg_conn, space_id, partition_quads)
+        await pg_conn.execute(
+            "INSERT INTO space (space_id, space_name, update_time) "
+            "VALUES ($1, $1, NOW())", space_id)
+        made.append(space_id)
+        return space_id
+
+    yield _make
+    for sid in made:
+        await _drop(sid)
+
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def space_impl():

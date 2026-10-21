@@ -21,6 +21,7 @@ import pytest
 from rdflib import Literal, URIRef
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -48,9 +49,9 @@ async def test_one_new_term_bound_on_many_rows_inserts_once(test_space, space_im
         WHERE  {{ GRAPH <{G}> {{ ?s <{P}:same> ?o }} BIND("{token}" AS ?n) }}""")
     assert ok, "an update binding one new literal on five rows failed (duplicate term key)"
     terms = await pg_conn.fetchval(
-        f"SELECT count(*) FROM {test_space}_term WHERE term_text = $1", token)
+        f"SELECT count(*) FROM {space_prefix(test_space)}_term WHERE term_text = $1", token)
     quads = await pg_conn.fetchval(
-        f"SELECT count(*) FROM {test_space}_rdf_quad q JOIN {test_space}_term t "
+        f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad q JOIN {space_prefix(test_space)}_term t "
         f"ON t.term_uuid = q.object_uuid WHERE t.term_text = $1", token)
     assert terms == 1 and quads == 5
 
@@ -68,5 +69,5 @@ async def test_concurrent_updates_minting_the_same_terms_both_succeed(
         return_exceptions=True)
     assert all(r is True for r in results), results
     n = await pg_conn.fetchval(
-        f"SELECT count(*) FROM {test_space}_term WHERE term_text LIKE 'conc-t152-%'")
+        f"SELECT count(*) FROM {space_prefix(test_space)}_term WHERE term_text LIKE 'conc-t152-%'")
     assert n == 20

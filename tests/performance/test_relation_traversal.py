@@ -42,6 +42,7 @@ import time
 import pytest
 
 from .test_kgquery_growth_curve import SIDECAR_URL, skip_no_pg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -61,10 +62,10 @@ CONVERGENT_ROWS_ALARM = 3_000_000
 async def _skip_unless_fixture(conn):
     exists = await conn.fetchval(
         "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
-        f"{SPACE}_rdf_quad")
+        f"{space_prefix(SPACE)}_rdf_quad")
     if not exists:
         pytest.skip(f"{SPACE} not loaded — the only fixture with relation edges")
-    n = await conn.fetchval(f"SELECT count(*) FROM {SPACE}_edge_fanout")
+    n = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(SPACE)}_edge_fanout")
     if not n:
         pytest.skip(f"{SPACE} has no recorded fan-out; run the fan-out sync first")
 
@@ -127,11 +128,11 @@ async def test_the_inverted_relation_is_not_walked_backward(perf_conn, perf_reco
     fanout = await load_edge_fanout(perf_conn, SPACE)
 
     rows = await perf_conn.fetch(
-        f"SELECT term_uuid, term_text FROM {SPACE}_term "
+        f"SELECT term_uuid, term_text FROM {space_prefix(SPACE)}_term "
         f"WHERE term_text LIKE '%rel_type:%'")
     by_name = {r["term_text"].split(":")[-1]: r["term_uuid"] for r in rows}
     edge_uuid = await perf_conn.fetchval(
-        f"SELECT term_uuid FROM {SPACE}_term WHERE term_text = $1", REL_EDGE)
+        f"SELECT term_uuid FROM {space_prefix(SPACE)}_term WHERE term_text = $1", REL_EDGE)
     if "worksFor" not in by_name or edge_uuid is None:
         pytest.skip("fixture does not carry the worksFor relation type")
 

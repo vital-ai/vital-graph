@@ -78,7 +78,7 @@ async def test_sparql_update_with_a_where_clause_is_covered(test_space, space_im
                                     FILTER(?n IN ("w1", "w2")) }} }}""")
     assert ok
     left = await pg_conn.fetchval(
-        f"SELECT count(*) FROM {test_space}_rdf_quad WHERE subject_uuid = ANY($1::uuid[]) "
+        f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad WHERE subject_uuid = ANY($1::uuid[]) "
         f"AND predicate_uuid = $2", [_u(f"{EX}w1"), _u(f"{EX}w2")], _u(f"{CORE}hasName"))
     assert left == 0, "precondition: the update deleted the names"
     assert set(await _queued(pg_conn, test_space)) == {
@@ -92,7 +92,7 @@ async def test_a_rolled_back_write_queues_nothing(test_space, pg_pool):
         tr = conn.transaction()
         await tr.start()
         await conn.execute(
-            f"INSERT INTO {test_space}_rdf_quad (subject_uuid, predicate_uuid, "
+            f"INSERT INTO {space_prefix(test_space)}_rdf_quad (subject_uuid, predicate_uuid, "
             f"object_uuid, context_uuid) VALUES ($1, $1, $1, $2)", uuid.uuid4(), await_ctx)
         assert len(await _queued(conn, test_space)) == 1, "queued inside the write"
         await tr.rollback()
@@ -106,13 +106,13 @@ async def test_a_suppressed_transaction_queues_nothing(test_space, pg_pool):
         async with conn.transaction():
             await suppress(conn)
             await conn.execute(
-                f"INSERT INTO {test_space}_rdf_quad (subject_uuid, predicate_uuid, "
+                f"INSERT INTO {space_prefix(test_space)}_rdf_quad (subject_uuid, predicate_uuid, "
                 f"object_uuid, context_uuid) VALUES ($1, $1, $1, $2)",
                 uuid.uuid4(), _u(GRAPH))
         assert await _queued(conn, test_space) == {}
         # ...and only that transaction: the next write queues again.
         await conn.execute(
-            f"INSERT INTO {test_space}_rdf_quad (subject_uuid, predicate_uuid, "
+            f"INSERT INTO {space_prefix(test_space)}_rdf_quad (subject_uuid, predicate_uuid, "
             f"object_uuid, context_uuid) VALUES ($1, $1, $1, $2)", uuid.uuid4(), _u(GRAPH))
         assert len(await _queued(conn, test_space)) == 1
 

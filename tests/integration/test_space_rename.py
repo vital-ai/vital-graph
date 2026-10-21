@@ -12,6 +12,11 @@ the damage only appears later when `CREATE INDEX IF NOT EXISTS idx_{new}_…`
 builds a second index alongside the first.
 
 Checking the object COUNT alone would not catch it. Checking `mismatched` does.
+
+LEGACY SPACES ONLY. A space keyed under the storage-key scheme renames as a
+catalogue row (see `test_space_rekey.TestARenameOfAKeyedSpace`); the object
+moves tested here apply to spaces still named by their id, which is every
+space until it is re-keyed.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from vitalgraph.db.sparql_sql.space_rename import (
 from vitalgraph.db.sparql_sql.space_rename_enumerate import enumerate_space_objects
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -58,8 +64,8 @@ def _same_length(space_id: str) -> str:
 class TestARoundTrip:
 
     async def test_every_object_moves_and_nothing_is_left_behind(
-            self, pg_conn, make_space):
-        sp = await make_space(_short())
+            self, pg_conn, make_legacy_space):
+        sp = await make_legacy_space(_short())
         new = _same_length(sp)
         before = await enumerate_space_objects(pg_conn, sp)
         assert before["total"] > 100, "a real space should have hundreds of objects"
@@ -79,30 +85,30 @@ class TestARoundTrip:
         finally:
             await rename_space(pg_conn, new, sp)
 
-    async def test_the_data_survives(self, pg_conn, make_space):
+    async def test_the_data_survives(self, pg_conn, make_legacy_space):
         """Catalogue only — no rows are rewritten, so the quads must be untouched
         and queryable under the new name."""
-        sp = await make_space(_short())
+        sp = await make_legacy_space(_short())
         new = _same_length(sp)
         await pg_conn.execute(
-            f"INSERT INTO {sp}_datatype (datatype_uri) VALUES "
+            f"INSERT INTO {space_prefix(sp)}_datatype (datatype_uri) VALUES "
             f"('urn:probe:dt') ON CONFLICT DO NOTHING")
-        before = await pg_conn.fetchval(f"SELECT count(*) FROM {sp}_datatype")
+        before = await pg_conn.fetchval(f"SELECT count(*) FROM {space_prefix(sp)}_datatype")
         try:
             await rename_space(pg_conn, sp, new)
             assert await pg_conn.fetchval(
-                f"SELECT count(*) FROM {new}_datatype") == before
+                f"SELECT count(*) FROM {space_prefix(new)}_datatype") == before
             assert await pg_conn.fetchval(
-                f"SELECT count(*) FROM {new}_datatype "
+                f"SELECT count(*) FROM {space_prefix(new)}_datatype "
                 f"WHERE datatype_uri = 'urn:probe:dt'") == 1
         finally:
             await rename_space(pg_conn, new, sp)
 
     async def test_renaming_back_restores_the_original_names(
-            self, pg_conn, make_space):
+            self, pg_conn, make_legacy_space):
         """Not just cosmetic: it proves the mapping is invertible, i.e. that no
         object acquired a name the rule cannot undo."""
-        sp = await make_space(_short())
+        sp = await make_legacy_space(_short())
         # SAME BYTE LENGTH, deliberately. Five auto-named UNIQUE constraints are
         # already truncated at 63 bytes on every space — the intended
         # `_document_segmentation_config_document_type_uri_segment_method_uri_key`
@@ -120,11 +126,11 @@ class TestARoundTrip:
             assert restored[cls] == original[cls], cls
 
     async def test_a_partitioned_space_moves_its_children(
-            self, pg_conn, make_space):
+            self, pg_conn, make_legacy_space):
         """Renaming a partitioned parent does NOT rename its children — measured.
         So the children need their own ALTER, and this is the test that they get
         one."""
-        sp = await make_space(_short(), partition_quads=4)
+        sp = await make_legacy_space(_short(), partition_quads=4)
         # SAME LENGTH, for the reason in the round-trip test: a partition child's
         # auto-named index (`{space}_entity_prop_sort_p0_context_uuid_…_idx`) is
         # already at 63 bytes, so lengthening the id is REFUSED — correctly.
@@ -143,8 +149,8 @@ class TestARoundTrip:
 
 class TestTheRegistryAndItsChildrenFollow:
 
-    async def test_the_space_row_moves(self, pg_conn, make_space):
-        sp = await make_space(_short())
+    async def test_the_space_row_moves(self, pg_conn, make_legacy_space):
+        sp = await make_legacy_space(_short())
         new = _same_length(sp)
         try:
             await rename_space(pg_conn, sp, new)
@@ -155,8 +161,8 @@ class TestTheRegistryAndItsChildrenFollow:
         finally:
             await rename_space(pg_conn, new, sp)
 
-    async def test_graph_rows_follow_by_cascade(self, pg_conn, make_space):
-        sp = await make_space(_short())
+    async def test_graph_rows_follow_by_cascade(self, pg_conn, make_legacy_space):
+        sp = await make_legacy_space(_short())
         new = _same_length(sp)
         await pg_conn.execute(
             "INSERT INTO graph (space_id, graph_uri, graph_name) VALUES "
@@ -169,14 +175,14 @@ class TestTheRegistryAndItsChildrenFollow:
             await rename_space(pg_conn, new, sp)
 
     async def test_the_graph_uri_is_deliberately_NOT_rewritten(
-            self, pg_conn, make_space):
+            self, pg_conn, make_legacy_space):
         """`issues/232` decided this explicitly. The URI is stored as a term whose
         uuid derives from its TEXT, so rewriting it would change every
         `context_uuid` in the largest tables in the space — a full data rewrite,
         not a catalogue operation. A renamed space legitimately holds a graph named
         for its old id, and this test exists so nobody 'fixes' that later without
         reading why."""
-        sp = await make_space(_short())
+        sp = await make_legacy_space(_short())
         new = _same_length(sp)
         await pg_conn.execute(
             "INSERT INTO graph (space_id, graph_uri, graph_name) VALUES "
@@ -193,16 +199,16 @@ class TestTheRegistryAndItsChildrenFollow:
 class TestWhatItRefuses:
     """Every refusal must happen before anything is changed."""
 
-    async def test_an_over_long_new_id(self, pg_conn, make_space):
+    async def test_an_over_long_new_id(self, pg_conn, make_legacy_space):
         from vitalgraph.db.sparql_sql.sparql_sql_schema import max_space_id_bytes
-        sp = await make_space(_short())
+        sp = await make_legacy_space(_short())
         with pytest.raises(SpaceRenameRefused, match="ceiling"):
             await rename_space(pg_conn, sp, "a" * (max_space_id_bytes() + 1))
         assert (await enumerate_space_objects(pg_conn, sp))["total"] > 0
 
-    async def test_a_new_id_that_already_exists(self, pg_conn, make_space):
-        a = await make_space(_short())
-        b = await make_space(_short())
+    async def test_a_new_id_that_already_exists(self, pg_conn, make_legacy_space):
+        a = await make_legacy_space(_short())
+        b = await make_legacy_space(_short())
         with pytest.raises(SpaceRenameRefused, match="already exists"):
             await rename_space(pg_conn, a, b)
 
@@ -210,18 +216,18 @@ class TestWhatItRefuses:
         with pytest.raises(SpaceRenameRefused, match="no space"):
             await rename_space(pg_conn, "inttest_not_a_space_at_all", "whatever")
 
-    async def test_a_new_id_that_shadows_another_space(self, pg_conn, make_space):
+    async def test_a_new_id_that_shadows_another_space(self, pg_conn, make_legacy_space):
         """The `data` / `data_orig` hazard, refused at the source. Renaming INTO a
         prefix relationship makes every later audit, orphan sweep and drop unable
         to tell the two spaces apart."""
-        sp = await make_space(_short())
-        await make_space("inttest_shadowtarget_child")
+        sp = await make_legacy_space(_short())
+        await make_legacy_space("inttest_shadowtarget_child")
         with pytest.raises(SpaceRenameRefused, match="shadow"):
             await rename_space(pg_conn, sp, "inttest_shadowtarget")
 
     async def test_a_new_id_that_is_not_a_bare_identifier(
-            self, pg_conn, make_space):
-        sp = await make_space(_short())
+            self, pg_conn, make_legacy_space):
+        sp = await make_legacy_space(_short())
         for bad in ('has space', 'Has-Caps', 'quote"d', '1leading'):
             with pytest.raises(SpaceRenameRefused, match="identifier"):
                 await rename_space(pg_conn, sp, bad)
@@ -236,8 +242,8 @@ class TestWhatItRefuses:
 class TestDryRun:
 
     async def test_it_changes_nothing_and_returns_the_plan(
-            self, pg_conn, make_space):
-        sp = await make_space(_short())
+            self, pg_conn, make_legacy_space):
+        sp = await make_legacy_space(_short())
         before = await enumerate_space_objects(pg_conn, sp)
         target = _same_length(sp)
         report = await rename_space(pg_conn, sp, target, dry_run=True)
@@ -251,11 +257,11 @@ class TestDryRun:
         assert (await enumerate_space_objects(pg_conn, target))["total"] == 0
 
     async def test_constraints_are_planned_before_indexes(
-            self, pg_conn, make_space):
+            self, pg_conn, make_legacy_space):
         """Renaming a PK/UNIQUE constraint also renames its backing index, so an
         index pass that ran first would later name an index that no longer
         exists. The order is load-bearing, not stylistic."""
-        sp = await make_space(_short())
+        sp = await make_legacy_space(_short())
         plan = await plan_rename(pg_conn, sp, _same_length(sp))
         kinds = [k for k, _ in plan]
         assert kinds.index("constraint") < kinds.index("index")
@@ -263,10 +269,10 @@ class TestDryRun:
         assert kinds[-2:] == ["registry", "process"]
 
     async def test_no_constraint_backed_index_is_renamed_twice(
-            self, pg_conn, make_space):
+            self, pg_conn, make_legacy_space):
         """The concrete consequence of that order: a name moved by its constraint
         must not also appear in an ALTER INDEX."""
-        sp = await make_space(_short())
+        sp = await make_legacy_space(_short())
         plan = await plan_rename(pg_conn, sp, _same_length(sp))
         renamed_by_constraint = {
             s.split("RENAME CONSTRAINT ")[1].split(" TO ")[0].strip('"')
@@ -290,33 +296,33 @@ class TestItRefusesToReTruncate:
     renames that make it WORSE is the whole available remedy.
     """
 
-    async def test_a_length_changing_rename_is_refused(self, pg_conn, make_space):
-        sp = await make_space(_short())
+    async def test_a_length_changing_rename_is_refused(self, pg_conn, make_legacy_space):
+        sp = await make_legacy_space(_short())
         with pytest.raises(SpaceRenameRefused, match="already at the"):
             await rename_space(pg_conn, sp, f"{sp}_longer")
         assert (await enumerate_space_objects(pg_conn, sp))["total"] > 0
 
-    async def test_shortening_is_refused_too(self, pg_conn, make_space):
+    async def test_shortening_is_refused_too(self, pg_conn, make_legacy_space):
         """Shortening is the USE CASE — rename exists to fix an over-long id — so
         this refusal is the expensive one, and it is deliberate. The opt-in below
         is how you take it anyway."""
-        sp = await make_space(_short())
+        sp = await make_legacy_space(_short())
         with pytest.raises(SpaceRenameRefused, match="already at the"):
             await rename_space(pg_conn, sp, sp[:-2])
 
     async def test_the_message_names_the_same_length_way_out(
-            self, pg_conn, make_space):
-        sp = await make_space(_short())
+            self, pg_conn, make_legacy_space):
+        sp = await make_legacy_space(_short())
         with pytest.raises(SpaceRenameRefused) as exc:
             await rename_space(pg_conn, sp, f"{sp}_longer")
         assert "same byte length" in str(exc.value)
         assert "allow_retruncation" in str(exc.value)
 
-    async def test_the_opt_in_lets_a_SHORTENING_through(self, pg_conn, make_space):
+    async def test_the_opt_in_lets_a_SHORTENING_through(self, pg_conn, make_legacy_space):
         """An explicit acceptance of the loss, not a default — and it only helps
         when SHORTENING. Lengthening stays blocked by the 63-byte check, because
         the mapped name would not fit at all rather than merely re-truncate."""
-        sp = await make_space(_short())
+        sp = await make_legacy_space(_short())
         new = sp[:-2]
         try:
             report = await rename_space(pg_conn, sp, new,
@@ -328,16 +334,16 @@ class TestItRefusesToReTruncate:
             await rename_space(pg_conn, new, sp, allow_retruncation=True)
 
     async def test_lengthening_stays_blocked_even_with_the_opt_in(
-            self, pg_conn, make_space):
+            self, pg_conn, make_legacy_space):
         """Two different guards, and only one is opt-outable: re-truncation is a
         loss you can accept, a name that does not fit is not."""
-        sp = await make_space(_short())
+        sp = await make_legacy_space(_short())
         with pytest.raises(SpaceRenameRefused, match="would exceed"):
             await rename_space(pg_conn, sp, f"{sp}_x",
                                allow_retruncation=True)
 
-    async def test_a_same_length_rename_is_unaffected(self, pg_conn, make_space):
-        sp = await make_space(_short())
+    async def test_a_same_length_rename_is_unaffected(self, pg_conn, make_legacy_space):
+        sp = await make_legacy_space(_short())
         new = _same_length(sp)
         try:
             await rename_space(pg_conn, sp, new)

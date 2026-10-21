@@ -44,7 +44,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 from devtools.reserved_spaces import (  # noqa: E402
     UNREGISTERED_BY_DESIGN, is_unregistered_by_design)
-from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix, space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 def global_tables() -> set[str]:
     """Tables belonging to the GLOBAL registries, not to any space.
@@ -104,6 +105,9 @@ def per_space_suffixes() -> list[str]:
 
 
 async def survey(conn):
+    # PREFIXES, not space ids: a keyed space's tables are `vgs_<key>_…`, and its
+    # id appears in no table name. Everything below compares names to prefixes
+    # and maps a prefix to its space only through `space_id_for_prefix`.
     live = {r["s"] for r in await conn.fetch(
         "SELECT replace(tablename, '_rdf_quad', '') AS s FROM pg_tables "
         "WHERE schemaname='public' AND tablename LIKE '%\\_rdf\\_quad'")}
@@ -132,18 +136,14 @@ async def survey(conn):
                 orphan_tables.append(name)
                 break
 
+    registered = {r["space_id"] for r in await conn.fetch(
+        "SELECT space_id FROM space")}
     orphan_spaces = []
     reserved = []
-    for r in await conn.fetch(
-            """
-            SELECT replace(t.tablename, '_rdf_quad', '') AS s
-            FROM pg_tables t
-            WHERE t.schemaname = 'public' AND t.tablename LIKE '%\\_rdf\\_quad'
-              AND NOT EXISTS (SELECT 1 FROM space sp
-                              WHERE sp.space_id = replace(t.tablename, '_rdf_quad', ''))
-            ORDER BY 1
-            """):
-        sid = r["s"]
+    for prefix in sorted(live):
+        sid = space_id_for_prefix(prefix)
+        if sid in registered:
+            continue
         if is_unregistered_by_design(sid):
             # A fixture that has tables and no registry row ON PURPOSE. It also
             # holds zero quads between runs, which is this function's drop
@@ -151,19 +151,13 @@ async def survey(conn):
             # conformance suite's space. See devtools/reserved_spaces.py.
             reserved.append(sid)
             continue
-        quads = await conn.fetchval(f'SELECT count(*) FROM "{space_prefix(sid)}_rdf_quad"')
+        quads = await conn.fetchval(f'SELECT count(*) FROM "{prefix}_rdf_quad"')
         n = await conn.fetchval(
             "SELECT count(*) FROM pg_tables WHERE schemaname='public' "
-            "AND tablename LIKE $1", f"{space_prefix(sid)}\\_%")
+            "AND tablename LIKE $1", prefix.replace("_", "\\_") + "\\_%")
         orphan_spaces.append({"space": sid, "quads": quads, "tables": n})
 
-    stale_rows = [r["space_id"] for r in await conn.fetch(
-        """
-        SELECT sp.space_id FROM space sp
-        WHERE NOT EXISTS (SELECT 1 FROM pg_tables t WHERE t.schemaname='public'
-                          AND t.tablename = sp.space_id || '_rdf_quad')
-        ORDER BY sp.space_id
-        """)]
+    stale_rows = sorted(sid for sid in registered if space_prefix(sid) not in live)
     return orphan_tables, orphan_spaces, stale_rows, reserved
 
 
@@ -182,6 +176,7 @@ async def main():
     import asyncpg
     conn = await asyncpg.connect(host=a.host, port=a.port, database=a.database,
                                  user=a.user, password=a.password or None)
+    await load_storage_keys(conn)
     try:
         total = await conn.fetchval(
             "SELECT count(*) FROM pg_tables WHERE schemaname='public'")

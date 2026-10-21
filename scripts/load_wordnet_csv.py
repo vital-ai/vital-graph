@@ -43,6 +43,7 @@ import psycopg
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import pg_kwargs  # noqa: E402
 from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 BLOCK = 1024 * 1024  # 1MB chunks — the block size the convert script uses
 
@@ -124,6 +125,14 @@ async def copy_file(cur, sql: str, path: str) -> float:
 async def run(space: str, quads_csv: str, terms_csv: str,
               truncate: bool, keep_indexes: bool,
               skip_resync: bool = False) -> int:
+    # The names below come from the space's storage key; load it first. The
+    # loader's own connection is psycopg, so this takes a short asyncpg one.
+    import asyncpg
+    kc = await asyncpg.connect(**pg_env())
+    try:
+        await load_storage_keys(kc)
+    finally:
+        await kc.close()
     term_tbl = f"{space_prefix(space)}_term"
     quad_tbl = f"{space_prefix(space)}_rdf_quad"
     stage_tbl = f"stage_{space_prefix(space)}_quads"
@@ -285,6 +294,7 @@ async def resync_aux(space: str) -> None:
 
     t0 = time.time()
     conn = await asyncpg.connect(**pg_env())
+    await load_storage_keys(conn)
     try:
         counts = await resync_all_auxiliary_tables(conn, space)
     finally:

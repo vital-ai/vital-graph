@@ -29,6 +29,7 @@ import uuid
 import pytest
 
 from vitalgraph.db.sparql_sql.fast_slot_sort import can_serve
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -98,17 +99,17 @@ async def test_the_filter_is_actually_applied(pg_conn, test_space):
         e = _term_uuid(e_uri)
         for tid, txt in ((e, e_uri),):
             await pg_conn.execute(
-                f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+                f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
                 f"VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING", tid, txt)
         rows += [(uuid.uuid4(), ctx, e, uuid.uuid4(), ent_t, fpath, a, a_val),
                  (uuid.uuid4(), ctx, e, uuid.uuid4(), ent_t, fpath, b, f"s{i}")]
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_entity_slot_sort (slot_uuid, context_uuid, entity_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_entity_slot_sort (slot_uuid, context_uuid, entity_uuid,"
         f" frame_uuid, entity_type_uuid, frame_type_path, slot_type_uuid, value_text)"
         f" VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING", rows)
 
     await pg_conn.execute(
-        f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+        f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
         f"VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING", ctx, graph)
 
     filtered = _criteria(with_filter=True)

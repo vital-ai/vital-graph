@@ -748,11 +748,21 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def create_space_storage(self, space_id: str,
                                    partition_quads: int = 0) -> bool:
+        """Create the space's objects, named under a newly allocated key.
+
+        The key is registered in this process BEFORE any DDL, because every
+        name the schema generates comes from `space_prefix`. The row that
+        records the key is written afterwards by `create_space_metadata`.
+        """
+        from .space_names import forget_storage_key, register_storage_key
+        from .space_storage_key import allocate_storage_key
         try:
             async with self._db._pool.acquire() as conn:
+                register_storage_key(space_id, await allocate_storage_key(conn))
                 await SparqlSQLSchema.create_space(conn, space_id, partition_quads)
             return True
         except Exception as e:
+            forget_storage_key(space_id)
             logger.error("create_space_storage(%s) failed: %s", space_id, e)
             return False
 
@@ -768,6 +778,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 await conn.execute(
                     "DELETE FROM space WHERE space_id = $1", space_id
                 )
+            from .space_names import forget_storage_key
+            forget_storage_key(space_id)
             return True
         except Exception as e:
             logger.error("delete_space_storage(%s) failed: %s", space_id, e)
@@ -782,13 +794,21 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return False
 
     async def get_space_metadata(self, space_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch a single space row from the space table, or None if not found."""
+        """Fetch a single space row from the space table, or None if not found.
+
+        Also brings the space's storage key into this process's key map, since
+        a space loaded here may have been created or re-keyed elsewhere.
+        """
         try:
             rows = await self._db.execute_query(
                 "SELECT space_id, space_name, space_description, tenant, update_time "
                 "FROM space WHERE space_id = $1",
                 [space_id],
             )
+            if rows:
+                from .space_storage_key import load_storage_keys
+                async with self._db._pool.acquire() as conn:
+                    await load_storage_keys(conn, space_id)
             return rows[0] if rows else None
         except Exception as e:
             logger.error("get_space_metadata(%s) failed: %s", space_id, e)
@@ -800,6 +820,10 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             results = await self._db.execute_query(
                 "SELECT * FROM space ORDER BY space_id"
             )
+            # Every caller that lists spaces is about to name their objects.
+            from .space_storage_key import load_storage_keys
+            async with self._db._pool.acquire() as conn:
+                await load_storage_keys(conn)
             return results
         except Exception as e:
             logger.error("list_spaces failed: %s", e)
@@ -855,9 +879,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def create_space_metadata(self, space_id: str, metadata: Dict[str, Any]) -> bool:
         try:
+            from .space_names import registered_storage_key
             from .space_storage_key import allocate_storage_key
             async with self._db._pool.acquire() as conn:
-                # A row that already exists keeps its key: a key is never changed.
+                # The row records the key the objects were created under. A
+                # row that already exists here had no objects (creation checks),
+                # so whatever key it held names nothing.
                 await conn.execute(
                     """INSERT INTO space (space_id, space_name, space_description, tenant,
                                           update_time, storage_key)
@@ -867,13 +894,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                            space_description = EXCLUDED.space_description,
                            tenant = EXCLUDED.tenant,
                            update_time = NOW(),
-                           storage_key = COALESCE(space.storage_key,
-                                                  EXCLUDED.storage_key)""",
+                           storage_key = EXCLUDED.storage_key""",
                     space_id,
                     metadata.get('space_name', space_id),
                     metadata.get('space_description', ''),
                     metadata.get('tenant', 'default'),
-                    await allocate_storage_key(conn),
+                    # The key the objects were just created under; a fresh one
+                    # only for a row written without storage (none today).
+                    registered_storage_key(space_id)
+                    or await allocate_storage_key(conn),
                 )
             return True
         except Exception as e:

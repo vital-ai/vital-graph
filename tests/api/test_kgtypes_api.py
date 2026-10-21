@@ -18,6 +18,7 @@ from vitalgraph.model.result_status import OperationStatus
 from ai_haley_kg_domain.model.KGType import KGType
 from ai_haley_kg_domain.model.KGEntityType import KGEntityType
 from ai_haley_kg_domain.model.KGFrameType import KGFrameType
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.api,
@@ -241,12 +242,12 @@ async def search_env(vg_client):
             # look like an environment difference.
             uris = [str(person.URI), str(business.URI), str(restaurant.URI)]
             fts = await _c.fetchval(
-                f"SELECT count(*) FROM {SP_KG_TYPES}_fts_kgtype_default f "
-                f"JOIN {SP_KG_TYPES}_term t ON t.term_uuid = f.subject_uuid "
+                f"SELECT count(*) FROM {space_prefix(SP_KG_TYPES)}_fts_kgtype_default f "
+                f"JOIN {space_prefix(SP_KG_TYPES)}_term t ON t.term_uuid = f.subject_uuid "
                 f"WHERE t.term_text = ANY($1)", uris)
             vec = await _c.fetchval(
-                f"SELECT count(*) FROM {SP_KG_TYPES}_vec_kgtype_default v "
-                f"JOIN {SP_KG_TYPES}_term t ON t.term_uuid = v.subject_uuid "
+                f"SELECT count(*) FROM {space_prefix(SP_KG_TYPES)}_vec_kgtype_default v "
+                f"JOIN {space_prefix(SP_KG_TYPES)}_term t ON t.term_uuid = v.subject_uuid "
                 f"WHERE t.term_text = ANY($1)", uris)
             if fts < 3 or vec < 3:
                 logging.getLogger(__name__).warning(

@@ -31,6 +31,7 @@ from rdflib import BNode, Literal, URIRef
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -76,8 +77,8 @@ class TestBlankNodeGraphRoundTrip:
         await space_impl.add_rdf_quads_batch(
             test_space, [(URIRef("urn:test:bng:s1"), P, Literal("v"), g)])
         row = await pg_conn.fetchrow(
-            f"""SELECT t.term_type FROM {test_space}_rdf_quad q
-                JOIN {test_space}_term t ON t.term_uuid = q.context_uuid
+            f"""SELECT t.term_type FROM {space_prefix(test_space)}_rdf_quad q
+                JOIN {space_prefix(test_space)}_term t ON t.term_uuid = q.context_uuid
                 WHERE t.term_text = 'bng1'""")
         assert row is not None, "the quad did not land in any graph named bng1"
         assert row["term_type"] == "B", (
@@ -100,8 +101,8 @@ class TestBlankNodeGraphRoundTrip:
 
         def _count():
             return pg_conn.fetchval(
-                f"""SELECT count(*) FROM {test_space}_rdf_quad q
-                    JOIN {test_space}_term t ON t.term_uuid = q.context_uuid
+                f"""SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad q
+                    JOIN {space_prefix(test_space)}_term t ON t.term_uuid = q.context_uuid
                     WHERE t.term_text = 'bng2'""")
 
         assert await _count() == 1, "setup failed: the quad is not there"
@@ -135,8 +136,8 @@ class TestBlankNodeGraphRoundTrip:
 
         def _count():
             return pg_conn.fetchval(
-                f"""SELECT count(*) FROM {test_space}_rdf_quad q
-                    JOIN {test_space}_term t ON t.term_uuid = q.context_uuid
+                f"""SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad q
+                    JOIN {space_prefix(test_space)}_term t ON t.term_uuid = q.context_uuid
                     WHERE t.term_text = 'bng3'""")
 
         assert await _count() == 1, "setup failed: the quad is not there"

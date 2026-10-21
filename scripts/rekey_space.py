@@ -12,9 +12,10 @@ THREE MODES
                 back. Times the move on real data and proves it reversible;
                 the space is never visible under its key. Holds ACCESS
                 EXCLUSIVE on every object of the space for the duration.
-  --apply       commit the move. BEFORE THE CUTOVER THIS MAKES THE SPACE
-                UNREACHABLE, because the code still names its objects by id;
-                refused unless --cutover is also given.
+  --apply       commit the move. Every process serving the database must run
+                code that reads storage keys (Stage 3 on), or the space becomes
+                unreachable to it; refused unless --cutover is also given, as
+                the acknowledgement. Stop writers first.
 
 `--reverse --apply` moves a re-keyed space back to its id prefix. The key stays
 recorded.
@@ -39,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 from vitalgraph.db.sparql_sql.space_rekey import rekey_space, round_trip  # noqa: E402
 from vitalgraph.db.sparql_sql.space_rename import SpaceRenameRefused  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 
 async def main() -> int:
@@ -60,10 +62,10 @@ async def main() -> int:
     a = ap.parse_args()
 
     if a.apply and not a.reverse and not a.cutover:
-        print("REFUSED: until the cutover the code names a space's objects by "
-              "its id, so a committed re-key makes the space unreachable. Use "
-              "--round-trip to measure it, or add --cutover if this IS the "
-              "cutover.")
+        print("REFUSED: a committed re-key is reachable only by code that reads "
+              "storage keys. Add --cutover to confirm every process serving this "
+              "database runs it and writers are stopped, or use --round-trip to "
+              "measure without changing anything.")
         return 2
     if a.round_trip and a.reverse:
         print("--round-trip already goes there and back")
@@ -73,6 +75,7 @@ async def main() -> int:
     import asyncpg
     conn = await asyncpg.connect(host=a.host, port=a.port, database=a.database,
                                  user=a.user, password=a.password or None)
+    await load_storage_keys(conn)
     failed = []
     try:
         spaces = ([r["space_id"] for r in await conn.fetch(

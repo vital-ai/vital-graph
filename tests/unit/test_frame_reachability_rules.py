@@ -19,6 +19,7 @@ from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
 from vitalgraph.kg_impl import frame_reachability as R
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 
 def _frame(u):
@@ -93,7 +94,7 @@ class _Conn:
 def no_schema(monkeypatch):
     from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
     monkeypatch.setattr(SparqlSQLSchema, "get_table_names",
-                        staticmethod(lambda sp: {"rdf_quad": f"{sp}_rdf_quad"}))
+                        staticmethod(lambda sp: {"rdf_quad": f"{space_prefix(sp)}_rdf_quad"}))
 
 
 def test_the_refusal_names_every_missing_object_and_loose_slot(no_schema):

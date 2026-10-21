@@ -24,13 +24,14 @@ import uuid
 import pytest
 
 from vitalgraph.db.sparql_sql.sync_edge_fanout import compute_edge_fanout
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 async def _edge(conn, sp, ctx, typed=True):
     await conn.execute(
-        f"INSERT INTO {sp}_edge (edge_uuid, source_node_uuid, dest_node_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_edge (edge_uuid, source_node_uuid, dest_node_uuid,"
         f" context_uuid, edge_type_uuid) VALUES ($1,$2,$3,$4,$5)"
         f" ON CONFLICT DO NOTHING",
         uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), ctx,
@@ -61,12 +62,12 @@ async def test_the_typed_edges_are_still_counted(pg_conn, test_space):
     for _ in range(4):
         await _edge(pg_conn, sp, ctx, typed=True)
     await compute_edge_fanout(pg_conn, sp)
-    n = await pg_conn.fetchval(f"SELECT count(*) FROM {sp}_edge_fanout")
+    n = await pg_conn.fetchval(f"SELECT count(*) FROM {space_prefix(sp)}_edge_fanout")
     assert n > 0, "typed edges produced no fan-out rows at all"
 
     await _edge(pg_conn, sp, ctx, typed=False)
     await compute_edge_fanout(pg_conn, sp)
-    n_after = await pg_conn.fetchval(f"SELECT count(*) FROM {sp}_edge_fanout")
+    n_after = await pg_conn.fetchval(f"SELECT count(*) FROM {space_prefix(sp)}_edge_fanout")
     assert n_after > 0, (
         "adding one untyped edge emptied the fan-out table — the exclusion is "
         "filtering more than it should")
@@ -86,6 +87,6 @@ async def test_no_row_is_written_for_the_untyped_bucket(pg_conn, test_space):
     await _edge(pg_conn, sp, ctx, typed=False)
     await compute_edge_fanout(pg_conn, sp)
     zero = await pg_conn.fetchval(
-        f"SELECT count(*) FROM {sp}_edge_fanout "
+        f"SELECT count(*) FROM {space_prefix(sp)}_edge_fanout "
         f" WHERE edge_type_uuid = '00000000-0000-0000-0000-000000000000'::uuid")
     assert zero == 0, "untyped edges were pooled under a sentinel type"

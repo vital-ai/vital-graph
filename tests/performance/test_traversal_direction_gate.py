@@ -38,6 +38,7 @@ import pytest
 
 from .conftest import skip_no_pg, space_exists
 from .graph_fixtures import HALEY, SKEW, VITAL, kind_uri
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -107,9 +108,9 @@ async def _generate(conn, sparql):
 async def _pair_rows(conn, kind: str) -> int:
     """What `rdf_stats` says the kind-constrained end admits."""
     row = await conn.fetchrow(
-        f"""SELECT s.row_count FROM {SKEW.space}_rdf_stats s
-            JOIN {SKEW.space}_term p ON p.term_uuid = s.predicate_uuid
-            JOIN {SKEW.space}_term o ON o.term_uuid = s.object_uuid
+        f"""SELECT s.row_count FROM {space_prefix(SKEW.space)}_rdf_stats s
+            JOIN {space_prefix(SKEW.space)}_term p ON p.term_uuid = s.predicate_uuid
+            JOIN {space_prefix(SKEW.space)}_term o ON o.term_uuid = s.object_uuid
             WHERE p.term_text = $1 AND o.term_text = $2""",
         f"{HALEY}hasKGEntityType", kind_uri(kind))
     return row["row_count"] if row else None
@@ -124,9 +125,9 @@ class TestTheFixtureCarriesTheSkew:
         await _require(perf_conn)
         manifest = SKEW.manifest()
         rows = await perf_conn.fetch(
-            f"""SELECT count(*) AS n FROM {SKEW.space}_rdf_quad q
-                JOIN {SKEW.space}_term p ON p.term_uuid = q.predicate_uuid
-                JOIN {SKEW.space}_term o ON o.term_uuid = q.object_uuid
+            f"""SELECT count(*) AS n FROM {space_prefix(SKEW.space)}_rdf_quad q
+                JOIN {space_prefix(SKEW.space)}_term p ON p.term_uuid = q.predicate_uuid
+                JOIN {space_prefix(SKEW.space)}_term o ON o.term_uuid = q.object_uuid
                 WHERE p.term_text = $1 AND o.term_text = $2""",
             f"{HALEY}hasKGEntityType", kind_uri(RARE))
         assert rows[0]["n"] == manifest["n_rare_entities"], (
@@ -248,15 +249,15 @@ class TestTheFixtureCanCatchADroppedSlotConstraint:
         rows = await perf_conn.fetch(
             f"""SELECT DISTINCT o.term_text
                 FROM (SELECT DISTINCT frame_uuid
-                          FROM {SKEW.space}_frame_slot) fe
-                JOIN {SKEW.space}_edge e ON e.source_node_uuid = fe.frame_uuid
-                JOIN {SKEW.space}_rdf_quad ty ON ty.subject_uuid = e.dest_node_uuid
-                JOIN {SKEW.space}_term p ON p.term_uuid = ty.predicate_uuid
+                          FROM {space_prefix(SKEW.space)}_frame_slot) fe
+                JOIN {space_prefix(SKEW.space)}_edge e ON e.source_node_uuid = fe.frame_uuid
+                JOIN {space_prefix(SKEW.space)}_rdf_quad ty ON ty.subject_uuid = e.dest_node_uuid
+                JOIN {space_prefix(SKEW.space)}_term p ON p.term_uuid = ty.predicate_uuid
                  AND p.term_text = $1
-                JOIN {SKEW.space}_term o ON o.term_uuid = ty.object_uuid
+                JOIN {space_prefix(SKEW.space)}_term o ON o.term_uuid = ty.object_uuid
                 WHERE o.term_text LIKE '%Slot'
-                  AND EXISTS (SELECT 1 FROM {SKEW.space}_rdf_quad st
-                              JOIN {SKEW.space}_term sp ON sp.term_uuid = st.predicate_uuid
+                  AND EXISTS (SELECT 1 FROM {space_prefix(SKEW.space)}_rdf_quad st
+                              JOIN {space_prefix(SKEW.space)}_term sp ON sp.term_uuid = st.predicate_uuid
                               WHERE st.subject_uuid = ty.subject_uuid
                                 AND sp.term_text = $2)""",
             f"{VITAL}vitaltype", f"{HALEY}hasKGSlotType")
@@ -275,28 +276,28 @@ class TestTheFixtureCanCatchADroppedSlotConstraint:
         await _require(perf_conn)
         scoped = await perf_conn.fetchval(
             f"""SELECT count(*) FROM (SELECT DISTINCT frame_uuid
-                          FROM {SKEW.space}_frame_slot) fe WHERE EXISTS (
-                  SELECT 1 FROM {SKEW.space}_edge e
-                  JOIN {SKEW.space}_rdf_quad st ON st.subject_uuid = e.dest_node_uuid
-                  JOIN {SKEW.space}_term sp ON sp.term_uuid = st.predicate_uuid
+                          FROM {space_prefix(SKEW.space)}_frame_slot) fe WHERE EXISTS (
+                  SELECT 1 FROM {space_prefix(SKEW.space)}_edge e
+                  JOIN {space_prefix(SKEW.space)}_rdf_quad st ON st.subject_uuid = e.dest_node_uuid
+                  JOIN {space_prefix(SKEW.space)}_term sp ON sp.term_uuid = st.predicate_uuid
                    AND sp.term_text = $1
-                  JOIN {SKEW.space}_term so ON so.term_uuid = st.object_uuid
+                  JOIN {space_prefix(SKEW.space)}_term so ON so.term_uuid = st.object_uuid
                    AND so.term_text = 'urn:hasSourceEntity'
-                  JOIN {SKEW.space}_rdf_quad ty ON ty.subject_uuid = e.dest_node_uuid
-                  JOIN {SKEW.space}_term tp ON tp.term_uuid = ty.predicate_uuid
+                  JOIN {space_prefix(SKEW.space)}_rdf_quad ty ON ty.subject_uuid = e.dest_node_uuid
+                  JOIN {space_prefix(SKEW.space)}_term tp ON tp.term_uuid = ty.predicate_uuid
                    AND tp.term_text = $2
-                  JOIN {SKEW.space}_term t2 ON t2.term_uuid = ty.object_uuid
+                  JOIN {space_prefix(SKEW.space)}_term t2 ON t2.term_uuid = ty.object_uuid
                    AND t2.term_text = $3
                   WHERE e.source_node_uuid = fe.frame_uuid)""",
             f"{HALEY}hasKGSlotType", f"{VITAL}vitaltype", f"{HALEY}KGTextSlot")
         unscoped = await perf_conn.fetchval(
             f"""SELECT count(*) FROM (SELECT DISTINCT frame_uuid
-                          FROM {SKEW.space}_frame_slot) fe WHERE EXISTS (
-                  SELECT 1 FROM {SKEW.space}_edge e
-                  JOIN {SKEW.space}_rdf_quad ty ON ty.subject_uuid = e.dest_node_uuid
-                  JOIN {SKEW.space}_term tp ON tp.term_uuid = ty.predicate_uuid
+                          FROM {space_prefix(SKEW.space)}_frame_slot) fe WHERE EXISTS (
+                  SELECT 1 FROM {space_prefix(SKEW.space)}_edge e
+                  JOIN {space_prefix(SKEW.space)}_rdf_quad ty ON ty.subject_uuid = e.dest_node_uuid
+                  JOIN {space_prefix(SKEW.space)}_term tp ON tp.term_uuid = ty.predicate_uuid
                    AND tp.term_text = $1
-                  JOIN {SKEW.space}_term t2 ON t2.term_uuid = ty.object_uuid
+                  JOIN {space_prefix(SKEW.space)}_term t2 ON t2.term_uuid = ty.object_uuid
                    AND t2.term_text = $2
                   WHERE e.source_node_uuid = fe.frame_uuid)""",
             f"{VITAL}vitaltype", f"{HALEY}KGTextSlot")
@@ -358,7 +359,7 @@ class TestASlotTypeConstraintNoLongerKillsTheCollapse:
                 ?ds <{HALEY}hasEntitySlotValue> ?e1 .
                 ?ss a <{HALEY}{cls}> .
             }} }}""")
-        assert f"{SKEW.space}_frame_slot" in gen.sql, (
+        assert f"{space_prefix(SKEW.space)}_frame_slot" in gen.sql, (
             "the rewrite declined again — a slot type constraint is back to "
             "costing the whole collapse (issues/048)")
         assert (await perf_conn.fetch(gen.sql))[0][0] == want
@@ -390,7 +391,7 @@ class TestASlotEdgeTypeConstraintIsAbsorbedToo:
                 ?ds <{HALEY}hasEntitySlotValue> ?e1 .
                 ?se <{VITAL}vitaltype> <{HALEY}{etype}> .
             }} }}""")
-        assert f"{SKEW.space}_frame_slot" in gen.sql, (
+        assert f"{space_prefix(SKEW.space)}_frame_slot" in gen.sql, (
             "the rewrite declined — a slot EDGE type constraint is back to "
             "costing the whole collapse (issues/048)")
         assert (await perf_conn.fetch(gen.sql))[0][0] == want
@@ -414,16 +415,16 @@ class TestTheTautologyProofCanBeMadeToRefuse:
         await _require(perf_conn)
         n = await perf_conn.fetchval(
             f"""SELECT count(*) FROM (
-                  SELECT 1 FROM {SKEW.space}_rdf_quad q
-                  JOIN {SKEW.space}_term p ON p.term_uuid = q.predicate_uuid
+                  SELECT 1 FROM {space_prefix(SKEW.space)}_rdf_quad q
+                  JOIN {space_prefix(SKEW.space)}_term p ON p.term_uuid = q.predicate_uuid
                    AND p.term_text = $1
-                  JOIN {SKEW.space}_term o ON o.term_uuid = q.object_uuid
+                  JOIN {space_prefix(SKEW.space)}_term o ON o.term_uuid = q.object_uuid
                    AND o.term_text IN ('urn:hasSourceEntity','urn:hasDestinationEntity')
                   WHERE NOT EXISTS (
-                    SELECT 1 FROM {SKEW.space}_rdf_quad ty
-                    JOIN {SKEW.space}_term tp ON tp.term_uuid = ty.predicate_uuid
+                    SELECT 1 FROM {space_prefix(SKEW.space)}_rdf_quad ty
+                    JOIN {space_prefix(SKEW.space)}_term tp ON tp.term_uuid = ty.predicate_uuid
                      AND tp.term_text = $2
-                    JOIN {SKEW.space}_term t2 ON t2.term_uuid = ty.object_uuid
+                    JOIN {space_prefix(SKEW.space)}_term t2 ON t2.term_uuid = ty.object_uuid
                      AND t2.term_text = $3
                     WHERE ty.subject_uuid = q.subject_uuid)
                   LIMIT 1) x""",

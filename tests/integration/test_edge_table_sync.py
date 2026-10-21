@@ -146,8 +146,8 @@ class TestEdgeTableSync:
 
         # Simulate drift: delete the edge row while the quads remain.
         await pg_conn.execute(
-            f"DELETE FROM {test_space}_edge WHERE edge_uuid IN "
-            f"(SELECT term_uuid FROM {test_space}_term WHERE term_text = $1)",
+            f"DELETE FROM {space_prefix(test_space)}_edge WHERE edge_uuid IN "
+            f"(SELECT term_uuid FROM {space_prefix(test_space)}_term WHERE term_text = $1)",
             str(edge),
         )
         assert await _edge_row(pg_conn, test_space, str(edge)) is None

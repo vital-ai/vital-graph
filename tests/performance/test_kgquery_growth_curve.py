@@ -70,6 +70,7 @@ import pytest
 from .conftest import skip_no_pg, space_exists
 from .lead_fixtures import SYNTH, DUP, duplicate_anchor_rows, require_usable
 from .harness import assert_plan, explain_json, total_shared_buffers
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -295,7 +296,7 @@ async def test_page_cost_vs_match_count_equality(perf_conn, perf_record, fx, sta
     sql = await _criteria_to_sql(perf_conn, _eq_criteria(state), fx)
     plan = await assert_plan(
         perf_conn, sql,
-        no_seq_scan_on=[f"{fx.space}_rdf_quad"],
+        no_seq_scan_on=[f"{space_prefix(fx.space)}_rdf_quad"],
         no_spill=True,
         # A criterion matching nothing satisfies every upper bound here. The
         # manifest says how many there should be, so require them.

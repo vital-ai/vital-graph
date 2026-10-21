@@ -26,6 +26,7 @@ import pytest_asyncio
 
 from vitalgraph.db.sparql_sql import sync_stats_tables as S
 from vitalgraph.process.analytics_job import AnalyticsJob, _VITALTYPE
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -38,7 +39,7 @@ async def _term(conn, sp, text, ttype="U"):
     the term table's required columns."""
     tid = uuid.uuid4()
     await conn.execute(
-        f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+        f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
         f"VALUES ($1,$2,$3) ON CONFLICT (term_uuid) DO NOTHING", tid, text, ttype)
     return tid
 
@@ -79,9 +80,9 @@ async def _seed(pg_conn, sp):
     quads += [(uuid.uuid4(), pred, b, g1) for _ in range(2)]
     quads += [(uuid.uuid4(), pred, a, g2) for _ in range(3)]
     await pg_conn.executemany(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", quads)
-    await pg_conn.execute(f"ANALYZE {sp}_rdf_quad")
+    await pg_conn.execute(f"ANALYZE {space_prefix(sp)}_rdf_quad")
 
     for uri in (g1_uri, g2_uri):
         await pg_conn.execute(

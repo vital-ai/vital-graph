@@ -265,8 +265,8 @@ class TestUpload:
 
     async def test_the_document_type_is_set(self, env, pg_conn):
         t = await pg_conn.fetchval(
-            f"SELECT t.term_text FROM {env['space']}_rdf_quad q "
-            f"JOIN {env['space']}_term t ON t.term_uuid = q.object_uuid "
+            f"SELECT t.term_text FROM {space_prefix(env['space'])}_rdf_quad q "
+            f"JOIN {space_prefix(env['space'])}_term t ON t.term_uuid = q.object_uuid "
             f"WHERE q.subject_uuid = vitalgraph_term_uuid($1, 'U') "
             f"AND q.predicate_uuid = vitalgraph_term_uuid($2, 'U')",
             env["uris"]["upload"], f"{HALEY}hasKGDocumentType")

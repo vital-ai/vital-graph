@@ -45,6 +45,10 @@ class TestTheIdsAndKeysAreDisjoint:
     def test_a_key_shaped_id_is_refused(self):
         assert "storage key" in key_shaped_id_problem("abcd2345")
 
+    @pytest.mark.parametrize("space_id", ["vgs_abcd2345", "vgs_abcd2345_x", "vgs_"])
+    def test_an_id_in_the_key_namespace_is_refused(self, space_id):
+        assert "reserved" in key_shaped_id_problem(space_id)
+
     @pytest.mark.parametrize("space_id", [
         "prod_kg", "lead_prod", "abcdefg", "abcdefghi", "abcd2341", "sp_kg_types"])
     def test_ordinary_ids_pass(self, space_id):
@@ -98,3 +102,54 @@ class TestPrefixSubstitution:
 
     def test_and_back(self):
         assert _map_prefix("vgs_abcd2345_term", "vgs_abcd2345", "x") == "x_term"
+
+
+@pytest.fixture
+def key_map():
+    """An empty key map for the test, restored afterwards."""
+    from vitalgraph.db.sparql_sql import space_names as sn
+    saved = dict(sn._KEYS), dict(sn._IDS)
+    sn._KEYS.clear()
+    sn._IDS.clear()
+    yield sn
+    sn._KEYS.clear(); sn._KEYS.update(saved[0])
+    sn._IDS.clear(); sn._IDS.update(saved[1])
+
+
+class TestTheKeyMap:
+
+    def test_an_unkeyed_space_is_named_by_its_id(self, key_map):
+        """The temporary fallback, until every space is keyed (Stage 4)."""
+        assert key_map.space_prefix("prod_kg") == "prod_kg"
+
+    def test_a_keyed_space_is_named_by_its_key(self, key_map):
+        key_map.register_storage_key("prod_kg", "abcd2345")
+        assert key_map.space_prefix("prod_kg") == "vgs_abcd2345"
+        assert key_map.space_id_for_prefix("vgs_abcd2345") == "prod_kg"
+
+    def test_forgetting_returns_it_to_its_id(self, key_map):
+        key_map.register_storage_key("prod_kg", "abcd2345")
+        key_map.forget_storage_key("prod_kg")
+        assert key_map.space_prefix("prod_kg") == "prod_kg"
+        assert key_map.space_id_for_prefix("vgs_abcd2345") == "vgs_abcd2345"
+
+    def test_a_rename_moves_the_entry(self, key_map):
+        key_map.register_storage_key("old", "abcd2345")
+        key_map.forget_storage_key("old")
+        key_map.register_storage_key("new", "abcd2345")
+        assert key_map.space_prefix("new") == "vgs_abcd2345"
+        assert key_map.space_prefix("old") == "old"
+
+    def test_one_key_names_one_space(self, key_map):
+        """Re-registering a key under another id takes it from the first."""
+        key_map.register_storage_key("a", "abcd2345")
+        key_map.register_storage_key("b", "abcd2345")
+        assert key_map.space_prefix("a") == "a"
+        assert key_map.space_id_for_prefix("vgs_abcd2345") == "b"
+
+    def test_an_unknown_key_prefix_names_no_space(self, key_map):
+        assert key_map.space_id_for_prefix("vgs_zzzz2222") == "vgs_zzzz2222"
+
+    def test_a_non_key_is_never_registered(self, key_map):
+        with pytest.raises(ValueError):
+            key_map.register_storage_key("prod_kg", "prod_kg")

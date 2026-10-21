@@ -123,7 +123,7 @@ class TestStatsTablesAfterCrud:
         await _refresh(pg_conn, test_space)
 
         stored = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_rdf_stats")
+            f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_stats")
         assert stored > 0, (
             "rdf_stats is empty after an insert, so every assertion in this "
             "file would pass vacuously")
@@ -230,21 +230,21 @@ class TestStatsTablesAfterCrud:
         await _refresh(pg_conn, test_space)
 
         p_uuid, o_uuid = await pg_conn.fetchrow(
-            f"SELECT predicate_uuid, object_uuid FROM {test_space}_rdf_stats "
+            f"SELECT predicate_uuid, object_uuid FROM {space_prefix(test_space)}_rdf_stats "
             f"ORDER BY row_count DESC LIMIT 1")
         assert await pg_conn.fetchval(
-            f"SELECT row_count FROM {test_space}_rdf_stats "
+            f"SELECT row_count FROM {space_prefix(test_space)}_rdf_stats "
             f"WHERE predicate_uuid=$1 AND object_uuid=$2", p_uuid, o_uuid) >= 10
 
         # Empty it, exactly as the prune used to, then keep writing to the pair.
-        await pg_conn.execute(f"TRUNCATE {test_space}_rdf_stats")
+        await pg_conn.execute(f"TRUNCATE {space_prefix(test_space)}_rdf_stats")
         await space_impl.add_rdf_quads_batch(test_space, [
             (URIRef("urn:test:stats:r99"), PRED, Literal("keep"), GRAPH)])
 
         # The write path must not have touched it: absence is the correct state
         # until a recompute runs, and a `1` here would be the old bug exactly.
         assert await pg_conn.fetchval(
-            f"SELECT row_count FROM {test_space}_rdf_stats "
+            f"SELECT row_count FROM {space_prefix(test_space)}_rdf_stats "
             f"WHERE predicate_uuid=$1 AND object_uuid=$2",
             p_uuid, o_uuid) is None, (
             "a write re-created a stats row on its own. rdf_stats has exactly "
@@ -254,10 +254,10 @@ class TestStatsTablesAfterCrud:
         await _refresh(pg_conn, test_space)
 
         stored = await pg_conn.fetchval(
-            f"SELECT row_count FROM {test_space}_rdf_stats "
+            f"SELECT row_count FROM {space_prefix(test_space)}_rdf_stats "
             f"WHERE predicate_uuid=$1 AND object_uuid=$2", p_uuid, o_uuid)
         actual = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_rdf_quad "
+            f"SELECT count(*) FROM {space_prefix(test_space)}_rdf_quad "
             f"WHERE predicate_uuid=$1 AND object_uuid=$2", p_uuid, o_uuid)
         assert stored == actual == 11, (
             f"recompute rebuilt the pair as {stored} against {actual} actual "
@@ -306,13 +306,13 @@ class TestLargePairsSurviveTheRebuild:
         await _refresh(pg_conn, test_space)
 
         pred_uuid = await pg_conn.fetchval(
-            f"SELECT term_uuid FROM {test_space}_term WHERE term_text = $1",
+            f"SELECT term_uuid FROM {space_prefix(test_space)}_term WHERE term_text = $1",
             str(PRED))
         other_uuid = await pg_conn.fetchval(
-            f"SELECT term_uuid FROM {test_space}_term WHERE term_text = $1",
+            f"SELECT term_uuid FROM {space_prefix(test_space)}_term WHERE term_text = $1",
             str(OTHER))
         stored = await pg_conn.fetchval(
-            f"SELECT row_count FROM {test_space}_rdf_stats "
+            f"SELECT row_count FROM {space_prefix(test_space)}_rdf_stats "
             f"WHERE predicate_uuid = $1 AND object_uuid = $2",
             pred_uuid, other_uuid)
         assert stored == 9, (
@@ -326,7 +326,7 @@ class TestLargePairsSurviveTheRebuild:
         await space_impl.add_rdf_quads_batch(
             test_space, [(URIRef("urn:test:s99"), PRED, OTHER, GRAPH)])
         assert 9 == await pg_conn.fetchval(
-            f"SELECT row_count FROM {test_space}_rdf_stats "
+            f"SELECT row_count FROM {space_prefix(test_space)}_rdf_stats "
             f"WHERE predicate_uuid = $1 AND object_uuid = $2",
             pred_uuid, other_uuid), (
             "a write changed a stats row. There is one writer; a delta applied "

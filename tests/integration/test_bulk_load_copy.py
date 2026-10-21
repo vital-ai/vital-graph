@@ -17,6 +17,7 @@ from rdflib import URIRef, Literal
 
 from .conftest import skip_no_infra, TEST_SPACE_PREFIX
 from vitalgraph.db.sparql_sql.bulk_load import REBUILD_MIN_QUADS
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
@@ -66,13 +67,13 @@ async def test_copy_rebuild_matches_executemany(space_impl, two_spaces):
         assert auto_counts[0] == N
 
         # Secondary indexes were rebuilt, not left dropped.
-        for idx in (f"idx_{auto_sid}_quad_po", f"idx_{auto_sid}_term_trgm",
-                    f"idx_{auto_sid}_quad_ctx_pred"):
+        for idx in (f"idx_{space_prefix(auto_sid)}_quad_po", f"idx_{space_prefix(auto_sid)}_term_trgm",
+                    f"idx_{space_prefix(auto_sid)}_quad_ctx_pred"):
             assert await conn.fetchval(
                 "SELECT 1 FROM pg_indexes WHERE indexname = $1", idx), idx
         # ...and the ones the schema no longer builds stay gone (issues/270, 271).
-        for idx in (f"idx_{auto_sid}_quad_pred", f"idx_{auto_sid}_quad_ctx",
-                    f"idx_{auto_sid}_quad_sp"):
+        for idx in (f"idx_{space_prefix(auto_sid)}_quad_pred", f"idx_{space_prefix(auto_sid)}_quad_ctx",
+                    f"idx_{space_prefix(auto_sid)}_quad_sp"):
             assert not await conn.fetchval(
                 "SELECT 1 FROM pg_indexes WHERE indexname = $1", idx), idx
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from .conftest import skip_no_infra
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [
     pytest.mark.integration,
@@ -83,7 +84,7 @@ async def test_every_frame_is_indexed_with_its_resolved_form_type(
     async with pg_pool.acquire() as conn:
         rows = await conn.fetch(
             f"SELECT DISTINCT frame_uri, form_type_uuid "
-            f"FROM {test_space}_frame_prop_sort")
+            f"FROM {space_prefix(test_space)}_frame_prop_sort")
     got = {r["frame_uri"].rsplit("/", 1)[-1]: r["form_type_uuid"] for r in rows}
 
     assert sorted(got) == ["f1", "f2", "f3", "f4", "f5"], (
@@ -181,7 +182,7 @@ async def test_deleting_a_frame_removes_its_rows(test_space, space_impl, pg_pool
 
     async with pg_pool.acquire() as conn:
         names = [r[0].rsplit("/", 1)[-1] for r in await conn.fetch(
-            f"SELECT DISTINCT frame_uri FROM {test_space}_frame_prop_sort")]
+            f"SELECT DISTINCT frame_uri FROM {space_prefix(test_space)}_frame_prop_sort")]
     assert "f2" not in names, f"rows survive the frame they describe: {names}"
 
 
@@ -275,7 +276,7 @@ async def test_seeded_and_unseeded_derive_identical_rows(
 
     async with pg_pool.acquire() as conn:
         subs = [r[0] for r in await conn.fetch(
-            f"SELECT DISTINCT frame_uuid FROM {test_space}_frame_prop_sort")]
+            f"SELECT DISTINCT frame_uuid FROM {space_prefix(test_space)}_frame_prop_sort")]
         assert subs, "no rows to compare"
         cols = ("frame_uuid, property_uuid, value_text, value_num, value_dt, "
                 "value_all, frame_uri, form_type_uuid")

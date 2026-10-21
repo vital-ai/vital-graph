@@ -19,6 +19,7 @@ import pytest
 
 from .conftest import skip_no_pg, space_exists
 from .graph_fixtures import SMALL
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 # DISABLED 2026-09-13 — nothing populates `entity_fanout` any more.
 #
@@ -65,14 +66,14 @@ async def test_the_hub_list_matches_the_real_fanout(perf_conn):
     await _rebuilt(perf_conn, fx.space)
 
     rows = await perf_conn.fetch(
-        f"SELECT entity_uuid, context_uuid, fanout FROM {fx.space}_entity_fanout "
+        f"SELECT entity_uuid, context_uuid, fanout FROM {space_prefix(fx.space)}_entity_fanout "
         f"WHERE direction='forward' ORDER BY fanout DESC LIMIT 20")
     assert rows, "no hubs recorded"
     for r in rows:
         actual = await perf_conn.fetchval(
             f"SELECT count(DISTINCT b.entity_uuid) "
-            f"FROM {fx.space}_frame_slot a "
-            f"JOIN {fx.space}_frame_slot b "
+            f"FROM {space_prefix(fx.space)}_frame_slot a "
+            f"JOIN {space_prefix(fx.space)}_frame_slot b "
             f"  ON b.frame_uuid = a.frame_uuid "
             f" AND b.context_uuid = a.context_uuid "
             f" AND b.entity_uuid IS DISTINCT FROM a.entity_uuid "
@@ -98,7 +99,7 @@ async def test_absence_from_the_list_means_not_a_hub(perf_conn):
     _w, min_fanout, top_n = await _rebuilt(perf_conn, fx.space)
 
     n_hubs = await perf_conn.fetchval(
-        f"SELECT count(*) FROM {fx.space}_entity_fanout WHERE direction='forward'")
+        f"SELECT count(*) FROM {space_prefix(fx.space)}_entity_fanout WHERE direction='forward'")
     if n_hubs >= top_n:
         pytest.skip("list hit the top-N cap, so absence is a cap artefact here")
 
@@ -106,15 +107,15 @@ async def test_absence_from_the_list_means_not_a_hub(perf_conn):
         SELECT COALESCE(max(n), 0) FROM (
             SELECT a.entity_uuid s, a.context_uuid c,
                    count(DISTINCT b.entity_uuid) n
-            FROM {fx.space}_frame_slot a
-            JOIN {fx.space}_frame_slot b
+            FROM {space_prefix(fx.space)}_frame_slot a
+            JOIN {space_prefix(fx.space)}_frame_slot b
               ON b.frame_uuid = a.frame_uuid
              AND b.context_uuid = a.context_uuid
              AND b.entity_uuid IS DISTINCT FROM a.entity_uuid
             WHERE a.entity_uuid IS NOT NULL AND b.entity_uuid IS NOT NULL
             GROUP BY 1, 2) d
         WHERE NOT EXISTS (
-            SELECT 1 FROM {fx.space}_entity_fanout f
+            SELECT 1 FROM {space_prefix(fx.space)}_entity_fanout f
             WHERE f.entity_uuid=d.s AND f.context_uuid=d.c AND f.direction='forward')
     """)
     assert widest_absent < min_fanout, (

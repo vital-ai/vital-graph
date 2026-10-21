@@ -29,6 +29,7 @@ import pytest
 import pytest_asyncio
 
 from vitalgraph.db.sparql_sql import sync_entity_slot_sort as E
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 # `loop_scope="session"` on BOTH the fixture and the tests, or asyncpg raises
 # "attached to a different loop" before any assertion runs — the pool is
@@ -55,19 +56,19 @@ async def typed_space(pg_conn, test_space):
                ("entity", "frame1", "frame2", "slot1", "slot2",
                 "e_ef", "e_cf", "e_s1", "e_s2", "val1", "val2")}
         await pg_conn.executemany(
-            f"INSERT INTO {sp}_edge (edge_uuid, source_node_uuid, dest_node_uuid,"
+            f"INSERT INTO {space_prefix(sp)}_edge (edge_uuid, source_node_uuid, dest_node_uuid,"
             f" context_uuid, edge_type_uuid) VALUES ($1,$2,$3,$4,$5)",
             [(ids["e_ef"], ids["entity"], ids["frame1"], ctx, E._ENTITY_FRAME_EDGE),
              (ids["e_cf"], ids["frame1"], ids["frame2"], ctx, E._CHILD_FRAME_EDGE),
              (ids["e_s1"], ids["frame1"], ids["slot1"], ctx, E._SLOT_EDGE),
              (ids["e_s2"], ids["frame2"], ids["slot2"], ctx, E._SLOT_EDGE)])
         await pg_conn.executemany(
-            f"INSERT INTO {sp}_term (term_uuid, term_text, term_type) "
+            f"INSERT INTO {space_prefix(sp)}_term (term_uuid, term_text, term_type) "
             f"VALUES ($1,$2,'L') ON CONFLICT DO NOTHING",
             [(ids["val1"], "alpha"), (ids["val2"], "beta")])
         vp = E._SLOT_VALUE_PREDS[0]
         await pg_conn.executemany(
-            f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid,"
+            f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid,"
             f" object_uuid, context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
             [(ids["frame1"], E._FRAME_TYPE, uuid.uuid4(), ctx),
              (ids["frame2"], E._FRAME_TYPE, uuid.uuid4(), ctx),
@@ -102,7 +103,7 @@ async def test_p3_batched_equals_full_walk(pg_conn, typed_space):
     assert inserted == 6
 
     got = {(r["slot_uuid"], r["entity_uuid"]) for r in await pg_conn.fetch(
-        f"SELECT slot_uuid, entity_uuid FROM {sp}_entity_slot_sort")}
+        f"SELECT slot_uuid, entity_uuid FROM {space_prefix(sp)}_entity_slot_sort")}
     assert got == reference, "the seeded batch must derive exactly the full walk"
 
 
@@ -111,7 +112,7 @@ async def test_a_nested_slot_survives_the_batch(pg_conn, typed_space):
     sp, etype, _ = typed_space
     await E.backfill_entity_slot_sort_batch(pg_conn, sp, etype, batch_size=100)
     per_entity = await pg_conn.fetch(
-        f"SELECT entity_uuid, count(*) n FROM {sp}_entity_slot_sort GROUP BY 1")
+        f"SELECT entity_uuid, count(*) n FROM {space_prefix(sp)}_entity_slot_sort GROUP BY 1")
     assert per_entity, "nothing derived"
     assert all(r["n"] == 2 for r in per_entity), (
         f"each entity has a depth-1 and a depth-2 slot: {[r['n'] for r in per_entity]}")
@@ -156,7 +157,7 @@ async def test_an_entity_that_derives_nothing_is_reported_not_hidden(
 
     barren = uuid.uuid4()
     await pg_conn.execute(
-        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f"INSERT INTO {space_prefix(sp)}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
         f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
         barren, E._ENTITY_TYPE, etype, uuid.uuid4())
 

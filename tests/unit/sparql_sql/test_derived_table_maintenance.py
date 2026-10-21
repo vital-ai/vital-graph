@@ -41,6 +41,7 @@ import pathlib
 import re
 
 import pytest
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 _ROOT = pathlib.Path(__file__).resolve().parents[3]
 
@@ -576,7 +577,7 @@ def test_geo_config_predicate_defaults_agree_across_all_three_copies():
 
     probe = "\x00SPACE\x00"
     schema_ddl = [s for s in SparqlSQLSchema().create_space_tables_sql(probe)
-                  if f"{probe}_geo_config (" in s][0]
+                  if f"{space_prefix(probe)}_geo_config (" in s][0]
     migration = (pathlib.Path(__file__).resolve().parents[3] / "vitalgraph" / "db"
                  / "migrations" / "migrate_vector_geo_schema.py").read_text()
 

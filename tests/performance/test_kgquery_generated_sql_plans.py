@@ -39,6 +39,7 @@ import pytest
 
 from .conftest import skip_no_pg, space_exists
 from .harness import assert_plan, node_types
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -197,7 +198,7 @@ async def test_kgquery_plan_shape(perf_conn, perf_record, suffix,
 
     plan = await assert_plan(
         perf_conn, sql,
-        no_seq_scan_on=[f"{SPACE_ID}_rdf_quad"],
+        no_seq_scan_on=[f"{space_prefix(SPACE_ID)}_rdf_quad"],
         no_spill=True,
         min_actual_rows=1,
     )

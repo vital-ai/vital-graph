@@ -60,7 +60,7 @@ class TestTheSweepActuallyConsultsIt:
         AND zero quads", and a truncated fixture satisfies both."""
         src = SWEEP.read_text()
         skip = src.index("is_unregistered_by_design")
-        count = src.index('SELECT count(*) FROM "{space_prefix(sid)}_rdf_quad"')
+        count = src.index('SELECT count(*) FROM "{prefix}_rdf_quad"')
         assert skip < count
 
     def test_the_sweep_reports_what_it_skipped(self):

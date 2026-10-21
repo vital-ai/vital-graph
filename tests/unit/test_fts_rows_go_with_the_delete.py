@@ -25,6 +25,7 @@ shape of bug one level down.
 import pytest
 
 from vitalgraph.db.sparql_sql.sync_fts_delete import sync_fts_before_delete
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 SPACE = "sp"
 CTX = "ctx-uuid"
@@ -56,7 +57,7 @@ async def test_every_index_is_cleaned():
     conn = _Conn(["message_content", "document_segments"])
     removed = await sync_fts_before_delete(conn, SPACE, SUBJECTS, CTX)
     tables = [t for t, _ in conn.deletes]
-    assert tables == [f"{SPACE}_fts_message_content", f"{SPACE}_fts_document_segments"]
+    assert tables == [f"{space_prefix(SPACE)}_fts_message_content", f"{space_prefix(SPACE)}_fts_document_segments"]
     assert removed == 14, "counts from both indexes must be summed"
 
 
@@ -82,9 +83,9 @@ async def test_a_missing_data_table_does_not_abort_the_delete():
     not an error at delete time, and must not stop the other indexes or roll
     back a delete whose quads are already gone."""
     conn = _Conn(["never_populated", "message_content"],
-                 fail_on=[f"{SPACE}_fts_never_populated"])
+                 fail_on=[f"{space_prefix(SPACE)}_fts_never_populated"])
     removed = await sync_fts_before_delete(conn, SPACE, SUBJECTS, CTX)
-    assert [t for t, _ in conn.deletes] == [f"{SPACE}_fts_message_content"]
+    assert [t for t, _ in conn.deletes] == [f"{space_prefix(SPACE)}_fts_message_content"]
     assert removed == 7
 
 

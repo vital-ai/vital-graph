@@ -182,7 +182,7 @@ class TestGeoDbVerification:
 
     async def test_geo_config_table_exists(self, pg_conn, geo_env):
         """Verify the geo_config table was created for the space."""
-        table = f"{geo_env['space_id']}_geo_config"
+        table = f"{space_prefix(geo_env['space_id'])}_geo_config"
         exists = await pg_conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
             "WHERE table_schema = 'public' AND table_name = $1)",
@@ -192,7 +192,7 @@ class TestGeoDbVerification:
 
     async def test_geo_data_table_exists(self, pg_conn, geo_env):
         """Verify the geo point data table was created."""
-        table = f"{geo_env['space_id']}_geo"
+        table = f"{space_prefix(geo_env['space_id'])}_geo"
         exists = await pg_conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
             "WHERE table_schema = 'public' AND table_name = $1)",
@@ -212,7 +212,7 @@ class TestGeoDbVerification:
 
     async def test_geo_table_column_types(self, pg_conn, geo_env):
         """Verify geo table columns have correct data types."""
-        table = f"{geo_env['space_id']}_geo"
+        table = f"{space_prefix(geo_env['space_id'])}_geo"
         expected_types = {
             "latitude": "double precision",
             "longitude": "double precision",
@@ -247,7 +247,7 @@ class TestGeoDbVerification:
 
     async def test_geo_config_predicate_storage(self, pg_conn, geo_env):
         """Verify geo_config table stores predicate URIs correctly."""
-        table = f"{geo_env['space_id']}_geo_config"
+        table = f"{space_prefix(geo_env['space_id'])}_geo_config"
         exists = await pg_conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
             "WHERE table_schema = 'public' AND table_name = $1)",

@@ -39,6 +39,7 @@ import pytest
 from .conftest import skip_no_pg
 from .lead_fixtures import SYNTH, require_usable
 from .test_kgquery_growth_curve import SIDECAR_URL
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, pytest.mark.slow, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -94,11 +95,11 @@ async def test_a_path_started_from_a_bound_variable_costs_what_the_walk_costs(pe
     # hardcoded — the fixture is regenerated and URIs must not be assumed.
     row = await perf_conn.fetchrow(f"""
         SELECT te.term_text AS entity, tf.term_text AS frame
-        FROM {fx.space}_edge e
-        JOIN {fx.space}_term et ON et.term_uuid = e.edge_type_uuid
+        FROM {space_prefix(fx.space)}_edge e
+        JOIN {space_prefix(fx.space)}_term et ON et.term_uuid = e.edge_type_uuid
              AND et.term_text = 'http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame'
-        JOIN {fx.space}_term te ON te.term_uuid = e.source_node_uuid
-        JOIN {fx.space}_term tf ON tf.term_uuid = e.dest_node_uuid
+        JOIN {space_prefix(fx.space)}_term te ON te.term_uuid = e.source_node_uuid
+        JOIN {space_prefix(fx.space)}_term tf ON tf.term_uuid = e.dest_node_uuid
         LIMIT 1""")
     if row is None:
         pytest.skip(f"{fx.space} has no entity->frame edges")
@@ -107,10 +108,10 @@ async def test_a_path_started_from_a_bound_variable_costs_what_the_walk_costs(pe
     # How many frames does that entity have? The bound walk starts from all of
     # them, so this is the factor the two sides legitimately differ by.
     n_starts = await perf_conn.fetchval(f"""
-        SELECT count(*) FROM {fx.space}_edge e
-        JOIN {fx.space}_term et ON et.term_uuid = e.edge_type_uuid
+        SELECT count(*) FROM {space_prefix(fx.space)}_edge e
+        JOIN {space_prefix(fx.space)}_term et ON et.term_uuid = e.edge_type_uuid
              AND et.term_text = 'http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame'
-        JOIN {fx.space}_term te ON te.term_uuid = e.source_node_uuid
+        JOIN {space_prefix(fx.space)}_term te ON te.term_uuid = e.source_node_uuid
         WHERE te.term_text = $1""", entity) or 1
 
     pinned_sparql = (f'SELECT ?sub WHERE {{ GRAPH <{fx.graph}> {{ '

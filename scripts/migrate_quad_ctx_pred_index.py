@@ -57,7 +57,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncpg  # noqa: E402
 from devtools.target import dsn  # noqa: E402
-from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_names import space_id_for_prefix, space_prefix  # noqa: E402
+from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
 
 OLD_KEYS = "(context_uuid, predicate_uuid)"
 NEW_COLS = "(context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)"
@@ -72,7 +73,8 @@ async def find_targets(conn, only_space: str | None):
     out = []
     for r in rows:
         idx = r["indexname"]
-        space = idx[len("idx_"):-len("_quad_ctx_pred")] if idx.startswith("idx_") else None
+        space = (space_id_for_prefix(idx[len("idx_"):-len("_quad_ctx_pred")])
+                 if idx.startswith("idx_") else None)
         if not space or (only_space and space != only_space):
             continue
         # Already migrated when object_uuid appears among the key columns, i.e.
@@ -97,7 +99,7 @@ async def find_missing(conn, only_space: str | None):
     out = []
     for r in rows:
         table = r["tablename"]
-        space = table[:-len("_rdf_quad")]
+        space = space_id_for_prefix(table[:-len("_rdf_quad")])
         if only_space and space != only_space:
             continue
         # Exact count: these are one-off provisioning decisions, and a
@@ -141,6 +143,7 @@ async def run(dsn: str, only_space: str | None, dry_run: bool,
               create_missing: bool = False, min_quads: int = 0) -> int:
     # autocommit: CONCURRENTLY cannot run inside a transaction block.
     conn = await asyncpg.connect(dsn)
+    await load_storage_keys(conn)
     try:
         db = await conn.fetchval("SELECT current_database()")
         host = await conn.fetchval("SELECT inet_server_addr()::text")

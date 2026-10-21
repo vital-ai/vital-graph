@@ -37,6 +37,7 @@ import pytest
 
 from .lead_fixtures import SYNTH, require_usable
 from .test_kgquery_growth_curve import SIDECAR_URL, skip_no_pg
+from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 FIXTURES = SYNTH
 
@@ -83,8 +84,8 @@ async def _run(conn, space, sparql):
 async def _a_subject(conn, fx):
     """Any subject URI in the fixture, so the test does not hard-code data."""
     return await conn.fetchval(
-        f"SELECT t.term_text FROM {fx.space}_rdf_quad q "
-        f"JOIN {fx.space}_term t ON t.term_uuid = q.subject_uuid "
+        f"SELECT t.term_text FROM {space_prefix(fx.space)}_rdf_quad q "
+        f"JOIN {space_prefix(fx.space)}_term t ON t.term_uuid = q.subject_uuid "
         f"WHERE t.term_type = 'U' LIMIT 1")
 
 
@@ -136,8 +137,8 @@ async def test_a_longer_values_list_does_not_explode(perf_conn, perf_record, fx)
     if reason:
         pytest.skip(reason)
     subjects = [r["t"] for r in await perf_conn.fetch(
-        f"SELECT t.term_text AS t FROM {fx.space}_rdf_quad q "
-        f"JOIN {fx.space}_term t ON t.term_uuid = q.subject_uuid "
+        f"SELECT t.term_text AS t FROM {space_prefix(fx.space)}_rdf_quad q "
+        f"JOIN {space_prefix(fx.space)}_term t ON t.term_uuid = q.subject_uuid "
         f"WHERE t.term_type = 'U' LIMIT 20")]
     if len(subjects) < 20:
         pytest.skip(f"{fx.label}: fewer than 20 URI subjects available")

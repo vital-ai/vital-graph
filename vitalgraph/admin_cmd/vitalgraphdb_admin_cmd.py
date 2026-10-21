@@ -2106,13 +2106,18 @@ Note: All commands must end with a semicolon (;)
                 # All-or-nothing: space row, DDL and vector/FTS bootstraps
                 # commit together or roll back together.
                 async with conn.transaction():
+                    from vitalgraph.db.sparql_sql.space_names import (
+                        register_storage_key)
                     from vitalgraph.db.sparql_sql.space_storage_key import (
                         allocate_storage_key)
+                    key = await allocate_storage_key(conn)
                     await conn.execute(
                         "INSERT INTO space (space_id, space_name, update_time, "
                         "storage_key) VALUES ($1, $2, NOW(), $3)",
-                        space_id, space_name, await allocate_storage_key(conn)
+                        space_id, space_name, key
                     )
+                    # Before the DDL: every name it generates comes from the key.
+                    register_storage_key(space_id, key)
                     await SparqlSQLSchema.create_space(conn, space_id, strict=True)
 
             print(f"✅ Space '{space_id}' created with per-space tables")
