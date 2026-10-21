@@ -124,6 +124,11 @@ CACHE_INVALIDATORS: List[Tuple[str, Callable[[str], int]]] = [
      _pop("vitalgraph.db.sparql_sql.auto_analyze", "_change_counts")),
     ("auto_analyze._last_analyze_time",
      _pop("vitalgraph.db.sparql_sql.auto_analyze", "_last_analyze_time")),
+    # issues/291: a cached "this space has the rdf_quad trigger" carried to a
+    # renamed or re-created id would skip the post-write enqueue for a space
+    # whose writes no trigger queues.
+    ("index_sync_trigger._CACHE",
+     _pop("vitalgraph.vectorization.index_sync_trigger", "_CACHE")),
     ("maintenance_job._recompute_slot",
      _pop("vitalgraph.process.maintenance_job", "_recompute_slot")),
     # issues/263: a residue's cycle count and its "already tried at this drift"

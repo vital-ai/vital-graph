@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-"""Create the index sync queue on existing spaces (issues/291).
+"""Create the index sync queue AND its trigger on existing spaces (issues/291).
 
-New spaces get `{space}_index_sync_queue` and `idx_{space}_isq_due` from
-`create_space_tables_sql` / `create_space_indexes_sql`. This creates the same
-two objects, from those same definitions, on a space that predates them.
+New spaces get, from the schema's own statements:
 
-Until a space has the table, writes to it are synced the old way, directly in
-a background task (`auto_sync._enqueue_sync` logs that once per space), so the
-order of this script and the deploy does not matter.
+  * `{space}_index_sync_queue` and `idx_{space}_isq_due`;
+  * `{space}_isq_capture()` and the triggers `trg_{space}_isq_ins` /
+    `trg_{space}_isq_del` on `{space}_rdf_quad`, which queue every write's
+    subjects inside the write's transaction (`index_sync_trigger`).
 
-A new, empty table: nothing is locked but the catalog, and nothing is copied.
-Idempotent -- a space that has both objects is skipped.
+This creates whichever are missing on a space that predates them, in ONE
+transaction per space, table before trigger: a trigger without its table would
+fail every write to the space.
+
+Order against the deploy does not matter:
+  * code that predates the trigger still enqueues after each write; with the
+    trigger present that is a duplicate the queue merges;
+  * code with the trigger logic enqueues after a write only for a space
+    WITHOUT the trigger, so an unmigrated space still syncs.
+
+CREATE TRIGGER takes a SHARE ROW EXCLUSIVE lock on `rdf_quad` for an instant:
+it waits for in-flight writes and blocks new ones only while the catalog
+changes. Idempotent -- a space with everything is skipped.
 
 RUN AS THE TABLES' OWNER, which on production is the app role, not the RDS
 master: objects the master creates are unreadable by `vitalgraph_user`.
@@ -38,21 +48,26 @@ from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 logger = logging.getLogger("migrate_index_sync_queue")
 
 
-def statements(space_id: str) -> list:
-    """The table and its index, from the schema's own definitions."""
+def statements(space_id: str, need: list) -> list:
+    """What is missing, from the schema's own definitions, in dependency order."""
     from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+    from vitalgraph.vectorization.index_sync_trigger import create_sql
     schema = SparqlSQLSchema()
     table = f"{space_id}_index_sync_queue"
-    out = [s for s in schema.create_space_tables_sql(space_id)
-           if f"CREATE TABLE IF NOT EXISTS {table} (" in s]
-    out += [s for s in schema.create_space_indexes_sql(space_id)
-            if f"idx_{space_id}_isq_due " in s]
-    if len(out) != 2:
-        raise RuntimeError(f"expected the table and one index for {space_id}, found {len(out)}")
+    out = []
+    if "table" in need:
+        out += [s for s in schema.create_space_tables_sql(space_id)
+                if f"CREATE TABLE IF NOT EXISTS {table} (" in s]
+    if "index" in need:
+        out += [s for s in schema.create_space_indexes_sql(space_id)
+                if f"idx_{space_id}_isq_due " in s]
+    if "trigger" in need:
+        out += create_sql(space_id)
     return out
 
 
 async def missing(conn, space_id: str) -> list:
+    from vitalgraph.vectorization.index_sync_trigger import installed
     out = []
     if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL",
                                f"{space_id}_index_sync_queue"):
@@ -60,6 +75,8 @@ async def missing(conn, space_id: str) -> list:
     if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL",
                                f"idx_{space_id}_isq_due"):
         out.append("index")
+    if not await installed(conn, space_id):
+        out.append("trigger")
     return out
 
 
@@ -94,7 +111,7 @@ async def main() -> int:
             logger.info("%s: create %s", sp, " and ".join(need))
             if a.apply:
                 async with conn.transaction():
-                    for stmt in statements(sp):
+                    for stmt in statements(sp, need):
                         await conn.execute(stmt)
                 done += 1
         logger.info("\n%d of %d space(s) %s", done if a.apply else pending,

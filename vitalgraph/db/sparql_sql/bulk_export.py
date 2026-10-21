@@ -159,6 +159,19 @@ def read_export_manifest(dest_dir: str) -> Dict[str, object]:
 
 async def import_space(conn, space_id: str, paths: Dict[str, str],
                        resync: bool = True) -> Dict[str, int]:
+    """`_import_space` with the index sync trigger off for the restore.
+
+    A restore replaces the whole space; queueing every restored subject for an
+    index sync one by one is not how its indexes are rebuilt (`issues/291`).
+    Some callers own a transaction and some do not, so `suppressed` covers both.
+    """
+    from vitalgraph.vectorization.index_sync_trigger import suppressed
+    async with suppressed(conn):
+        return await _import_space(conn, space_id, paths, resync=resync)
+
+
+async def _import_space(conn, space_id: str, paths: Dict[str, str],
+                        resync: bool = True) -> Dict[str, int]:
     """Restore core tables from binary-COPY files into ``space_id``.
 
     TRUNCATEs the core tables first (a fresh space still has the seeded standard

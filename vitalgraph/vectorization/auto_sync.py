@@ -732,8 +732,18 @@ async def _enqueue_sync(
     subject_uris: List[str],
     graph_uri: str,
     operation: str,
+    rederive: bool = False,
 ) -> None:
     """Queue these subjects for the index sync workers (`issues/291`).
+
+    ON A SPACE WITH THE `rdf_quad` TRIGGER this does nothing unless
+    `rederive`: the trigger already queued every subject the write touched,
+    inside the write's transaction (`index_sync_trigger`). Enqueueing again
+    here would bump the rows' generation, and a bump that lands while a
+    consumer is embedding them costs a second embedding. `rederive=True` is
+    for "re-derive these although their quads did not change" -- a KGType's
+    description, a document type's vectorize default -- which no trigger
+    sees.
 
     A space without `{space}_index_sync_queue` -- not yet migrated
     (`scripts/migrate_index_sync_queue.py`) -- is synced directly, as before,
@@ -749,6 +759,10 @@ async def _enqueue_sync(
     context_uuid = _generate_term_uuid(graph_uri)
     subject_uuids = [_generate_term_uuid(u) for u in subject_uris]
     async with pool.acquire() as conn:
+        if not rederive:
+            from .index_sync_trigger import installed_cached
+            if await installed_cached(conn, space_id):
+                return
         if await q.table_exists(conn, space_id):
             async with conn.transaction():
                 await q.enqueue(conn, space_id, context_uuid, subject_uuids, operation)
@@ -798,6 +812,7 @@ def schedule_sync(
     subject_uris: List[str],
     graph_uri: str,
     operation: Literal["upsert", "delete"] = "upsert",
+    rederive: bool = False,
 ) -> Optional[asyncio.Task]:
     """Queue these subjects for an index sync (non-blocking).
 
@@ -806,6 +821,11 @@ def schedule_sync(
     app process -- do the work, bounded, merged per subject, and retried on
     failure. Awaiting the task means "queued", not "synced"; use
     `wait_until_synced` for the latter.
+
+    After a WRITE this is a no-op on a space with the `rdf_quad` trigger,
+    which queued the write's subjects in its own transaction; it remains the
+    path for a space not yet migrated. Pass `rederive=True` to re-derive
+    subjects whose quads did not change.
 
     Args:
         db_impl: Database implementation with ``connection_pool`` attribute.
@@ -827,7 +847,7 @@ def schedule_sync(
         return None
 
     task = loop.create_task(
-        _enqueue_sync(db_impl, space_id, subject_uris, graph_uri, operation),
+        _enqueue_sync(db_impl, space_id, subject_uris, graph_uri, operation, rederive),
         name=f"auto_sync:{space_id}:{len(subject_uris)}",
     )
 

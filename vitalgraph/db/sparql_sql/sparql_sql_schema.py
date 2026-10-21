@@ -1677,6 +1677,10 @@ class SparqlSQLSchema:
                 PRIMARY KEY (context_uuid, subject_uuid)
             )
         ''')
+        # ...and the trigger that fills it, in each write's own transaction
+        # (`issues/291` step 2, `vectorization/index_sync_trigger.py`).
+        from vitalgraph.vectorization.index_sync_trigger import create_sql as _isq_sql
+        stmts += _isq_sql(space_id)
 
         assert_identifiers_fit(stmts, f"space_id={space_id!r}")
 
@@ -2118,6 +2122,7 @@ class SparqlSQLSchema:
             f"DROP TABLE IF EXISTS {t['search_mapping_property']} CASCADE",
             f"DROP TABLE IF EXISTS {t['search_mapping']} CASCADE",
             f"DROP TABLE IF EXISTS {t['index_sync_queue']} CASCADE",
+            f"DROP FUNCTION IF EXISTS {space_id}_isq_capture() CASCADE",
         ]
 
     def drop_space_indexes_sql(self, space_id: str) -> List[str]:

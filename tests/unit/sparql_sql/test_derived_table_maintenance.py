@@ -68,7 +68,7 @@ MODULES = {
 #     stale.
 #   * `bulk_export.export_space` — COPY OUT only. Reads quads, writes a file.
 #
-# `bulk_export.import_space` IS in the matrix: it COPYs quads back in.
+# `bulk_export._import_space` IS in the matrix: it COPYs quads back in (`import_space` is its wrapper that switches the index sync trigger off, `issues/291`).
 #
 # Membership was established by scanning each module's functions for direct
 # `INSERT INTO`/`DELETE FROM`/`COPY` against `rdf_quad`, not by reading names.
@@ -109,7 +109,7 @@ WRITE_PATHS = [
     ("data_import", "import_vital_block_incremental"),
 
     # Restores a space by COPYing quads back in.
-    ("bulk_export", "import_space"),
+    ("bulk_export", "_import_space"),
 ]
 
 # derived table -> (markers that prove a path maintains it, why it matters).
@@ -243,9 +243,9 @@ _RESTORE_DEFERS = (
 )
 
 EXEMPT: dict[tuple[str, str], str] = {
-    (("bulk_export", "import_space"), "entity_slot_sort"): _RESTORE_DEFERS,
-    (("bulk_export", "import_space"), "entity_prop_sort"): _RESTORE_DEFERS,
-    (("bulk_export", "import_space"), "frame_prop_sort"): _RESTORE_DEFERS,
+    (("bulk_export", "_import_space"), "entity_slot_sort"): _RESTORE_DEFERS,
+    (("bulk_export", "_import_space"), "entity_prop_sort"): _RESTORE_DEFERS,
+    (("bulk_export", "_import_space"), "frame_prop_sort"): _RESTORE_DEFERS,
     (("kg_backend", "update_entity_subject_only"), "edge"): _SUBJECT_ONLY,
     (("kg_backend", "update_entity_subject_only"), "frame_slot"): _SUBJECT_ONLY,
     (("kg_backend", "update_entity_subject_only"), "entity_slot_sort"): _SUBJECT_ONLY,

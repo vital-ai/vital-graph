@@ -237,12 +237,17 @@ async def derive_vitaltype(conn, space_id: str, graph_uri: str) -> int:
     if existing:
         return 0
 
-    await conn.execute(
-        f"INSERT INTO {t['rdf_quad']} "
-        f"  (subject_uuid, predicate_uuid, object_uuid, context_uuid) "
-        f"SELECT subject_uuid, $1, object_uuid, context_uuid "
-        f"FROM {t['rdf_quad']} WHERE predicate_uuid = $2 "
-        f"ON CONFLICT DO NOTHING", vt_uuid, rdf_type_uuid)
+    async with conn.transaction():
+        # Seeding a vitaltype onto every subject of a benchmark fixture: not a
+        # reason to queue each of them for an index sync (`issues/291`).
+        from vitalgraph.vectorization.index_sync_trigger import suppress
+        await suppress(conn)
+        await conn.execute(
+            f"INSERT INTO {t['rdf_quad']} "
+            f"  (subject_uuid, predicate_uuid, object_uuid, context_uuid) "
+            f"SELECT subject_uuid, $1, object_uuid, context_uuid "
+            f"FROM {t['rdf_quad']} WHERE predicate_uuid = $2 "
+            f"ON CONFLICT DO NOTHING", vt_uuid, rdf_type_uuid)
     return await conn.fetchval(
         f"SELECT count(*) FROM {t['rdf_quad']} WHERE predicate_uuid = $1", vt_uuid)
 

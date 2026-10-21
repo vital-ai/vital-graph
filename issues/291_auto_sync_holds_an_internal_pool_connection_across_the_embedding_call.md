@@ -1,6 +1,6 @@
 # 291 — Auto-sync holds an internal-pool connection across the embedding call
 
-## Status: STEP 1 FIXED IN CODE 2026-10-20 (not yet released): a per-space Postgres queue with bounded consumers. Step 2 (enqueue inside each write's transaction) not done. Found reviewing `issues/290`.
+## Status: FIXED IN CODE 2026-10-20 (not yet released): step 1, a per-space Postgres queue with bounded consumers (`57d6a9a8`); step 2, a trigger on `rdf_quad` that queues each write's subjects in the write's own transaction. Found reviewing `issues/290`.
 
 **Related:** `issues/290` (the symptom: a worker's second acquire timed out),
 `issues/231` (the internal pool, its size of 3, and "whether 3 is right" left
@@ -131,14 +131,131 @@ and will scale.
 Plus the unit suite, the schema, rename and lifecycle integration tests, and
 the full API suite on the rebuilt vg test stack (below).
 
+## Fix, step 2 — a trigger on `rdf_quad` queues each write in its own transaction
+
+Step 1 still enqueued after the write had committed, from the call site. A
+crash, deploy or cancelled task in that gap lost the sync. A survey of the
+write paths found no single Python function every write passes through while
+holding its transaction:
+
+- inserts converge on `add_rdf_quads_batch_bulk`;
+- deletes are about ten separate `DELETE FROM rdf_quad` statements;
+- SPARQL UPDATE's WHERE-bound subjects never reach Python at all.
+
+Decided 2026-10-20 (option B), including that SPARQL UPDATE, the objects
+endpoint and relation writes now keep their indexes in step, which they did not
+before. Plan: `planning/planning_vector_geo/index_sync_outbox_trigger_plan.md`
+(local).
+
+- **`vectorization/index_sync_trigger.py`:** `{space}_isq_capture()` and the
+  triggers `trg_{space}_isq_ins` / `trg_{space}_isq_del`.
+  - Each is `AFTER ... REFERENCING NEW|OLD TABLE ... FOR EACH STATEMENT`: one
+    `INSERT ... SELECT DISTINCT ... ON CONFLICT` per write statement, in key
+    order so writers cannot deadlock on the queue rows.
+  - It sends a `pg_notify`, which PostgreSQL deduplicates and delivers at
+    commit.
+  - Proven first on PostgreSQL 18.4, on a hash-partitioned table, for COPY and
+    for dynamic SQL.
+  - **The body names no space.** It derives the space from `TG_TABLE_NAME` and
+    reaches the queue with dynamic SQL. A body that spelled out
+    `{space}_index_sync_queue` would survive a space rename, which renames
+    objects but not function bodies, pointing at a table that no longer
+    exists. Every write would then fail.
+- **The consumer decides the operation from the data**
+  (`index_sync_worker.resolve`). A subject with quads left in the graph is
+  re-derived; one without is removed. A trigger cannot tell a deleted subject
+  from one whose quads were replaced.
+- **Geo slots depend on edges.** `geo_slot_handler` attributes a slot to its
+  entity through `Edge_hasKGSlot` and `Edge_hasEntityKGFrame`. A changed edge
+  among the upserts brings the GEO slots it reaches with it, and no other
+  slots, so nothing is re-embedded for nothing.
+- **Opt-outs, by `suppress(conn)`** (`SET LOCAL vitalgraph.index_sync = 'off'`).
+  It refuses outside a transaction, where `SET LOCAL` would silently do nothing
+  (`issues/275`). Used by:
+  - the bulk import (COPY) and the incremental import;
+  - space restore;
+  - `load_wordnet_csv.py`, `generate_scale_data.py` and `perf_seed_data.py`;
+  - `repair_grouping_self_link.py`, whose grouping URIs no index text is built
+    from.
+
+  Imports and restores never synced before and still do not.
+- **Kept ON on purpose:**
+  - `clear_graph` / `drop_graph`, which used to leave the graph's index rows
+    orphaned and now queue them for removal;
+  - the server-property backfill, which sets `hasKGEntityType`, the field that
+    decides which index mapping a subject is in;
+  - large API loads into an empty space, which synced before.
+- **`schedule_sync` after a write is a no-op on a space with the trigger.** The
+  check is cached per process for 60 s and registered in
+  `CACHE_INVALIDATORS`. It still enqueues for a space without the trigger, so
+  deploy order does not matter. `rederive=True` always enqueues; it is for
+  re-derivations no trigger sees:
+  - KGType description changes (`kgtype_cross_space_sync`);
+  - a document type's `auto_vectorize` flip, for its unstamped originals.
+- **`scripts/migrate_index_sync_queue.py`** now installs the trigger too, in one
+  transaction per space, table before trigger. A trigger without its table
+  would fail every write.
+- **Test isolation:** the vg test stack's app skips `inttest_*` spaces
+  (`VG_INDEX_SYNC_EXCLUDE_PREFIXES`), whose queue rows the in-process
+  integration tests assert on directly.
+- **The hot bulk paths queue explicitly, once** (`captured_explicitly`). A
+  statement-level trigger fires per EXECUTION, and `executemany` executes once
+  per row. `add_rdf_quads_batch_bulk` uses it under 500 rows, and
+  `remove_rdf_quads_batch_bulk` always does. Measured first, the trigger fired
+  44 times for a 44-quad entity graph and added 26% to an insert
+  (34 -> 43 ms median) and 30% to a replace (101 -> 132 ms). Those two paths
+  now switch the trigger off for their own statements and queue the distinct
+  pairs they already hold, in the same transaction. The previous setting is
+  restored after, so the rest of a caller's transaction is still captured, and
+  an enclosing `suppress` is honoured.
+- **Found on the way:** `issues/292`. A text filter on a subject was declared
+  empty from a count over objects, and a cached zero outlived the write that
+  made it wrong.
+
+Verified step 2: `tests/integration/test_index_sync_trigger.py`, 9 passed.
+
+- New spaces have the trigger.
+- An insert, a delete, and a SPARQL DELETE whose subjects are bound by WHERE
+  each queue exactly their subjects.
+- A rolled-back write queues nothing.
+- A suppressed transaction queues nothing, and the next one queues again.
+- The consumer resolves upsert and delete from the data.
+- An edge change reaches the geo slot it points at.
+- The post-write enqueue defers to the trigger, and `rederive=True` still
+  enqueues.
+
+The step-1 queue tests pass alongside (19 together).
+
+Write cost, measured 2026-10-20 on the vg stack (scratch space with 2,000 entity
+graphs, alternating rounds, 5 per cell, median of each round's per-write
+median; `test_scripts/perf/_issue291_trigger_cost_measure.py`, local). The
+baseline is no outbox at all (trigger disabled AND the explicit enqueue
+skipped):
+
+| write | no outbox | outbox |
+|---|---|---|
+| insert, 44-quad entity graph | 27.6 ms (26.5-34.1) | 27.2 ms (25.5-31.9) |
+| replace (delete + insert) | 84.9 ms (79.6-109.7) | 88.8 ms (82.1-104.8) |
+| bulk, ~6,000 quads | 449 ms (383-565) | 450 ms (372-1254) |
+
+Within the noise. Taken with the Mac's load average around 21 from desktop
+apps, not this work, and memory 36% free, so the absolute values are
+indicative; the alternating A/B is what the comparison rests on.
+
 ## Not done
 
-- **Step 2: enqueue inside each write's transaction.** Today `schedule_sync`
-  enqueues just after the write commits, so a crash in that gap still loses
-  the sync. Moving `index_sync_queue.enqueue` onto the write's own connection,
-  call site by call site, closes it.
+- **The cost was measured on a 2,000-graph scratch space, not at
+  `sp_lead_synth_100k` scale.** The trigger's work scales with the statement,
+  not the table, but a re-run on a quiet machine at prod scale would firm the
+  numbers up.
+- **Redundant syncs still re-embed.** A write that changes no embedded text
+  (a stamp, a status) re-embeds its subject. Skipping the provider call when
+  the text's hash is unchanged would make those nearly free.
+- **The dev database has the queue tables but not the trigger.** The dev app
+  (:8001) runs code without consumers; install the trigger there with its
+  next rebuild.
 - **Monitoring.** `index_sync_queue.stats()` returns depth, claimed, failing
   and the oldest age; nothing reads it yet. The maintenance job, or the admin
   status endpoint, should report a backlog or a failing row.
-- **Production:** run `scripts/migrate_index_sync_queue.py --all --apply` after
-  the release.
+- **Production:** run `scripts/migrate_index_sync_queue.py --all --apply`
+  (queue + trigger). Order against the deploy does not matter.

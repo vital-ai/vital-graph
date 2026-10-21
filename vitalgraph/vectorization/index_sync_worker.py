@@ -38,6 +38,94 @@ from . import index_sync_queue as q
 
 logger = logging.getLogger(__name__)
 
+
+def _uuid(uri: str) -> uuid.UUID:
+    from .auto_sync import _generate_term_uuid
+    return _generate_term_uuid(uri)
+
+
+_VITALTYPE = "http://vital.ai/ontology/vital-core#vitaltype"
+_EDGE_SRC = "http://vital.ai/ontology/vital-core#hasEdgeSource"
+_EDGE_DST = "http://vital.ai/ontology/vital-core#hasEdgeDestination"
+_HALEY = "http://vital.ai/ontology/haley-ai-kg#"
+_SLOT_EDGE = f"{_HALEY}Edge_hasKGSlot"
+_FRAME_EDGE = f"{_HALEY}Edge_hasEntityKGFrame"
+_GEO_SLOT = f"{_HALEY}KGGeoLocationSlot"
+
+_PRESENT_SQL = """
+SELECT DISTINCT subject_uuid FROM {quad}
+WHERE context_uuid = $1 AND subject_uuid = ANY($2::uuid[])
+"""
+
+# GEO SLOTS DEPEND ON EDGES. `geo_slot_handler` attributes a slot's location to
+# its entity through Edge_hasKGSlot (frame -> slot) and Edge_hasEntityKGFrame
+# (entity -> frame). An edge-only change -- a slot or frame re-parented --
+# changes no slot quad, so the trigger queues only the edge. This adds the geo
+# slots such an edge reaches, so their attribution is re-derived. Only GEO
+# slots: re-syncing every slot would re-embed them for nothing.
+_GEO_SLOTS_OF_EDGES_SQL = """
+WITH e AS (
+  SELECT q.subject_uuid AS edge, q.object_uuid AS etype FROM {quad} q
+  WHERE q.context_uuid = $1 AND q.subject_uuid = ANY($2::uuid[])
+    AND q.predicate_uuid = $3 AND q.object_uuid = ANY(ARRAY[$4, $5]::uuid[])
+), d AS (
+  SELECT e.etype, q.object_uuid AS dest FROM e
+  JOIN {quad} q ON q.subject_uuid = e.edge AND q.context_uuid = $1
+               AND q.predicate_uuid = $7
+), slots AS (
+  SELECT dest AS slot FROM d WHERE etype = $4
+  UNION
+  SELECT qd.object_uuid FROM d
+  JOIN {quad} qs ON qs.context_uuid = $1 AND qs.predicate_uuid = $6
+                AND qs.object_uuid = d.dest
+  JOIN {quad} qt ON qt.subject_uuid = qs.subject_uuid AND qt.context_uuid = $1
+                AND qt.predicate_uuid = $3 AND qt.object_uuid = $4
+  JOIN {quad} qd ON qd.subject_uuid = qs.subject_uuid AND qd.context_uuid = $1
+                AND qd.predicate_uuid = $7
+  WHERE d.etype = $5
+)
+SELECT DISTINCT s.slot FROM slots s
+JOIN {quad} g ON g.subject_uuid = s.slot AND g.context_uuid = $1
+             AND g.predicate_uuid = $3 AND g.object_uuid = $8
+"""
+
+
+async def resolve(conn, space_id: str, context_uuid: uuid.UUID,
+                  subject_uuids: List[uuid.UUID]):
+    """`(upsert, delete)` for these subjects, from the data.
+
+    A subject with quads left in the graph is re-derived; one without is
+    removed from the indexes. Plus the geo slots an edge among the upserts
+    reaches.
+    """
+    quad = f"{space_id}_rdf_quad"
+    present = {r["subject_uuid"] for r in await conn.fetch(
+        _PRESENT_SQL.format(quad=quad), context_uuid, list(subject_uuids))}
+    absent = [s for s in subject_uuids if s not in present]
+    upsert = list(present)
+    if present:
+        extra = {r["slot"] for r in await conn.fetch(
+            _GEO_SLOTS_OF_EDGES_SQL.format(quad=quad), context_uuid, upsert,
+            _uuid(_VITALTYPE), _uuid(_SLOT_EDGE), _uuid(_FRAME_EDGE),
+            _uuid(_EDGE_SRC), _uuid(_EDGE_DST), _uuid(_GEO_SLOT))}
+        upsert += [s for s in extra if s not in present]
+    return upsert, absent
+
+
+async def _sync_graph(pool, space_id: str, context_uuid: uuid.UUID,
+                      subject_uuids: List[uuid.UUID]) -> bool:
+    """Resolve, then sync the upserts and the deletes. False if the space is gone."""
+    from .auto_sync import _space_still_exists, sync_subjects
+    async with pool.acquire() as conn:
+        if not await _space_still_exists(conn, space_id):
+            return False
+        upsert, delete = await resolve(conn, space_id, context_uuid, subject_uuids)
+    if delete and not await sync_subjects(pool, space_id, delete, context_uuid, "delete"):
+        return False
+    if upsert and not await sync_subjects(pool, space_id, upsert, context_uuid, "upsert"):
+        return False
+    return True
+
 DEFAULT_BATCH_SIZE = 100
 DEFAULT_SWEEP_SECONDS = 10.0
 
@@ -72,6 +160,11 @@ class IndexSyncWorker:
         self._listen_conn = None
         self._tasks: List[asyncio.Task] = []
         self._claimed_in: Set[str] = set()
+        # Spaces this process never drains, by prefix -- for a stack whose
+        # in-process tests assert on queue rows themselves.
+        self._excluded = tuple(
+            p.strip() for p in os.environ.get(
+                "VG_INDEX_SYNC_EXCLUDE_PREFIXES", "").split(",") if p.strip())
         self.synced = 0
         self.failed = 0
 
@@ -166,6 +259,8 @@ class IndexSyncWorker:
         return None
 
     def _mark(self, space_id: str) -> None:
+        if space_id.startswith(self._excluded) and self._excluded:
+            return
         if space_id not in self._marked:
             self._marked.add(space_id)
             self._ready.put_nowait(space_id)
@@ -220,7 +315,7 @@ class IndexSyncWorker:
     async def drain_once(self, space_id: str) -> int:
         """Claim one batch of `space_id` and sync it. Returns rows claimed."""
         import asyncpg
-        from .auto_sync import _IN_FLIGHT, sync_subjects
+        from .auto_sync import _IN_FLIGHT
         pool = await self._pool(space_id)
         if pool is None:
             return 0
@@ -234,17 +329,20 @@ class IndexSyncWorker:
             return 0
         self._claimed_in.add(space_id)
 
-        groups: Dict[tuple, List[q.Claimed]] = defaultdict(list)
+        # By graph, NOT by the rows' `operation`: the trigger queues every
+        # change as an upsert, and the operation is decided from the data in
+        # `_sync_graph` (`issues/291` step 2).
+        groups: Dict[uuid.UUID, List[q.Claimed]] = defaultdict(list)
         for c in claimed:
-            groups[(c.context_uuid, c.operation)].append(c)
+            groups[c.context_uuid].append(c)
 
         done: List[q.Claimed] = []
         failed: List[tuple] = []
-        for (ctx, op), rows in groups.items():
+        for ctx, rows in groups.items():
             # Registered with the space's in-flight set, so deleting the space
             # cancels a sync in progress here as it did a scheduled one.
             task = asyncio.ensure_future(
-                sync_subjects(pool, space_id, [r.subject_uuid for r in rows], ctx, op))
+                _sync_graph(pool, space_id, ctx, [r.subject_uuid for r in rows]))
             inflight = _IN_FLIGHT.setdefault(space_id, set())
             inflight.add(task)
             try:

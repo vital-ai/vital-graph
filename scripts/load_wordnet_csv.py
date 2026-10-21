@@ -136,6 +136,10 @@ async def run(space: str, quads_csv: str, terms_csv: str,
     total0 = time.time()
     async with conn:
         async with conn.cursor() as cur:
+            # A bulk load does not queue 8.58M quads' subjects for an index sync
+            # one by one (`issues/291`); reindex after it. Session-level: this
+            # connection is autocommit and is closed when the load ends.
+            await cur.execute("SET vitalgraph.index_sync = 'off'")
             # Saved index definitions, dropped for the load and rebuilt after.
             saved: list[tuple[str, str]] = []
             if not keep_indexes:

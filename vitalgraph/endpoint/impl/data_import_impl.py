@@ -23,6 +23,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from vitalgraph.db.sparql_sql.uri_limit import check_uri
+from vitalgraph.vectorization.index_sync_trigger import suppress as suppress_index_sync
 
 logger = logging.getLogger(__name__)
 
@@ -721,12 +722,17 @@ class ImportEngine:
                 if not batch:
                     return
                 async with self._pool.acquire() as conn:
-                    await conn.copy_records_to_table(
-                        quad_tbl,
-                        columns=["subject_uuid", "predicate_uuid", "object_uuid",
-                                 "context_uuid", "dataset"],
-                        records=batch,
-                    )
+                    async with conn.transaction():
+                        # An import never synced its subjects' indexes, and
+                        # queueing millions of them one by one is not the way
+                        # to start (`issues/291`): reindex after a load.
+                        await suppress_index_sync(conn)
+                        await conn.copy_records_to_table(
+                            quad_tbl,
+                            columns=["subject_uuid", "predicate_uuid", "object_uuid",
+                                     "context_uuid", "dataset"],
+                            records=batch,
+                        )
                 total_quads += len(batch)
 
             # SAME scope as pass 1, which resolved the terms. A different scope here
@@ -1516,6 +1522,9 @@ class ImportEngine:
         """INSERT ON CONFLICT a batch of terms and quads."""
         async with self._pool.acquire() as conn:
             async with conn.transaction():
+                # As the bulk COPY: an import does not queue index syncs
+                # (`issues/291`); reindex after a load.
+                await suppress_index_sync(conn)
                 # Deduplicate terms within the batch
                 seen = set()
                 unique_terms = []

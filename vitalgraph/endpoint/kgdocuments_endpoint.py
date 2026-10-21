@@ -1982,8 +1982,11 @@ class KGDocumentsEndpoint:
                     if not ok:
                         raise RuntimeError(f"restamp failed in {g}")
                     restamped += len(out[i:i + batch])
+                # The originals' quads did not change -- their type's default
+                # did -- so the `rdf_quad` trigger did not queue them.
                 self._schedule_auto_sync(space_impl, space_id, g,
-                                         sorted(entry["docs"]) + out, "upsert")
+                                         sorted(entry["docs"]) + out, "upsert",
+                                         rederive=True)
             self.logger.info(
                 "type default for %s in %s is now vectorize=%s: %d document(s), "
                 "%d segmentation subject(s) restamped and re-synced", doc_type, space_id,
@@ -2132,7 +2135,8 @@ class KGDocumentsEndpoint:
 
     def _schedule_auto_sync(
         self, space_impl, space_id: str, graph_id: str,
-        subject_uris: List[str], operation: Literal["upsert", "delete"]
+        subject_uris: List[str], operation: Literal["upsert", "delete"],
+        rederive: bool = False,
     ) -> None:
         """Schedule background sync -- vectors, FTS, geo, fuzzy -- for these subjects."""
         try:
@@ -2157,6 +2161,7 @@ class KGDocumentsEndpoint:
                     subject_uris=subject_uris,
                     graph_uri=graph_id,
                     operation=operation,
+                    rederive=rederive,
                 )
         except Exception as e:
             self.logger.warning(f"auto_sync scheduling failed: {e}")

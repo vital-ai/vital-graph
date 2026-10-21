@@ -157,6 +157,9 @@ async def _run_cross_space_sync(
                     subject_uris=list(affected_uris),
                     graph_uri=graph_uri,
                     operation="upsert",
+                    # Their quads did not change -- their TYPE's did, in another
+                    # space -- so no `rdf_quad` trigger saw them (`issues/291`).
+                    rederive=True,
                 )
                 total_synced += len(affected_uris)
 

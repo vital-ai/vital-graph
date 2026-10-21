@@ -153,6 +153,10 @@ async def repair_space(conn, space_id: str, s: dict) -> int:
         return 0
     written = [(r["e"], s["pred"], r["e"], r["ctx"]) for r in s["missing"]]
     async with conn.transaction():
+        # The self-link is a grouping URI, which no index text is built from,
+        # so the repaired entities need no index sync (`issues/291`).
+        from vitalgraph.vectorization.index_sync_trigger import suppress
+        await suppress(conn)
         await conn.executemany(
             f"INSERT INTO {space_id}_rdf_quad "
             f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "

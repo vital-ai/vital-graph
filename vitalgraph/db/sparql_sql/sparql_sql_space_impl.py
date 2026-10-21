@@ -1630,35 +1630,40 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # (issues/115).
                 term_args = [seen_terms[k] for k in sorted(seen_terms)]
 
-                use_rebuild = rebuild_indexes
-                quad_empty = term_empty = False
-                if use_rebuild is None:  # auto: only for a large load into an empty space
-                    if len(quad_rows) >= REBUILD_MIN_QUADS:
-                        quad_empty = not await conn.fetchval(
-                            f"SELECT EXISTS(SELECT 1 FROM {t['rdf_quad']} LIMIT 1)")
-                        use_rebuild = quad_empty
-                    else:
-                        use_rebuild = False
+                # One queue write for the batch, not one trigger firing per
+                # executed row of the `executemany` strategy (`issues/291`).
+                from ...vectorization.index_sync_trigger import captured_explicitly
+                async with captured_explicitly(
+                        conn, space_id, {(r[3], r[0]) for r in quad_rows}):
+                    use_rebuild = rebuild_indexes
+                    quad_empty = term_empty = False
+                    if use_rebuild is None:  # auto: only for a large load into an empty space
+                        if len(quad_rows) >= REBUILD_MIN_QUADS:
+                            quad_empty = not await conn.fetchval(
+                                f"SELECT EXISTS(SELECT 1 FROM {t['rdf_quad']} LIMIT 1)")
+                            use_rebuild = quad_empty
+                        else:
+                            use_rebuild = False
 
-                if use_rebuild:
-                    # Direct-COPY terms only when the term table is also empty
-                    # (else a recurring term_uuid would collide on its PK).
-                    term_empty = not await conn.fetchval(
-                        f"SELECT EXISTS(SELECT 1 FROM {t['term']} LIMIT 1)")
-                    await bulk_load_with_index_rebuild(
-                        conn, t, term_args, quad_rows,
-                        self.schema.drop_space_indexes_sql(space_id),
-                        self.schema.create_space_indexes_sql(space_id),
-                        terms_direct=term_empty)
-                    _strategy = "copy+rebuild"
-                elif len(term_args) + len(quad_rows) >= UNNEST_MIN_ROWS:
-                    await insert_terms_quads_unnest(
-                        conn, t, term_args, quad_rows)
-                    _strategy = "unnest"
-                else:
-                    await insert_terms_quads_executemany(
-                        conn, t, term_args, quad_rows)
-                    _strategy = "executemany"
+                    if use_rebuild:
+                        # Direct-COPY terms only when the term table is also empty
+                        # (else a recurring term_uuid would collide on its PK).
+                        term_empty = not await conn.fetchval(
+                            f"SELECT EXISTS(SELECT 1 FROM {t['term']} LIMIT 1)")
+                        await bulk_load_with_index_rebuild(
+                            conn, t, term_args, quad_rows,
+                            self.schema.drop_space_indexes_sql(space_id),
+                            self.schema.create_space_indexes_sql(space_id),
+                            terms_direct=term_empty)
+                        _strategy = "copy+rebuild"
+                    elif len(term_args) + len(quad_rows) >= UNNEST_MIN_ROWS:
+                        await insert_terms_quads_unnest(
+                            conn, t, term_args, quad_rows)
+                        _strategy = "unnest"
+                    else:
+                        await insert_terms_quads_executemany(
+                            conn, t, term_args, quad_rows)
+                        _strategy = "executemany"
                 _t3 = _time.monotonic()
                 _t4 = _t3  # term/quad insert is one fused strategy call
                 _wal1 = await _wal_insert_pos(conn)
@@ -2176,12 +2181,17 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 edge_deleted = await sync_edge_table_before_delete(
                     conn, space_id, unique_subjects)
 
-                await conn.executemany(
-                    f"DELETE FROM {t['rdf_quad']} "
-                    f"WHERE subject_uuid = $1 AND predicate_uuid = $2 "
-                    f"AND object_uuid = $3 AND context_uuid = $4",
-                    delete_rows,
-                )
+                # One queue write for the batch, not one trigger firing per
+                # executed row (`issues/291`).
+                from ...vectorization.index_sync_trigger import captured_explicitly
+                async with captured_explicitly(
+                        conn, space_id, {(r[3], r[0]) for r in delete_rows}):
+                    await conn.executemany(
+                        f"DELETE FROM {t['rdf_quad']} "
+                        f"WHERE subject_uuid = $1 AND predicate_uuid = $2 "
+                        f"AND object_uuid = $3 AND context_uuid = $4",
+                        delete_rows,
+                    )
 
                 # entity_prop_sort re-derives from the SURVIVING quads, so unlike
                 # every sync above it runs AFTER the delete: removing one value

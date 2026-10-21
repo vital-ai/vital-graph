@@ -121,10 +121,14 @@ async def load_scale_space(pool: asyncpg.Pool, space_id: str, n_entities: int,
         await conn.copy_records_to_table(
             t["term"].split(".")[-1], records=term_rows,
             columns=["term_uuid", "term_text", "term_type"])
-        await conn.copy_records_to_table(
-            t["rdf_quad"].split(".")[-1], records=quad_rows,
-            columns=["subject_uuid", "predicate_uuid", "object_uuid",
-                     "context_uuid", "quad_uuid"])
+        async with conn.transaction():
+            # Synthetic scale data: no index sync per subject (`issues/291`).
+            from vitalgraph.vectorization.index_sync_trigger import suppress
+            await suppress(conn)
+            await conn.copy_records_to_table(
+                t["rdf_quad"].split(".")[-1], records=quad_rows,
+                columns=["subject_uuid", "predicate_uuid", "object_uuid",
+                         "context_uuid", "quad_uuid"])
 
         # VACUUM (ANALYZE): fresh stats + set the visibility map so index-only
         # scans on the covering indexes don't do heap fetches (COPY leaves the
