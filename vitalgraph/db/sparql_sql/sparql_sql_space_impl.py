@@ -855,21 +855,26 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def create_space_metadata(self, space_id: str, metadata: Dict[str, Any]) -> bool:
         try:
-            await self._db.execute_query(
-                """INSERT INTO space (space_id, space_name, space_description, tenant, update_time)
-                   VALUES ($1, $2, $3, $4, NOW())
-                   ON CONFLICT (space_id) DO UPDATE SET
-                       space_name = EXCLUDED.space_name,
-                       space_description = EXCLUDED.space_description,
-                       tenant = EXCLUDED.tenant,
-                       update_time = NOW()""",
-                [
+            from .space_storage_key import allocate_storage_key
+            async with self._db._pool.acquire() as conn:
+                # A row that already exists keeps its key: a key is never changed.
+                await conn.execute(
+                    """INSERT INTO space (space_id, space_name, space_description, tenant,
+                                          update_time, storage_key)
+                       VALUES ($1, $2, $3, $4, NOW(), $5)
+                       ON CONFLICT (space_id) DO UPDATE SET
+                           space_name = EXCLUDED.space_name,
+                           space_description = EXCLUDED.space_description,
+                           tenant = EXCLUDED.tenant,
+                           update_time = NOW(),
+                           storage_key = COALESCE(space.storage_key,
+                                                  EXCLUDED.storage_key)""",
                     space_id,
                     metadata.get('space_name', space_id),
                     metadata.get('space_description', ''),
                     metadata.get('tenant', 'default'),
-                ],
-            )
+                    await allocate_storage_key(conn),
+                )
             return True
         except Exception as e:
             logger.error("create_space_metadata(%s) failed: %s", space_id, e)

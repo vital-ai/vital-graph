@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .sort_value_key import VALUE_KEY_COLUMN, value_key_column_sql
 from .uri_limit import uri_limit_constraint_sql
@@ -326,6 +326,16 @@ def max_space_id_bytes() -> int:
     return PG_MAX_IDENTIFIER_BYTES - longest_suffix
 
 
+#: `space.storage_key` (see `space_names`). Nullable until every space has been
+#: given one; set once, by the allocator or the re-key, and never changed. The
+#: same clause is added to existing databases by
+#: `scripts/migrate_space_storage_key.py`.
+STORAGE_KEY_COLUMN_SQL = (
+    "storage_key VARCHAR(16) "
+    "CONSTRAINT space_storage_key_uq UNIQUE "
+    "CONSTRAINT space_storage_key_shape CHECK (storage_key ~ '^[a-z2-7]{8}$')")
+
+
 class SparqlSQLSchema:
     """
     PostgreSQL schema for the sparql_sql backend.
@@ -358,7 +368,8 @@ class SparqlSQLSchema:
                 space_name VARCHAR(255),
                 space_description TEXT,
                 tenant VARCHAR(255),
-                update_time TIMESTAMP
+                update_time TIMESTAMP,
+        ''' + STORAGE_KEY_COLUMN_SQL + '''
             )
         '''),
         ("graph", '''
@@ -2365,6 +2376,7 @@ class SparqlSQLSchema:
     @staticmethod
     def orphan_tables_for_space(
         all_tables: List[str], space_id: str, other_space_ids: List[str],
+        prefix: Optional[str] = None,
     ) -> List[str]:
         """
         Tables named for ``space_id`` that survived the explicit drops.
@@ -2374,8 +2386,12 @@ class SparqlSQLSchema:
         ``myXspace_...``. More importantly, one space id can be a prefix of
         another — dropping ``e2e_test`` must never take ``e2e_test_extra``'s
         tables with it — so any table belonging to a longer space id is excluded.
+
+        `prefix` overrides `space_prefix(space_id)`, for the re-key, which has to
+        find a space's objects under a prefix that is not yet (or no longer) the
+        one `space_prefix` gives.
         """
-        prefix = f"{space_prefix(space_id)}_"
+        prefix = f"{prefix or space_prefix(space_id)}_"
         # Other spaces' prefixes that would themselves match ours, longest first.
         shadowing = sorted(
             (p for p in map(space_prefix, other_space_ids) if p.startswith(prefix)),

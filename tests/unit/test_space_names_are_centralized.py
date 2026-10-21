@@ -48,6 +48,16 @@ def _violations(path: Path):
     src = path.read_text()
     rel = path.relative_to(ROOT).as_posix()
     for node in ast.walk(ast.parse(src)):
+        # `space_id + "_term"`: the same name, spelled by concatenation.
+        if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)
+                and isinstance(node.right, ast.Constant)
+                and isinstance(node.right.value, str)
+                and node.right.value.startswith(("_", "\\_"))
+                and ast.get_source_segment(src, node.left) in ID_EXPRS):
+            yield (f"{rel}:{node.lineno}: "
+                   f"{ast.get_source_segment(src, node.left)} + "
+                   f"{node.right.value!r}")
+            continue
         if not isinstance(node, ast.JoinedStr):
             continue
         vals = node.values
@@ -92,12 +102,14 @@ def test_the_scan_sees_what_it_is_meant_to(tmp_path):
                    'def g(space_id):\n'
                    '    return f"SELECT * FROM {space_prefix(space_id)}_rdf_quad"\n'
                    'def h(space_id):\n'
-                   '    """A docstring naming {space_id}_term is notation."""\n')
+                   '    """A docstring naming {space_id}_term is notation."""\n'
+                   'def c(sid):\n'
+                   '    return sid + "_term"\n')
     global ROOT
     saved, ROOT = ROOT, tmp_path
     try:
         assert sorted(v.split(": ", 1)[1] for v in _violations(bad)) == [
-            "{space_id}\\_%", "{space_id}_rdf_quad"]
+            "sid + '_term'", "{space_id}\\_%", "{space_id}_rdf_quad"]
     finally:
         ROOT = saved
 

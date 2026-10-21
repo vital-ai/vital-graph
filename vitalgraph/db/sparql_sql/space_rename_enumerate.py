@@ -45,7 +45,7 @@ because two rules that are supposed to agree will not.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .sparql_sql_schema import SparqlSQLSchema
 from .space_names import space_prefix
@@ -53,13 +53,15 @@ from .space_names import space_prefix
 logger = logging.getLogger(__name__)
 
 
-def _owned(names: List[str], space_id: str, other_ids: List[str]) -> List[str]:
+def _owned(names: List[str], space_id: str, other_ids: List[str],
+           prefix: Optional[str] = None) -> List[str]:
     """`names` belonging to *space_id*, by the shared longest-prefix rule.
 
     Also accepts a name equal to the space id itself, which the table rule does
     not need but trigger and function names can produce.
     """
-    return SparqlSQLSchema.orphan_tables_for_space(names, space_id, other_ids)
+    return SparqlSQLSchema.orphan_tables_for_space(names, space_id, other_ids,
+                                                   prefix=prefix)
 
 
 async def _all_space_ids(conn) -> List[str]:
@@ -73,8 +75,13 @@ async def _all_space_ids(conn) -> List[str]:
         return []
 
 
-async def enumerate_space_objects(conn, space_id: str) -> Dict[str, Any]:
-    """Every catalogue object whose NAME contains *space_id* as its prefix.
+async def enumerate_space_objects(conn, space_id: str,
+                                  prefix: Optional[str] = None) -> Dict[str, Any]:
+    """Every catalogue object whose NAME carries *space_id*'s prefix.
+
+    `prefix` overrides `space_prefix(space_id)` — the re-key enumerates a space
+    under the prefix its objects are moving from, which in one direction is not
+    the one `space_prefix` gives.
 
     Read-only. Returns object names grouped by class, plus the bookkeeping a
     caller needs to trust the answer:
@@ -91,7 +98,8 @@ async def enumerate_space_objects(conn, space_id: str) -> Dict[str, Any]:
                                          that only renamed tables
     """
     other_ids = [s for s in await _all_space_ids(conn) if s != space_id]
-    prefix = f"{space_prefix(space_id)}_"
+    name_prefix = prefix or space_prefix(space_id)
+    prefix = f"{name_prefix}_"
     result: Dict[str, Any] = {
         "space_id": space_id,
         "shadowed_by": sorted(s for s in other_ids
@@ -101,7 +109,7 @@ async def enumerate_space_objects(conn, space_id: str) -> Dict[str, Any]:
 
     tables = _owned([r["tablename"] for r in await conn.fetch(
         "SELECT tablename FROM pg_tables WHERE schemaname = 'public'")],
-        space_id, other_ids)
+        space_id, other_ids, prefix=name_prefix)
     # Partition children are reported SEPARATELY because they need their own
     # ALTER: renaming the parent leaves them behind, which is the measured fact
     # in the module docstring.
@@ -151,7 +159,7 @@ async def enumerate_space_objects(conn, space_id: str) -> Dict[str, Any]:
     result["functions"] = _owned([r["proname"] for r in await conn.fetch(
         "SELECT p.proname FROM pg_proc p JOIN pg_namespace n "
         "ON n.oid = p.pronamespace WHERE n.nspname = 'public'")],
-        space_id, other_ids)
+        space_id, other_ids, prefix=name_prefix)
 
     # EVIDENCE OF A PREVIOUS PARTIAL RENAME. Anything attached to this space's
     # tables whose own name does not start with the space id was left behind by a

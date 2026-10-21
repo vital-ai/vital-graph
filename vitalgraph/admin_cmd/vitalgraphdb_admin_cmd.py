@@ -2051,6 +2051,10 @@ Note: All commands must end with a semicolon (;)
         if not re.fullmatch(r'[a-z_][a-z0-9_]*', normalized):
             return None, ("space id must contain only letters, digits and "
                           "underscores, and must not start with a digit")
+        from vitalgraph.db.sparql_sql.space_names import key_shaped_id_problem
+        problem = key_shaped_id_problem(normalized)
+        if problem:
+            return None, problem
         return normalized, None
 
     async def _cli_create_space(self, space_id: str, space_name: str = None) -> bool:
@@ -2091,7 +2095,7 @@ Note: All commands must end with a semicolon (;)
                 clashing = await conn.fetchval(
                     "SELECT count(*) FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_name LIKE $1",
-                    space_id + '\\_%'
+                    f"{space_prefix(space_id)}\\_%"
                 )
                 if clashing:
                     print(f"❌ {clashing} table(s) prefixed '{space_prefix(space_id)}_' already "
@@ -2102,10 +2106,12 @@ Note: All commands must end with a semicolon (;)
                 # All-or-nothing: space row, DDL and vector/FTS bootstraps
                 # commit together or roll back together.
                 async with conn.transaction():
+                    from vitalgraph.db.sparql_sql.space_storage_key import (
+                        allocate_storage_key)
                     await conn.execute(
-                        "INSERT INTO space (space_id, space_name, update_time) "
-                        "VALUES ($1, $2, NOW())",
-                        space_id, space_name
+                        "INSERT INTO space (space_id, space_name, update_time, "
+                        "storage_key) VALUES ($1, $2, NOW(), $3)",
+                        space_id, space_name, await allocate_storage_key(conn)
                     )
                     await SparqlSQLSchema.create_space(conn, space_id, strict=True)
 

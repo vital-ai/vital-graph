@@ -255,6 +255,10 @@ class SpaceManager:
                 f"silently truncates index and table names, and every lookup by "
                 f"the intended name stops matching. Use a shorter id.")
 
+        from ..db.sparql_sql.space_names import key_shaped_id_problem
+        _problem = key_shaped_id_problem(space_id)
+        if _problem:
+            raise InvalidSpaceIdError(f"Cannot create space: {_problem}.")
 
         # Use space_backend for all operations
         if not self.space_backend:

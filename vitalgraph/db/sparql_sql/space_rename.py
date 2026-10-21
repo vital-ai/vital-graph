@@ -114,6 +114,11 @@ async def _validate(conn, old: str, new: str) -> None:
             f"new id {new!r} is not a bare lowercase identifier; it is "
             f"concatenated into object names unescaped")
 
+    from .space_names import key_shaped_id_problem
+    problem = key_shaped_id_problem(new)
+    if problem:
+        raise SpaceRenameRefused(problem)
+
     ceiling = max_space_id_bytes()
     if len(new.encode("utf-8")) > ceiling:
         raise SpaceRenameRefused(
@@ -188,9 +193,6 @@ async def plan_rename(conn, old: str, new: str, *,
     await _validate(conn, old, new)
 
     found = await enumerate_space_objects(conn, old)
-    tables = list(found["tables"]) + list(found["partition_children"])
-    detail = await _detail(conn, tables)
-
     unmappable: List[str] = []
 
     def mapped(name: str) -> str:
@@ -199,6 +201,85 @@ async def plan_rename(conn, old: str, new: str, *,
             unmappable.append(name)
             return name
         return out
+
+    stmts = await object_rename_statements(conn, found, mapped)
+
+    # 6. THE REGISTRY. One UPDATE, and the eleven FK children plus
+    #    `user_space_access` follow via ON UPDATE CASCADE (`issues/232` step 3).
+    stmts.append(("registry",
+                  f"UPDATE space SET space_id = {_lit(new)} "
+                  f"WHERE space_id = {_lit(old)}"))
+    # `process.process_subtype` holds the space id with NO foreign key, so
+    # nothing carries it. Missed, it strands process rows against a dead id.
+    stmts.append(("process",
+                  f"UPDATE process SET process_subtype = {_lit(new)} "
+                  f"WHERE process_subtype = {_lit(old)}"))
+
+    # ALREADY-TRUNCATED NAMES, when the length would change (`issues/246`).
+    #
+    # Five auto-named UNIQUE constraints sit at exactly 63 bytes on EVERY space —
+    # `{space}_document_segmentation_config_document_type_uri_segment_method_uri_key`
+    # is 70 bytes of suffix before any id, so PostgreSQL truncated the middle at
+    # CREATE time. Renaming such a name to a different-length id produces
+    # something that is neither the old name nor what a fresh CREATE would
+    # produce, and renaming back does not restore it.
+    #
+    # REFUSING is the whole remedy here. There is no ceiling that prevents this —
+    # an honest one computed over every auto-generated name is NEGATIVE — so the
+    # only thing that can be done is to decline the renames that would make it
+    # worse. A same-length rename is unaffected and still allowed. (The re-key,
+    # `space_rekey`, does better: it asks PostgreSQL what a fresh CREATE names
+    # each object.)
+    if len(old) != len(new) and not allow_retruncation:
+        at_limit = sorted({
+            name for _, sql in stmts
+            for name in _renamed_sources(sql)
+            if len(name.encode("utf-8")) == _MAX_IDENTIFIER_BYTES})
+        if at_limit:
+            raise SpaceRenameRefused(
+                f"{len(at_limit)} object name(s) are already at the "
+                f"{_MAX_IDENTIFIER_BYTES}-byte limit and were TRUNCATED when the "
+                f"space was created (`issues/246`). Renaming to an id of a "
+                f"different length re-truncates them to something neither name, "
+                f"and renaming back cannot restore it. Use a new id of the same "
+                f"byte length as {old!r} ({len(old)}), or accept the loss by "
+                f"passing allow_retruncation=True. Examples: "
+                + ", ".join(at_limit[:2]))
+
+    refuse_overlong_targets(stmts, "Choose a shorter new id.")
+
+    if unmappable:
+        raise SpaceRenameRefused(
+            f"{len(unmappable)} object name(s) could not be mapped from {old!r} "
+            f"to {new!r}, and skipping one would orphan it under the old id: "
+            + ", ".join(sorted(unmappable)[:10]))
+    return stmts
+
+
+def refuse_overlong_targets(stmts: List[Tuple[str, str]], advice: str) -> None:
+    """Refuse any statement introducing a name PostgreSQL would truncate."""
+    too_long = sorted({
+        new_name for _, sql in stmts
+        for new_name in _renamed_targets(sql)
+        if len(new_name.encode("utf-8")) > _MAX_IDENTIFIER_BYTES})
+    if too_long:
+        raise SpaceRenameRefused(
+            f"{len(too_long)} object name(s) would exceed PostgreSQL's "
+            f"{_MAX_IDENTIFIER_BYTES}-byte identifier limit and be TRUNCATED "
+            f"silently, leaving names no rename-back can undo. {advice} "
+            f"Longest: " + ", ".join(sorted(too_long, key=len, reverse=True)[:3]))
+
+
+async def object_rename_statements(conn, found: Dict[str, Any],
+                                   mapped) -> List[Tuple[str, str]]:
+    """The ALTERs that move every object in `found` to `mapped(name)`, in order.
+
+    `found` is `enumerate_space_objects` output; `mapped` gives each object's new
+    name. Shared by the rename and the re-key, which differ only in where the
+    names come from and what they record in `space` afterwards.
+    """
+    tables = list(found["tables"]) + list(found["partition_children"])
+    detail = await _detail(conn, tables)
 
     stmts: List[Tuple[str, str]] = []
 
@@ -249,63 +330,6 @@ async def plan_rename(conn, old: str, new: str, *,
                       f'ALTER TABLE {_quote(name)} RENAME TO '
                       f'{_quote(mapped(name))}'))
 
-    # 6. THE REGISTRY. One UPDATE, and the eleven FK children plus
-    #    `user_space_access` follow via ON UPDATE CASCADE (`issues/232` step 3).
-    stmts.append(("registry",
-                  f"UPDATE space SET space_id = {_lit(new)} "
-                  f"WHERE space_id = {_lit(old)}"))
-    # `process.process_subtype` holds the space id with NO foreign key, so
-    # nothing carries it. Missed, it strands process rows against a dead id.
-    stmts.append(("process",
-                  f"UPDATE process SET process_subtype = {_lit(new)} "
-                  f"WHERE process_subtype = {_lit(old)}"))
-
-    # ALREADY-TRUNCATED NAMES, when the length would change (`issues/246`).
-    #
-    # Five auto-named UNIQUE constraints sit at exactly 63 bytes on EVERY space —
-    # `{space}_document_segmentation_config_document_type_uri_segment_method_uri_key`
-    # is 70 bytes of suffix before any id, so PostgreSQL truncated the middle at
-    # CREATE time. Renaming such a name to a different-length id produces
-    # something that is neither the old name nor what a fresh CREATE would
-    # produce, and renaming back does not restore it.
-    #
-    # REFUSING is the whole remedy here. There is no ceiling that prevents this —
-    # an honest one computed over every auto-generated name is NEGATIVE — so the
-    # only thing that can be done is to decline the renames that would make it
-    # worse. A same-length rename is unaffected and still allowed.
-    if len(old) != len(new) and not allow_retruncation:
-        at_limit = sorted({
-            name for _, sql in stmts
-            for name in _renamed_sources(sql)
-            if len(name.encode("utf-8")) == _MAX_IDENTIFIER_BYTES})
-        if at_limit:
-            raise SpaceRenameRefused(
-                f"{len(at_limit)} object name(s) are already at the "
-                f"{_MAX_IDENTIFIER_BYTES}-byte limit and were TRUNCATED when the "
-                f"space was created (`issues/246`). Renaming to an id of a "
-                f"different length re-truncates them to something neither name, "
-                f"and renaming back cannot restore it. Use a new id of the same "
-                f"byte length as {old!r} ({len(old)}), or accept the loss by "
-                f"passing allow_retruncation=True. Examples: "
-                + ", ".join(at_limit[:2]))
-
-    too_long = sorted({
-        new_name for _, sql in stmts
-        for new_name in _renamed_targets(sql)
-        if len(new_name.encode("utf-8")) > _MAX_IDENTIFIER_BYTES})
-    if too_long:
-        raise SpaceRenameRefused(
-            f"{len(too_long)} object name(s) would exceed PostgreSQL's "
-            f"{_MAX_IDENTIFIER_BYTES}-byte identifier limit and be TRUNCATED "
-            f"silently, leaving names no rename-back can undo. Choose a shorter "
-            f"new id. Longest: " + ", ".join(sorted(too_long, key=len,
-                                                    reverse=True)[:3]))
-
-    if unmappable:
-        raise SpaceRenameRefused(
-            f"{len(unmappable)} object name(s) could not be mapped from {old!r} "
-            f"to {new!r}, and skipping one would orphan it under the old id: "
-            + ", ".join(sorted(unmappable)[:10]))
     return stmts
 
 
