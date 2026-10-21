@@ -91,7 +91,9 @@ async def main() -> int:
                           f"forward {r['forward_s']:.2f}s  "
                           f"back {r['reverse_s']:.2f}s  "
                           f"{'restored' if ok else 'NOT RESTORED'}  "
-                          f"{len(r['fresh_named'])} truncated name(s) re-derived")
+                          f"{len(r['fresh_named'])} truncated name(s) re-derived"
+                          + (f", {len(r['normalized'])} brought up to date"
+                             if r["normalized"] else ""))
                     if not ok:
                         failed.append(sp)
                 else:

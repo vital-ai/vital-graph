@@ -125,12 +125,16 @@ async def _auto_named(conn, prefix: str) -> Dict[Tuple, Optional[str]]:
     return out
 
 
-async def fresh_names(conn, prefix: str,
-                      partition_quads: int) -> Dict[Tuple, Optional[str]]:
+async def fresh_names(conn, prefix: str, partition_quads: int,
+                      dynamic: Optional[List[Tuple[str, str, int]]] = None
+                      ) -> Dict[Tuple, Optional[str]]:
     """The auto-generated names a space created under `prefix` would carry.
 
     Creates the schema under `prefix` in a savepoint and rolls it back, so the
     answer is PostgreSQL's own naming rather than a reimplementation of it.
+    `dynamic` adds the space's own per-index tables — `("vec", name, dims)` or
+    `("fts", name, 0)` — whose names carry a user-chosen index name and so are
+    the likeliest to have been truncated.
     """
     from .sparql_sql_schema import SparqlSQLSchema
     names: Dict[Tuple, Optional[str]] = {}
@@ -145,6 +149,14 @@ async def fresh_names(conn, prefix: str,
         async with conn.transaction():
             await SparqlSQLSchema.create_space_core(conn, prefix, partition_quads)
             await SparqlSQLSchema.bootstrap_space_extras(conn, prefix, strict=True)
+            schema = SparqlSQLSchema()
+            for kind, name, dims in dynamic or ():
+                if kind == "vec":
+                    stmts = schema.create_vector_data_table_sql(prefix, name, dims)
+                else:
+                    stmts = schema.create_fts_data_table_sql(prefix, name, ["english"])
+                for stmt in stmts:
+                    await conn.execute(stmt)
             names = await _auto_named(conn, prefix)
             raise _Discard
     except _Discard:
@@ -153,6 +165,40 @@ async def fresh_names(conn, prefix: str,
         if held is not None:
             register_storage_key(prefix, held)
     return names
+
+
+async def _dynamic_tables(conn, found: Dict[str, Any],
+                          prefix: str) -> List[Tuple[str, str, int]]:
+    """The space's per-index vec/fts tables, as `fresh_names` wants them.
+
+    Read from the tables themselves, not the registries: an older space can
+    hold a table its registry no longer lists, and it is the table being moved.
+    The bootstrap's own tables are left out — the probe makes those already.
+    """
+    from .sparql_sql_schema import SparqlSQLSchema
+    # `fts_index` is the FTS REGISTRY, a schema table that happens to share the
+    # dynamic tables' `fts_` prefix.
+    schema_suffixes = set(SparqlSQLSchema.get_table_names("x"))
+    out: List[Tuple[str, str, int]] = []
+    for tbl in found["tables"]:
+        for kind in ("vec", "fts"):
+            head = f"{prefix}_{kind}_"
+            if not tbl.startswith(head):
+                continue
+            name = tbl[len(head):]
+            if f"{kind}_{name}" in schema_suffixes:
+                continue
+            dims = 0
+            if kind == "vec":
+                typ = await conn.fetchval(
+                    "SELECT format_type(a.atttypid, a.atttypmod) FROM pg_attribute a "
+                    "WHERE a.attrelid = to_regclass($1) AND a.attname = 'embedding'",
+                    f"public.{tbl}")
+                if not typ or "(" not in typ:
+                    continue
+                dims = int(typ[typ.index("(") + 1:typ.index(")")])
+            out.append((kind, name, dims))
+    return out
 
 
 def _partition_count(found: Dict[str, Any], prefix: str) -> int:
@@ -206,7 +252,8 @@ async def plan_rekey(conn, space_id: str, *, key: Optional[str] = None,
             f"{already} object(s) are already named under {new!r}; moving "
             f"{space_id!r} there would mix two sets of objects")
 
-    fresh = await fresh_names(conn, new, _partition_count(found, old))
+    fresh = await fresh_names(conn, new, _partition_count(found, old),
+                              await _dynamic_tables(conn, found, old))
     current = await _auto_named(conn, old)
     by_name = {name: role for role, name in current.items() if name}
 
@@ -366,10 +413,20 @@ async def round_trip(conn, space_id: str, *,
             report["reverse_s"] = time.monotonic() - t0
             after = await enumerate_space_objects(conn, space_id,
                                                   prefix=start_prefix)
-            report["restored"] = {
-                cls: after[cls] == before[cls]
-                for cls in ("tables", "partition_children", "indexes",
-                            "constraints", "sequences", "functions", "triggers")}
+            # RESTORED, OR BROUGHT UP TO DATE. A name the move out re-derived
+            # (truncated at create, or from an older schema) comes back as a
+            # fresh create would name it, not as it was — that is the intended
+            # result of the first move, not a failure of the second. Anything
+            # else that differs is.
+            rederived = set(fwd["fresh_named"])
+            report["restored"] = {}
+            report["normalized"] = []
+            for cls in ("tables", "partition_children", "indexes",
+                        "constraints", "sequences", "functions", "triggers"):
+                gone = set(before[cls]) - set(after[cls])
+                report["restored"][cls] = (
+                    len(after[cls]) == len(before[cls]) and gone <= rederived)
+                report["normalized"] += sorted(gone)
             raise _Discard
     except _Discard:
         pass

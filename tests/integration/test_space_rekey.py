@@ -27,6 +27,7 @@ from vitalgraph.db.sparql_sql.space_rename import (
 from vitalgraph.db.sparql_sql.space_rename_enumerate import enumerate_space_objects
 from vitalgraph.db.sparql_sql.space_storage_key import (
     is_keyed, load_storage_keys, storage_key_in_use)
+from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 from vitalgraph.space.space_manager import InvalidSpaceIdError
 
 from .conftest import skip_no_infra
@@ -183,6 +184,23 @@ class TestARoundTrip:
         await self._check_round_trip(pg_conn, sp)
         assert (await enumerate_space_objects(pg_conn, longer))["total"] == \
             theirs["total"]
+
+    async def test_a_user_named_vector_table_with_truncated_names(
+            self, pg_conn, make_legacy_space):
+        """Found on the dev database: a vec table named for a long user index
+        carries NOT NULL constraints PostgreSQL truncated at 63 bytes, which the
+        bare schema probe never creates — so the move was refused. The probe
+        now builds the space's own vec/fts tables too."""
+        sp = await make_legacy_space("inttest_rk_vecname")
+        schema = SparqlSQLSchema()
+        for stmt in schema.create_vector_data_table_sql(
+                sp, "paraphrase_test_85c7071", 384):
+            await pg_conn.execute(stmt)
+        names = (await enumerate_space_objects(pg_conn, sp))["constraints"]
+        assert any(len(n) == 63 and "_vec_paraphrase" in n for n in names), \
+            "the fixture should reproduce the truncated names"
+        report, _ = await self._check_round_trip(pg_conn, sp)
+        assert any("_vec_paraphrase" in n for n in report["fresh_named"])
 
     async def test_a_keyed_space_goes_to_its_id_and_back(
             self, pg_conn, make_space):
