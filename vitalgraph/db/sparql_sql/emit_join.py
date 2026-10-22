@@ -62,6 +62,17 @@ def _values_binds(node, var: str, depth: int = 0) -> bool:
     return any(_values_binds(c, var, depth + 1) for c in (node.children or []))
 
 
+def _values_may_unbind(node, var: str, depth: int = 0) -> bool:
+    """True if a VALUES block in this subtree binds `var` to UNDEF on some row."""
+    from .ir import KIND_TABLE
+    if node is None or depth > 12:
+        return True
+    if node.kind == KIND_TABLE:
+        return (var in (node.values_vars or [])
+                and any(row.get(var) is None for row in (node.values_rows or [])))
+    return any(_values_may_unbind(c, var, depth + 1) for c in (node.children or []))
+
+
 def _boundness_col(alias: str, sql_name: str, info) -> str:
     """Column whose NULL-ness actually means "this variable is unbound".
 
@@ -444,6 +455,15 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
                              if v in _ls.maybe or v in _rs.maybe}
         except Exception as _exc:      # pragma: no cover - scope is advisory
             ctx.log("join", f"scope unavailable for COALESCE: {_exc}")
+        # `compute_scope` does not model UNDEF, so a VALUES block that leaves
+        # the variable unbound on some row reports it `defined`. Below a direct
+        # child that is the table itself (`left_is_table` covers that), the
+        # projection took the VALUES side's NULL over the other side's binding:
+        # `?d :type :T . VALUES ?code { "a" UNDEF } ?r :code ?code` returned the
+        # UNDEF row's matches with ?code unbound (`issues/299`).
+        _maybe_shared |= {v for v in shared
+                          if any(_values_may_unbind(c, v)
+                                 for c in plan.children)}
     values_shared = (shared if (left_is_table or right_is_table or is_left)
                      else _maybe_shared)
     # A variable NEITHER CHILD REGISTERED is not produced by either side, and
