@@ -160,9 +160,21 @@ issue in the class, not only this one.
 | 3. driver by selectivity | done, committed (below): the model's order, enforced past 10x predicted gain |
 | 4. enforcement, generalised | partly: `join_collapse_limit = 1` + `slot_group_cte`; edge/`frame_slot` BGPs not covered |
 | 5. cross-workload verification | in progress |
-| 6. **the real test**: the model replaces `reorder_joins`' single-pattern root, the semi-join anchor (161) and the `selective-driven` gate, on every path | not started; plan and acceptance criteria in `planning/planning_performance/uw_decision_reason_sparql_query_plan.md`, "The real test of the general solution". Needs the model to cover edge/`frame_slot` tables first |
+| 6. **the real test**: the model replaces `reorder_joins`' single-pattern root, the semi-join anchor (161) and the `selective-driven` gate, on every path | started; (a)'s first measurement RETRACTED (empty results, below); plan and acceptance criteria in `planning/planning_performance/uw_decision_reason_sparql_query_plan.md`, "The real test of the general solution". Needs the model to cover edge/`frame_slot` tables first |
 
 ### Stage 1 — fan-out statistics (2026-10-22)
+
+**Status of this statistic, 2026-10-22: no measured benefit yet; do not run
+its migration on production.** On `uw_prodshape` the exact mean it gives
+(505.8) equals the `rdf_stats`-derived fallback, because every graph pair fits
+under the 50,000-pair cap; it differs only for a predicate whose pairs are
+truncated, and no decision has been measured there. It is opt-in per space
+(only `uw_prodshape` has the column). DECIDED: keep, opt-in, and test it in
+stage 6's review, on a space whose `hasKGGraphURI` pairs exceed the 50,000-pair
+cap (where it differs from the fallback); removed, code and column, if no
+decision changes. Policy: the planning doc ("a planning statistic must earn its
+maintenance").
+
 
 - `rdf_pred_stats.object_count` (nullable): distinct objects per predicate.
   Schema in `sparql_sql_schema.py`; `scripts/migrate_pred_stats_object_count.py`
@@ -304,6 +316,242 @@ leads tie at the page's rating, so the plans broke the tie differently (rating
 multisets identical). That check exposed a SEPARATE, pre-existing defect: 59
 leads rate 100.0 and neither version returns them first; the double ordering
 looks lexical ("99.9" > "100.0"). Not this issue; to be filed.
+
+### Stage 6 (a) measured: the semi-join's structural anchor on KGQuery graph mode (2026-10-22)
+
+`test_scripts_internal/kg_uw_decision_reasons/stage6_semijoin_ab.py` and
+`stage6_semijoin_timing.py`, `sp_lead_synth_100k` (74M quads), the lead
+KGQuery corpus in graph mode. Rows identical in every case.
+
+| count query | semi-join (today): busiest loops | off: loops | off vs on, ms min/med/max (5 interleaved runs) |
+|---|---|---|---|
+| state_ca | 100,000 | 9,227 | 21/29/228 vs 1,279/1,584/5,240 (55x at the median) |
+| mql | 100,000 | 49,775 | 96/117/264 vs 1,303/1,751/3,060 (15x) |
+| high_rated | 100,000 | 35,003 | 523/969/1,590 vs 1,252/1,430/3,953 (1.5x) |
+
+Page queries: 0 ms in every variant (served by a paging fast path).
+
+**RETRACTED 2026-10-22 — every query in the table above returned 0 rows.**
+`sp_lead_synth_100k` has no materialized `vg-direct:` predicates
+(`hasEntityFrame`, `hasFrame`, `hasSlot`: zero quads), so graph mode's SQL
+joins on a term that does not exist and every variant answers 0 (counts 0,
+pages 0 rows). The timings measured how fast each plan discovers an empty
+answer; "rows identical" compared 0 with 0. Nothing here is evidence about
+the semi-join on real data. What stands: the semi-join anchors on the type
+triple and probes once per lead (100,000 EXISTS); and the model has no
+statistics for the `vg-direct:` predicates, so it cannot price the selective
+direction (driving from "CA" means probing `hasSlot` by object). Re-measure
+on a space where the direct predicates are materialized, asserting a
+non-empty result first.
+
+The semi-join probes once per lead (100,000 EXISTS) because its anchor is
+the type triple, chosen structurally (`issues/161`). Without the split,
+Postgres plans the merged BGP from the slot constants. A first, single-run
+comparison overstated this (23 s vs 0.7 s for one query whose two variants
+ran IDENTICAL SQL): the first variant ran cold. Re-measured interleaved, 5x.
+
+Caution before acting: the semi-join exists because it wins elsewhere
+(`issues/045`: 24 s -> 2 ms on specific-type entity pages), so turning it off
+is not the fix. Step (b): let the model price both forms (anchor rows x
+per-anchor probe cost, vs the merged join's cost) and keep the split only
+where it is predicted cheaper; verify on 045/138/161 shapes and the KGQuery
+perf benches, not only on this corpus.
+
+## Attempted 2026-10-22, and reverted: drop the `IS NULL OR` join guards across a VALUES split
+
+**Hypothesis:** `category_page`'s remaining 3 s was its `IS NULL OR` join
+conditions. `emit_join._always_bound` declines to drop a compatible-mapping
+guard whenever ANY VALUES table sits in the subtree (`_has_values_table`),
+because `compute_scope` does not model UNDEF. But UNDEF can only unbind a
+variable the VALUES block binds. In `category_page`, `VALUES ?code {…}` sat
+below the join on `?d`, so `?d` (bound by a triple pattern) kept its guard, as
+did every OPTIONAL above it: 8 unhashable joins. The fix tested the variable
+(`_values_may_unbind(node, var)`: a VALUES that binds this var with an UNDEF
+row), also dropping `?code`'s guard, since every VALUES row binds it (term
+resolution, `uuid_materialized`, is a different property from boundness).
+
+Correct as SPARQL logic: the full DAWG conformance suite passed, including 69
+VALUES / bindings / OPTIONAL / join tests (5 pre-existing xfails), and all rows
+were identical. **Measured on `uw_prodshape`, same build, old rule vs new:**
+
+| query | guards | busiest loops | median ms |
+|---|---|---|---|
+| category_page | 8 -> 0 | 6,950 -> 6,950 | 3,801 -> 4,210 (no gain) |
+| naics_for_category | 2 -> 0 | 3,292 -> 3,292 | 926 -> **348** |
+| all_of | 2 -> 0 | 6,950 -> **5,030,060** | 210 -> **62,423** |
+
+Two findings:
+
+- ~~**category_page's cost is no longer these guards.**~~ CORRECTED below:
+  `?d`'s guard alone is most of the 3 s. Why removing all eight showed no gain
+  is not established: hand-dropping both guards on that one join ran 772 ms,
+  so the difference lies in what else that build changed (the OPTIONAL
+  guards, or the plan Postgres chose once the VALUES join was flat).
+- **An unhashable guard was acting as a fence.** As a plain equijoin, Postgres
+  flattens both sides of the VALUES join into one join problem and re-plans it
+  from its own estimates: for `all_of`, nested loops with 3.18M primary-key
+  probes. The same class as the rest of this issue (`119` §9): making the plan
+  form "correct" exposes the misestimate. A future version needs the model (or
+  a fence) to decide per join; not shippable as a blanket rule. Patch kept at
+  `test_scripts_internal/kg_uw_decision_reasons/attempts/values_may_unbind.patch`.
+
+### Follow-up 2026-10-22: the breakdown, and a narrower rule that keeps the fence
+
+The finding above ("not these guards") was wrong: it came from removing all of
+them at once. A per-node breakdown of `category_page`
+(`breakdown.py`, EXPLAIN ANALYZE as JSON, exclusive time per node) put
+~2.1 s of its ~3.0 s in ONE join: the 1,159 decisions (`?d` type triple JOIN
+`VALUES ?code`) nested-looped over the 3,475-row reason CTE
+(`bgp_sg_q11_cte`, scanned 1,159 times) on
+`(j2.v0__uuid IS NULL OR j2.v0__uuid = j3.v3__uuid)`. That is 4.0M filter
+evaluations. The rest: ~0.78 s computing that CTE (a 1,593,419-row
+intermediate: the code slots reached by frame from the kind side, not
+driven from the 3,475 code-slot pins; the model declined, gain within its
+error band), and ~0.2 s for the OPTIONAL field CTEs.
+
+Hand-edited SQL, same plan otherwise, 5 runs each, identical rows:
+
+| variant | category_page median ms | all_of median ms |
+|---|---|---|
+| both guards (today) | 2,261 | 161 |
+| drop `?d`'s only | **710** | **125** |
+| drop `?code`'s only | — | 443 |
+| drop both | 772 | **62,284** (5,030,060 loops) |
+
+So the two guards differ. `?d` is bound by a triple pattern on both sides; its
+guard is dead and costs the hash join. `?code` is bound by the VALUES block;
+its guard is equally dead as logic but acts as the fence that stops
+PostgreSQL flattening the VALUES join and re-planning it from its own
+estimates.
+
+**Rule now (`emit_join._values_binds`):** a VALUES block blocks dropping a
+guard only for a variable it binds. A variable it never mentions cannot be
+unbound by it, so scope evidence decides as for any other join. Generator A/B
+on `uw_prodshape`, old rule vs new, 5 runs each (swap high, so medians
+only), identical result multisets on all nine:
+
+| query | guards | median ms old -> new |
+|---|---|---|
+| category_page | 8 -> 1 | 2,845 -> **1,436** |
+| naics_for_category | 2 -> 1 | 795 -> **207** |
+| all_of | 2 -> 1 | 166 -> 132 |
+| the other six | 0 -> 0 | unchanged |
+
+DAWG conformance unchanged (1,532 passed, 12 skipped, 88 xfailed), unit suite
+passes, and `TestValuesGuardIsPerVariable` pins the rule (two of its three
+tests fail under the old rule; the UNDEF one is a safety pin).
+
+Reach, counted with a pytest plugin that evaluates both rules on every call
+(`plugins/values_guard.py`): the performance suite **never reaches the rule**
+(0 calls, same 4 pre-existing failures as the stage 3 run), and DAWG reaches
+it 19 times with **0 disagreements**. So neither suite tests the change. The
+evidence is the dashboard A/B above (three queries changed, identical
+multisets) and `tests/integration/test_values_join_guard_per_variable.py`,
+which compares five VALUES/join shapes with pyoxigraph, including UNDEF on
+both the VALUES-bound and the triple-bound variable. That test found an
+unrelated, pre-existing wrong answer, failing identically under both rules:
+`issues/299` (an UNDEF row's matches lost the variable the other side bound),
+fixed separately.
+
+## Attempted 2026-10-22, and reverted: lift `only_cause`'s correlated FILTER out of the NOT EXISTS body
+
+**Hypothesis:** `only_cause`'s `NOT EXISTS` runs as a SubPlan per outer row
+(3,475 executions, ~16 ms each). The shared variables already correlate by
+uuid equality; what blocks pull-up is the body's `FILTER(?f2 != ?f)`. It refers
+to the outer `?f` from inside a derived table in the subquery's FROM, which
+Postgres will not pull up. `!=` cannot become a uuid comparison: `?f` and
+`?f2` occur only as objects, so either could be a literal and RDFterm-equal
+applies. The change (`_exists_to_sql`) moved body filter conjuncts that read an
+outer-only variable to the subquery's top-level WHERE, beside the correlation.
+Same row, same columns, so the same answer.
+
+**Measured on `uw_prodshape`** (swap at 44 GB, so plan shape and timeouts only):
+
+| arm | plan | time |
+|---|---|---|
+| as today | SubPlan per outer row | 19 s earlier; 58 s under this swap |
+| lifted | Nested Loop **Anti Join**, body rescanned per outer row | **> 240 s** (timed out) |
+| lifted, `enable_nestloop = off` (diagnostic only) | hash joins; body built once | 14.0 s |
+
+The lift does what it was meant to do: the SubPlan becomes an anti-join. But
+Postgres estimates the outer side at 8 rows (3,475 actual), picks a nested loop,
+and loses the parameter push-down the SubPlan had. The hash form (body once) is
+only modestly better, because the body costs ~4 s alone: an intermediate of
+531,139 rows per worker, plus a term-table hash (690k rows) for the filter's
+text comparison. Same class as the rest of this issue: fixing the plan form
+exposes the misestimate. Patch kept at
+`test_scripts_internal/kg_uw_decision_reasons/attempts/exists_filter_hoist.patch`.
+
+`_try_candidate_driven` (059/072) is not a fit as it stands: it serves a paged
+slice (`LIMIT`, a walked-back traversal chain), not an aggregate over a full
+NOT EXISTS. What `only_cause` needs is two things together: a body join order
+the model chooses (EXISTS bodies are not modelled today), and a join method
+that matches the true outer size. Hash when it is large; parameterized probe
+when it is small.
+
+## Decision pending: stop maintaining `edge_fanout`? (to decide later)
+
+Recorded 2026-10-22 under the statistics policy (a planning statistic must
+show a consumer that changes a measured outcome, or stop being maintained;
+`planning/planning_performance/uw_decision_reason_sparql_query_plan.md`).
+
+**What it is.** `{space}_edge_fanout`: avg / p99 / max edges per node, per
+edge type, relation type and direction. Rebuilt by the maintenance job every
+6 h (`EDGE_FANOUT_INTERVAL_S`) and by `resync_all`; loaded on every query
+(`generator.py`, stage 2a.4).
+
+**Its one consumer.** `emit_slice._emit_two_phase` calls
+`sync_edge_fanout.assess_traversal` and declines the two-phase PAGING rewrite
+when the probe's traversal amplifies forward. Nothing else in the query path
+reads it (`choose_direction` reads pair counts, not this table; the docstring
+in `sync_entity_fanout` that calls it the "traversal-direction gate" input
+overstates its role).
+
+**Cost.** Rebuild 0.9 s at 0.5M edges, 1.5 s at 1.0M, 23 s at 5.3M (vg test
+stack, linear in edges), every 6 h per space; plus a load on every query.
+
+**Evidence, all 2026-10-22:**
+
+- Perf suite on fixtures WITH the table computed (2-14 buckets each, up to
+  5.3M edges): 739 queries loaded it, all non-empty; the guard ran up to 101
+  times and declined 0 times. The only UNSAFE verdicts came from
+  `tests/performance/test_relation_traversal.py::test_the_inverted_relation_is_not_walked_backward`
+  calling `assess_traversal` directly, not from a query.
+- The same suite with the table loaded EMPTY: 0 plan-shape changes in 167
+  benches; 1 status change, `query.relation.direction_choice`, the test of the
+  statistic's own values; total work moved > 10% on 2 benches (+12% buffers,
+  `traversal.skew2k` depth 2) although both runs made identical decisions, so
+  run-to-run drift. Both runs on the same, slightly stale stats; not yet
+  repeated under the measurement protocol (fresh stats).
+- Production's slow-query log, 7 days to 2026-10-22: 222 records, ONE
+  edge-pattern KGQuery, and it is a count, which never reaches the paging
+  guard. No query in the log could have reached the consumer.
+- Discarded as evidence: an integration-suite count (its spaces never compute
+  the table: 1,061 of 1,063 loads were empty, so it could not show a positive).
+
+**Caveats.** Queries under 1 s are not in production's slow log, and a guard
+that works would keep its queries fast, so the log cannot prove a negative on
+its own. The perf fixtures are mostly synthetic.
+
+**Options.**
+
+1. Stop the 6-hourly rebuild and the per-query load; keep the table and
+   `compute_edge_fanout` as an on-demand operator diagnostic, as was done for
+   `entity_fanout` (2026-09-13). The guard then sees an empty table and never
+   declines, which is what it already does in every measured workload.
+2. Remove it entirely: table, rebuild, loader, the guard's fan-out branch.
+3. Keep it, if a workload is found where the guard declines and that decline
+   is the faster plan, measured.
+
+Whichever is chosen also decides its own tests: `tests/integration/test_edge_fanout.py`
+and `test_edge_fanout_tolerates_untyped_edges.py`,
+`tests/unit/test_edge_fanout_refresh.py`, and the perf benches
+`query.relation.direction_choice` / `test_relation_traversal.py`, which test
+the statistic's values rather than a query.
+
+Evidence files (gitignored): `test_scripts_internal/kg_uw_decision_reasons/perf/fanout_perf_{count,off}.*`,
+`internal_data/prod_slow_query_20261022/`; the probe plugin,
+`test_scripts_internal/kg_uw_decision_reasons/plugins/fanout_probe.py`.
 
 ## This is a recurring class, not a new defect
 

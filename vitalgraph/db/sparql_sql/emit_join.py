@@ -30,21 +30,36 @@ def _all_required(node, depth: int = 0) -> bool:
     return all(_all_required(c, depth + 1) for c in (node.children or []))
 
 
-def _has_values_table(node, depth: int = 0) -> bool:
-    """True if a VALUES block appears anywhere in this subtree.
+def _values_binds(node, var: str, depth: int = 0) -> bool:
+    """True if a VALUES block in this subtree binds `var`.
 
     `compute_scope` does NOT model UNDEF: a VALUES row binding `x` to UNDEF
     still reports `x` as `defined`, so scope evidence alone would wrongly
     prove the variable always bound. Per-variable VALUES evidence already
     exists and is correct — `ColumnInfo.uuid_materialized`, set only when
-    EVERY row bound the variable — so scope is simply not consulted here.
+    EVERY row bound the variable — so scope is not consulted for a variable a
+    VALUES block binds.
+
+    A variable the block never mentions cannot be unbound by it. This used to
+    be "a VALUES block appears anywhere in the subtree", which also kept the
+    `IS NULL OR` disjunct on `?d` in the UW dashboard's category page, where
+    `VALUES ?code {…}` sat beside the triple pattern binding `?d`: a join
+    PostgreSQL could not hash, nested-looping 1,159 decisions over 3,475
+    reasons, 2,261 -> 710 ms without it, same rows (`issues/293`).
+
+    It deliberately still covers a variable the block binds on EVERY row
+    (`?code` there), although that guard is equally dead as logic. Dropping it
+    too lets PostgreSQL flatten the VALUES join into one join problem and plan
+    it from its own estimates: `all_of` went 161 ms -> 62 s (5,030,060 loops)
+    with both guards dropped, 125 ms with only `?d`'s. That guard is acting as
+    a fence, and removing it is a planning decision, not a boundness one.
     """
     from .ir import KIND_TABLE
     if node is None or depth > 12:
         return True
     if node.kind == KIND_TABLE:
-        return True
-    return any(_has_values_table(c, depth + 1) for c in (node.children or []))
+        return var in (node.values_vars or [])
+    return any(_values_binds(c, var, depth + 1) for c in (node.children or []))
 
 
 def _boundness_col(alias: str, sql_name: str, info) -> str:
@@ -327,7 +342,7 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
                     # Measured on a two-OPTIONAL slot projection: 405,014
                     # buffers / 257.8 ms with the disjunct, 1,814 / 6.0 ms
                     # without, same 81,540 rows (`issues/207`).
-                    if _has_values_table(child):
+                    if _values_binds(child, var):
                         return False
                     try:
                         return var in compute_scope(child).defined

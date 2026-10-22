@@ -328,3 +328,55 @@ class TestEmitJoin:
         plan = PlanV2(kind=KIND_JOIN, children=[left, right])
         sql = emit_join(plan, ctx)
         assert "IS NULL" in sql  # NULL-tolerant for VALUES UNDEF
+
+
+class TestValuesGuardIsPerVariable:
+    """A VALUES block keeps the `IS NULL OR` guard only on what it binds.
+
+    `issues/293`: `category_page` joins (`?d` type triple JOIN `VALUES ?code`)
+    to the reason BGP on `?d` and `?code`. `?d` is bound by a triple pattern on
+    both sides, so its guard is dead and kept PostgreSQL from hashing the join
+    (2,261 -> 710 ms without it). `?code`'s guard stays deliberately: dropping
+    it measured `all_of` at 62 s instead of 125 ms.
+    """
+
+    @staticmethod
+    def _bgp(*names):
+        from vitalgraph.db.sparql_sql.ir import VarSlot, TableRef
+        plan = PlanV2(kind=KIND_BGP)
+        plan.tables.append(TableRef(ref_id="q0", kind="quad",
+                                    table_name="test_space_rdf_quad", alias="q0"))
+        for i, (name, col) in enumerate(zip(names, ("subject_uuid", "object_uuid"))):
+            slot = VarSlot(name=name, term_ref_id=f"t{i}")
+            slot.positions.append(("q0", col))
+            plan.var_slots[name] = slot
+            plan.tables.append(TableRef(ref_id=f"t{i}", kind="term",
+                                        table_name="test_space_term", alias=f"t{i}",
+                                        join_col=f"q0.{col}"))
+        return plan
+
+    def _sql(self, values_rows):
+        from vitalgraph.db.sparql_sql.emit_join import emit_join
+        ctx = _make_ctx({})
+        left = PlanV2(kind=KIND_JOIN, children=[
+            self._bgp("d"),
+            PlanV2(kind=KIND_TABLE, values_vars=["code"], values_rows=values_rows)])
+        plan = PlanV2(kind=KIND_JOIN, children=[left, self._bgp("d", "code")])
+        sql = emit_join(plan, ctx)
+        outer_on = sql[sql.rindex("\nON "):]
+        return ctx, outer_on
+
+    def test_a_triple_bound_var_beside_values_drops_its_guard(self):
+        ctx, on = self._sql([{"code": "a"}, {"code": "b"}])
+        d = ctx.types.get("d").sql_name
+        code = ctx.types.get("code").sql_name
+        assert f"{d}__uuid IS NULL" not in on, on
+        assert f"{code} IS NULL" in on, on
+
+    def test_the_values_bound_var_keeps_its_guard_even_without_undef(self):
+        _, on = self._sql([{"code": "a"}])
+        assert on.count("IS NULL OR") == 1, on
+
+    def test_undef_in_values_keeps_the_guard_on_that_var(self):
+        ctx, on = self._sql([{"code": "a"}, {"code": None}])
+        assert f"{ctx.types.get('code').sql_name} IS NULL" in on, on
