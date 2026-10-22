@@ -59,16 +59,27 @@ def emit_project(plan: PlanV2, ctx: EmitContext) -> str:
         child_plan = child_plan.children[0]
     if child_plan and child_plan.kind == "order" and child_plan.order_conditions:
         from .emit_expressions import expr_to_sql
+        from .emit_order import variable_order_keys
+        stable = bool((child_plan.hints or {}).get("stable_paging"))
         ob_parts = []
         for key, direction in child_plan.order_conditions:
-            if isinstance(key, str):
+            if isinstance(key, str) and stable:
+                # A SYNTHESIZED paging order: the page was chosen inside by
+                # uuid (issues/075, 078); this only presents it, on the text
+                # as it always has.
                 info = ctx.types.get(key)
                 sn = info.sql_name if info else key
-                col = f"{p_alias}.{sn}"
-            else:
-                col = _scoped_expr(key, plan, ctx)
-                if not col:
-                    continue
+                ob_parts.append(f"{p_alias}.{sn}" + (" DESC" if direction == "DESC" else ""))
+                continue
+            if isinstance(key, str):
+                # The same keys as the ORDER node (`issues/295`): this outer
+                # ORDER BY is the order the query returns.
+                ob_parts.extend(variable_order_keys(
+                    p_alias, ctx.types.get(key), key, direction))
+                continue
+            col = _scoped_expr(key, plan, ctx)
+            if not col:
+                continue
             suffix = " DESC" if direction == "DESC" else ""
             ob_parts.append(f"{col}{suffix}")
         if ob_parts:

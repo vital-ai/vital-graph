@@ -39,28 +39,12 @@ def emit_order(plan: PlanV2, ctx: EmitContext) -> str:
     ob_parts = []
     for key, direction in plan.order_conditions:
         if isinstance(key, str):
-            info = ctx.types.get(key)
-            sn = info.sql_name if info else key
-            if stable:
-                col = f"{o_alias}.{sn}__uuid"
-            elif info is not None and info.typed_lane:
-                # A computed variable on the numeric or boolean lane — ORDER BY
-                # over a COUNT, for instance. `sn` is not a text column there
-                # and PostgreSQL raises "collations are not supported by type
-                # numeric" rather than ignoring the clause. Caught by DAWG
-                # aggregates/COUNT 8b.
-                col = f"{o_alias}.{sn}"
-            else:
-                # Pinned, not inherited: SPARQL orders strings by code point and
-                # PostgreSQL orders by the cluster's collation. Only the text
-                # column takes it — the stable-paging branch orders by uuid,
-                # where COLLATE is a type error rather than a no-op.
-                from .collation import collate
-                col = collate(f"{o_alias}.{sn}")
-        else:
-            col = _scoped_expr(key, plan, ctx)
-            if not col:
-                continue
+            ob_parts.extend(variable_order_keys(o_alias, ctx.types.get(key), key,
+                                                direction, stable=stable))
+            continue
+        col = _scoped_expr(key, plan, ctx)
+        if not col:
+            continue
         suffix = " DESC" if direction == "DESC" else ""
         ob_parts.append(f"{col}{suffix}")
 
@@ -73,6 +57,42 @@ def emit_order(plan: PlanV2, ctx: EmitContext) -> str:
         f"SELECT * FROM ({child_sql}) AS {o_alias}\n"
         f"ORDER BY {', '.join(ob_parts)}"
     )
+
+
+def variable_order_keys(alias: str, info, var: str, direction: str,
+                        stable: bool = False) -> list:
+    """The ORDER BY terms for one variable, for BOTH emitters of a user's order.
+
+    A literal from a triple pattern sorts on its VALUE: `__num`, then `__dt`,
+    then the collated text (`issues/295`). Sorting on the text alone put
+    "99.9" above "100.0" under DESC. SPARQL 1.1 15.1 orders literals with `<`:
+    numerics by value, `xsd:dateTime` chronologically. A non-numeric term has
+    NULL `__num`/`__dt`, so those keys tie and the text decides, as before.
+
+    `emit_project` re-applies the order on its outer SELECT and must emit the
+    same keys: it sorted on plain text, and that is the order the query
+    actually returned.
+    """
+    from .collation import collate
+    sn = info.sql_name if info else var
+    suffix = " DESC" if direction == "DESC" else ""
+    if stable:
+        # Synthesized for stable paging: any total order, and uuid is the one
+        # the paging emitters can produce from an index (issues/075, 078).
+        return [f"{alias}.{sn}__uuid{suffix}"]
+    if info is not None and info.typed_lane:
+        # A computed variable on the numeric or boolean lane — ORDER BY over a
+        # COUNT, for instance. `sn` is not a text column there and PostgreSQL
+        # raises "collations are not supported by type numeric" rather than
+        # ignoring the clause. Caught by DAWG aggregates/COUNT 8b.
+        return [f"{alias}.{sn}{suffix}"]
+    keys = []
+    if info is None or getattr(info, "_sql_has_companions", True):
+        keys += [f"{alias}.{sn}__num{suffix}", f"{alias}.{sn}__dt{suffix}"]
+    # Pinned, not inherited: SPARQL orders strings by code point and PostgreSQL
+    # orders by the cluster's collation. Only the text column takes it.
+    keys.append(f"{collate(f'{alias}.{sn}')}{suffix}")
+    return keys
 
 
 def _scoped_expr(expr, plan, ctx):

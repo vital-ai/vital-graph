@@ -127,23 +127,40 @@ class TestSequenceKeyNumericLane:
     tests is designed to catch.
     """
 
-    def test_plain_bgp_var_orders_on_text_column(self):
-        """ORDER BY ?seq on a BGP variable sorts by the text lane.
+    def test_plain_bgp_var_orders_on_its_value_then_its_text(self):
+        """ORDER BY ?seq on a BGP variable sorts by VALUE first (`issues/295`).
 
-        emit_order.py:30-32 resolves a str key to ``info.sql_name``, which is
-        the lexical column — NOT ``num_col``.  Pinning this makes the risk
-        explicit: any sequence sort expressed as a bare variable is a string
-        sort unless the value column is numeric.
+        This test used to pin the opposite, on purpose: a bare variable sorted
+        on its text, "silently correct for 0-9 and wrong from 10 up". That was
+        the defect: `ORDER BY DESC(?rating)` returned 99.9 ahead of 100.0 on a
+        100k-lead fixture. The key is now `__num`, then `__dt`, then the
+        collated text, so a numeric literal compares by value and anything else
+        falls through to the text it sorted on before.
         """
         ctx = _make_ctx({"seq": "text"})
         plan = _order([("seq", "ASC")])
         from vitalgraph.db.sparql_sql.emit_order import emit_order
         sql = emit_order(plan, ctx)
 
-        info = ctx.types.get("seq")
+        sn = ctx.types.get("seq").sql_name
         order_clause = sql.split("ORDER BY", 1)[1]
-        assert info.sql_name in order_clause
-        assert info.num_col not in order_clause
+        num, dt, text = (order_clause.index(f"{sn}__num"),
+                         order_clause.index(f"{sn}__dt"),
+                         order_clause.index("COLLATE"))
+        assert num < dt < text
+
+    def test_the_project_lift_uses_the_same_keys(self):
+        """`emit_project` re-applies the order outside, and that is the order
+        returned: it sorted on plain text, which is how 295 reached users."""
+        from vitalgraph.db.sparql_sql.ir import KIND_PROJECT
+        from vitalgraph.db.sparql_sql.emit_project import emit_project
+        ctx = _make_ctx({"seq": "text"})
+        plan = PlanV2(kind=KIND_PROJECT, project_vars=["seq"],
+                      children=[_order([("seq", "DESC")])])
+        sql = emit_project(plan, ctx)
+        sn = ctx.types.get("seq").sql_name
+        outer = sql.rsplit("ORDER BY", 1)[1]
+        assert f"{sn}__num DESC" in outer and outer.index(f"{sn}__num") < outer.index("COLLATE")
 
     def test_numeric_lane_var_still_orders_on_text_column(self):
         """Even a typed_lane='num' variable orders on sql_name, not num_col.

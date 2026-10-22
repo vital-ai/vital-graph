@@ -37,25 +37,22 @@ EX = "http://example.org/seq"
 # mirroring frontend/src/lib/entityGraphBuilder.ts:211.
 SEQ_SENTINEL = 2147483647
 
-# Known defect, tracked in the plan: emit_order resolves a variable sort key
-# to ``info.sql_name`` — the LEXICAL column — never to ``num_col``
-# (emit_order.py:30-32).  So xsd:integer sequences compare as strings and
-# 1,2,...,12 comes back as 1,10,11,12,2,...,9.  COALESCE does not rescue it
-# either: mixing a text-lane variable with a numeric literal casts every
-# argument to TEXT (emit_expressions.py:694-702).
+# A BARE VARIABLE sort key now compares by value (`issues/295`, 2026-10-22):
+# both ORDER BY emitters sort on `__num`, then `__dt`, then the text. This was
+# recorded here as a standing limitation, deliberately not fixed because the
+# shared ORDER BY path touches every sorting query; it was fixed on request
+# after the DAWG sort/order tests (30), tests/api and tests/integration all
+# passed with it. The strict xfails on the bare-variable tests turned into
+# XPASS, as they were written to, and are removed.
 #
-# This is a standing backend limitation, NOT scheduled for a fix: changing it
-# would mean touching the shared ORDER BY path, which affects every SPARQL
-# query that sorts.  It is worked around entirely at the query layer instead —
-# see TestSequenceOrderingConstruct for the construct we actually ship.
-#
-# strict=True so that if the backend ever does gain numeric sort keys, these
-# fail loudly and the workaround can be retired.
+# Still a defect: an EXPRESSION sort key. Mixing a text-lane variable with a
+# numeric literal in COALESCE casts every argument to TEXT
+# (emit_expressions.py), so a COALESCE sentinel still sorts lexically. The two
+# tests below that sort on COALESCE keep the strict xfail.
 xfail_lexical_order = pytest.mark.xfail(
     strict=True,
-    reason="bare variable sort keys compare lexically; use the xsd:integer "
-           "BIND construct instead — see "
-           "planning/planning_sequence/frame_slot_sequence_sort_paging_plan.md",
+    reason="a COALESCE sort key casts its arguments to TEXT and compares "
+           "lexically (issues/295 fixed bare variables only)",
 )
 
 PREFIXES = f"""
@@ -92,7 +89,6 @@ class TestIntegerSequenceOrdering:
         )
         await sparql_update(f"{PREFIXES}\nINSERT DATA {{\n{triples}\n}}", test_space)
 
-    @xfail_lexical_order
     async def test_ascending_is_numeric_not_lexical(
         self, test_space, sparql_execute
     ):
@@ -110,7 +106,6 @@ class TestIntegerSequenceOrdering:
             f"got {seqs}"
         )
 
-    @xfail_lexical_order
     async def test_descending_is_numeric_not_lexical(
         self, test_space, sparql_execute
     ):
@@ -151,7 +146,6 @@ class TestIntegerSequenceOrdering:
         assert len(seen) == 12
         assert len(set(seen)) == 12, "paging returned duplicates"
 
-    @xfail_lexical_order
     async def test_paging_yields_sequence_order_across_pages(
         self, test_space, sparql_execute
     ):
@@ -381,7 +375,6 @@ class TestCoalesceInOrderBy:
         )
         assert [int(v) for v in _values(bindings, "seq")] == [1, 2, 3]
 
-    @xfail_lexical_order
     async def test_bind_workaround_sorts_missing_last(
         self, test_space, sparql_execute
     ):
