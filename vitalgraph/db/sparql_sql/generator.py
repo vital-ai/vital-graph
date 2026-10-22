@@ -2432,6 +2432,14 @@ async def _generate_sql(
         with _decisions.stage("measure_fts_leaves"):
             await _measure_fts_leaves(plan, ctx, conn=conn,
                                       conn_params=conn_params)
+        # VALUES restrictions above a BGP, for `slot_group_cte`'s gate: a
+        # restricted variable that reaches a slot without crossing the graph
+        # link means PostgreSQL already has a cheap driver (`issues/293`).
+        try:
+            from .slot_group_cte import values_bound_vars
+            aliases.values_bound_vars = values_bound_vars(plan)
+        except Exception:
+            aliases.values_bound_vars = {}      # a statistic must never fail a query
         with _decisions.stage("emit"):
             sql_str = emit(plan, ctx)
 

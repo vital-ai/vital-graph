@@ -112,7 +112,15 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
     else:
         inner_sql = _emit_flat_inner(plan, ctx, quad_tables, sql_names)
 
-    return _wrap_with_terms(plan, ctx, sql_names, inner_sql)
+    sql = _wrap_with_terms(plan, ctx, sql_names, inner_sql)
+    whole = getattr(plan, "slot_group_whole_bgp", None)
+    if whole:
+        # A slot group fired here with ?d bound OUTSIDE this BGP (an OPTIONAL
+        # field, a VALUES-split join). PostgreSQL underestimates the BGP and
+        # re-runs it per outer row, term joins included; materialised, a re-run
+        # is a scan of finished rows (`issues/293`).
+        sql = f"WITH bgp_{whole} AS MATERIALIZED (\n{sql}\n) SELECT * FROM bgp_{whole}"
+    return sql
 
 
 def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> str:
@@ -132,13 +140,30 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
     # FROM clause — use dependency-graph reordering when tagged_constraints
     # are available, emitting explicit JOIN ... ON <conditions> instead of
     # JOIN ... ON TRUE.  This gives PG direct equi-join hints per step.
+    cte_sql = ""
     if quad_tables and plan.tagged_constraints:
         from .reorder_bgp import reorder_joins
+        leaf_card = _leaf_cardinality(plan, ctx)
+        tagged = plan.tagged_constraints
+        # A slot group whose graph link PostgreSQL would expand per entity is
+        # emitted as one MATERIALIZED CTE driven from its slot type
+        # (`issues/293`); its aliases become columns of the CTE.
+        regrouped = _slot_group_ctes(plan, ctx, quad_tables, tagged,
+                                     inner_cols, leaf_card)
+        if regrouped is not None:
+            (quad_tables, tagged, inner_cols, leaf_card, cte_sql), unanchored = regrouped
+            inner_parts = [f"SELECT {', '.join(inner_cols)}"]
+            if unanchored:
+                # ?d comes from OUTSIDE this BGP (an OPTIONAL field, or a
+                # VALUES-split join whose `IS NULL OR` condition cannot be
+                # hashed). The CTEs cannot be probed by ?d, so a nested loop
+                # re-runs the whole BGP per outer row; materialise it once.
+                plan.slot_group_whole_bgp = unanchored
         ordered, on_map, first_conds = reorder_joins(
-            quad_tables, plan.tagged_constraints,
+            quad_tables, tagged,
             quad_stats=ctx.aliases.quad_stats,
             pred_stats=ctx.aliases.pred_stats,
-            leaf_cardinality=_leaf_cardinality(plan, ctx),
+            leaf_cardinality=leaf_card,
         )
         # When the anchor table has a text-filter (IN SELECT term_uuid),
         # wrap it in a subquery to force PG to evaluate the filter first.
@@ -177,7 +202,32 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
         if plan.constraints:
             inner_parts.append("WHERE " + " AND ".join(plan.constraints))
 
-    return "\n".join(inner_parts)
+    return cte_sql + "\n".join(inner_parts)
+
+
+def _slot_group_ctes(plan: PlanV2, ctx: EmitContext, quad_tables, tagged,
+                     inner_cols, leaf_card):
+    """`slot_group_cte` for this BGP, or None. Never fails the query: the flat
+    join is correct without it, and losing it costs speed only."""
+    consts = getattr(ctx.aliases, "constants", None) or {}
+    resolved = getattr(ctx.aliases, "resolved_constants", None) or {}
+
+    def uuid_of(term):
+        col = consts.get(_widen_term(term))
+        return resolved.get(col) if col else None
+
+    try:
+        from .slot_group_cte import find_groups, apply_groups
+        from .reorder_bgp import reorder_joins
+        groups = find_groups(plan, ctx, quad_tables, leaf_card, uuid_of)
+        if not groups:
+            return None
+        unanchored = next((g.name for g in groups if g.detail.get("anchor") is None), None)
+        return apply_groups(groups, quad_tables, tagged, inner_cols, leaf_card,
+                            reorder_joins), unanchored
+    except Exception as exc:
+        logger.warning("slot-group CTE failed, using the flat join: %s", exc)
+        return None
 
 
 def _try_hop_wise(plan: PlanV2, ctx: EmitContext, quad_tables,
