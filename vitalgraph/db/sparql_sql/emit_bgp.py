@@ -145,11 +145,16 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
         from .reorder_bgp import reorder_joins
         leaf_card = _leaf_cardinality(plan, ctx)
         tagged = plan.tagged_constraints
+        # The generator's own join order, where its cardinality model predicts
+        # a gain past its measured error (`issues/293` stage 3). Kept by the
+        # executor (`join_collapse_limit = 1`). Taken BEFORE the slot-group
+        # rewrite and instead of it: an anchored BGP needs only the order.
+        model_order = _model_join_order(plan, ctx, quad_tables, leaf_card)
         # A slot group whose graph link PostgreSQL would expand per entity is
         # emitted as one MATERIALIZED CTE driven from its slot type
         # (`issues/293`); its aliases become columns of the CTE.
-        regrouped = _slot_group_ctes(plan, ctx, quad_tables, tagged,
-                                     inner_cols, leaf_card)
+        regrouped = None if model_order else _slot_group_ctes(
+            plan, ctx, quad_tables, tagged, inner_cols, leaf_card)
         if regrouped is not None:
             (quad_tables, tagged, inner_cols, leaf_card, cte_sql), unanchored = regrouped
             inner_parts = [f"SELECT {', '.join(inner_cols)}"]
@@ -159,12 +164,19 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
                 # hashed). The CTEs cannot be probed by ?d, so a nested loop
                 # re-runs the whole BGP per outer row; materialise it once.
                 plan.slot_group_whole_bgp = unanchored
-        ordered, on_map, first_conds = reorder_joins(
-            quad_tables, tagged,
-            quad_stats=ctx.aliases.quad_stats,
-            pred_stats=ctx.aliases.pred_stats,
-            leaf_cardinality=leaf_card,
-        )
+        if model_order:
+            from .reorder_bgp import assign_constraints
+            by_alias = {t.alias: t for t in quad_tables}
+            ordered, on_map, first_conds = assign_constraints(
+                [by_alias[a] for a in model_order], tagged)
+            ctx.fixed_join_order = True
+        else:
+            ordered, on_map, first_conds = reorder_joins(
+                quad_tables, tagged,
+                quad_stats=ctx.aliases.quad_stats,
+                pred_stats=ctx.aliases.pred_stats,
+                leaf_cardinality=leaf_card,
+            )
         # When the anchor table has a text-filter (IN SELECT term_uuid),
         # wrap it in a subquery to force PG to evaluate the filter first.
         first_t = ordered[0]
@@ -203,6 +215,45 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
             inner_parts.append("WHERE " + " AND ".join(plan.constraints))
 
     return cte_sql + "\n".join(inner_parts)
+
+
+def _model_join_order(plan: PlanV2, ctx: EmitContext, quad_tables, leaf_card):
+    """`bgp_cardinality.enforced_order` for a flat quad BGP, or None. Never
+    fails the query: the default order is correct, only slower."""
+    if len(quad_tables) < 2 or any(t.kind != "quad" for t in quad_tables):
+        return None
+    # A TEXT, RANGE or FTS anchor keeps the default order. `reorder_joins`
+    # roots on those ahead of any row count, for measured reasons (`issues/181`,
+    # `202`: 25x to 1,000x from rooting elsewhere), and the model does not price
+    # them the way that rule needs.
+    anchored = (bool((leaf_card.get("__range_aliases__") or set()))
+                or bool(getattr(plan, "fts_leaf_rows", None))
+                or any(k in sql for _, sql in plan.tagged_constraints
+                       for k in ("LIKE", "~*", "~ '", "IN (SELECT term_uuid")))
+    if anchored:
+        from .plan_decisions import recorder_for
+        recorder_for(ctx.aliases).declined(
+            "model_join_order", "a text, range or FTS anchor keeps the default order")
+        return None
+    consts = getattr(ctx.aliases, "constants", None) or {}
+    resolved = getattr(ctx.aliases, "resolved_constants", None) or {}
+
+    def uuid_of(term):
+        col = consts.get(_widen_term(term))
+        return resolved.get(col) if col else None
+
+    try:
+        from .bgp_cardinality import enforced_order
+        from .reorder_bgp import reorder_joins
+        default, _, _ = reorder_joins(
+            quad_tables, plan.tagged_constraints,
+            quad_stats=ctx.aliases.quad_stats, pred_stats=ctx.aliases.pred_stats,
+            leaf_cardinality=leaf_card)
+        return enforced_order(plan, ctx.aliases, quad_tables, leaf_card, uuid_of,
+                              [t.alias for t in default])
+    except Exception as exc:
+        logger.warning("model join order failed, using the default: %s", exc)
+        return None
 
 
 def _slot_group_ctes(plan: PlanV2, ctx: EmitContext, quad_tables, tagged,

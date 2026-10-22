@@ -337,11 +337,48 @@ async def recompute_stats_tables(conn, space_id: str,
             timeout=timeout)
         stats_count = int(res.split()[-1]) if res else 0
 
+        # DISTINCT OBJECTS PER PREDICATE, for the mean fan-out of a probe by
+        # object (`issues/293`). Only where the column exists: a space not yet
+        # migrated (`scripts/migrate_pred_stats_object_count.py`) recomputes
+        # as before.
+        #
+        # STREAMED like the pair aggregate above, on `idx_{space}_quad_po`:
+        # two GroupAggregates over an index-only scan, no hash, no sort.
+        # Measured on the vg test stack: 8.1 s on 74.2M quads, 1.9 s on 14.4M.
+        # Distinct SUBJECTS are deliberately not counted: 29.7 s on the same
+        # 74.2M, and objects-per-subject is ~1 for nearly every predicate there
+        # (74.2M distinct (predicate, subject) of 74.2M rows).
+        with_objects = bool(await conn.fetchval(
+            "SELECT 1 FROM information_schema.columns WHERE table_schema = "
+            "'public' AND table_name = $1 AND column_name = 'object_count'",
+            t_pred))
+        if with_objects:
+            _hashagg = await conn.fetchval("SHOW enable_hashagg")
+            await conn.execute("SET enable_hashagg = off")
+            try:
+                await conn.execute(f"""
+                    CREATE TEMP TABLE _new_pred_objects ON COMMIT DROP AS
+                    SELECT predicate_uuid, count(*) AS object_count
+                      FROM (SELECT predicate_uuid, object_uuid FROM {t_quad}
+                             GROUP BY 1, 2) po
+                     GROUP BY predicate_uuid
+                """, timeout=timeout)
+            finally:
+                await conn.execute(f"SET enable_hashagg = {_hashagg}")
+
         await conn.execute(f"DELETE FROM {t_pred}", timeout=timeout)
-        res = await conn.execute(
-            f"INSERT INTO {t_pred} (predicate_uuid, row_count) "
-            f"SELECT predicate_uuid, row_count FROM _new_pred_stats",
-            timeout=timeout)
+        if with_objects:
+            res = await conn.execute(
+                f"INSERT INTO {t_pred} (predicate_uuid, row_count, object_count) "
+                f"SELECT p.predicate_uuid, p.row_count, o.object_count "
+                f"FROM _new_pred_stats p "
+                f"LEFT JOIN _new_pred_objects o USING (predicate_uuid)",
+                timeout=timeout)
+        else:
+            res = await conn.execute(
+                f"INSERT INTO {t_pred} (predicate_uuid, row_count) "
+                f"SELECT predicate_uuid, row_count FROM _new_pred_stats",
+                timeout=timeout)
         pred_count = int(res.split()[-1]) if res else 0
 
     await conn.execute(f"ANALYZE {t_stats}", timeout=timeout)

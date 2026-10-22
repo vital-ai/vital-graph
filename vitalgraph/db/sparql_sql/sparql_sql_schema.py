@@ -1046,7 +1046,14 @@ class SparqlSQLSchema:
                 -- deleted, and `recompute_stats_tables` has no delta
                 -- arithmetic at all -- it rebuilds from the quads -- so absence
                 -- now means exactly one thing and needs no flag to license it.
-                pruned         BOOLEAN NOT NULL DEFAULT FALSE
+                pruned         BOOLEAN NOT NULL DEFAULT FALSE,
+                -- DISTINCT OBJECTS of this predicate, so `row_count /
+                -- object_count` is its mean subjects per object: what a probe
+                -- BY OBJECT returns. PostgreSQL cannot see it (per-column
+                -- statistics) and estimated a `hasKGGraphURI` probe at ~10
+                -- rows where it returns ~1,000 (`issues/293`). NULL until the
+                -- next `recompute_stats_tables`.
+                object_count   BIGINT
             )
         ''')
 

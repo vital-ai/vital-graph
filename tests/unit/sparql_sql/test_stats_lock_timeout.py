@@ -174,7 +174,7 @@ def test_every_stats_read_bounds_its_lock_wait():
 async def test_a_transient_failure_is_not_cached(monkeypatch, caplog, exc):
     """The poisoning hazard that makes fix 1 safe.
 
-    `_load_quad_stats` caches `({}, {})` so a space genuinely without stats is
+    `_load_quad_stats` caches `({}, {}, {})` so a space genuinely without stats is
     not re-queried per request. A LOCK failure is not that, and memoising it
     would plan every later query for the space without stats — the `issues/140`
     shape: degrade correctly, say nothing, stay degraded.
@@ -212,7 +212,7 @@ async def test_a_genuinely_absent_table_is_still_cached(monkeypatch):
 
     await G._load_quad_stats(aliases, "sp_y")
 
-    assert G._stats_cache.get(("sp_y", None)) == ({}, {})
+    assert G._stats_cache.get(("sp_y", None)) == ({}, {}, {})
     G._stats_cache.pop(("sp_y", None), None)
 
 

@@ -205,11 +205,24 @@ def reorder_joins(
         placed_order.append(alias_to_table[best_alias])
         placed_set.add(best_alias)
 
-    # --- Assign constraints to ON clauses ---
+    return assign_constraints(placed_order, tagged_constraints)
+
+
+def assign_constraints(
+    placed_order: List[TableRef],
+    tagged_constraints: List[Tuple[str, str]],
+) -> Tuple[List[TableRef], Dict[str, List[str]], List[str]]:
+    """Place each constraint in the ON clause of the LAST-placed alias it involves.
+
+    The second half of `reorder_joins`, separate so an order chosen elsewhere
+    (the cardinality model, `issues/293`) is emitted by the same rule.
+    """
+    all_aliases = {t.alias for t in placed_order}
     placement_rank = {t.alias: i for i, t in enumerate(placed_order)}
     on_map: Dict[str, List[str]] = {}
 
-    for owner, sql, refs in parsed:
+    for owner, sql in tagged_constraints:
+        refs = {a for a in all_aliases if a != owner and f"{a}." in sql}
         involved = ({owner} | refs) & all_aliases
         latest = max(involved, key=lambda a: placement_rank[a])
         on_map.setdefault(latest, []).append(sql)

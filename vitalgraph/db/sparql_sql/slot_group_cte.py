@@ -43,8 +43,9 @@ it replaces, from statistics already loaded:
 
 `anchor` is the cheapest constant leaf binding ?d in this BGP; with none (an
 OPTIONAL group whose ?d comes from outside) the bound is the whole predicate.
-Mean graph size is the mean `row_count` of the predicate's pairs in `rdf_stats`,
-biased high if the table is truncated, which errs towards the CTE. The CTE
+Mean graph size is `row_count / object_count` from `rdf_pred_stats`; before a
+space's first recompute with that column, the mean `row_count` of the
+predicate's pairs in `rdf_stats`, biased high, which errs towards the CTE. The CTE
 holds at most `pinned` rows per group.
 
 Rows are unchanged: the CTE is a sub-join of the same leaves and constraints,
@@ -75,8 +76,18 @@ _COLS = ("subject_uuid", "predicate_uuid", "object_uuid", "context_uuid")
 _fanout_cache: Dict[Tuple[int, str], Optional[float]] = {}
 
 
-def mean_fanout(quad_stats: dict, pred_uuid: str) -> Optional[float]:
-    """Mean subjects per object of `pred_uuid`, from its `rdf_stats` pairs."""
+def mean_fanout(quad_stats: dict, pred_uuid: str, pred_stats: Optional[dict] = None,
+                object_counts: Optional[dict] = None) -> Optional[float]:
+    """Mean subjects per object of `pred_uuid`.
+
+    Exact when `rdf_pred_stats.object_count` is loaded: rows / distinct objects.
+    Otherwise the mean of its `rdf_stats` pairs, which keeps each predicate's
+    LARGEST pairs, so it is biased high when the table is truncated.
+    """
+    objects = (object_counts or {}).get(pred_uuid)
+    rows = (pred_stats or {}).get(pred_uuid)
+    if objects and rows is not None:
+        return rows / objects
     key = (id(quad_stats), pred_uuid)
     if key in _fanout_cache:
         return _fanout_cache[key]
@@ -209,7 +220,9 @@ def find_groups(plan, ctx, quad_tables, leaf_card: Dict[str, float],
 
         p_uuid = uuid_of(p_term)
         whole = pred_stats.get(p_uuid) if p_uuid else None
-        fanout = mean_fanout(quad_stats, p_uuid) if p_uuid else None
+        fanout = (mean_fanout(quad_stats, p_uuid, pred_stats,
+                              getattr(aliases_obj, "pred_object_counts", None))
+                  if p_uuid else None)
         # An anchor is a leaf with a CONSTANT object binding ?d (the entity
         # type). Another group's graph link also binds ?d, but is priced at its
         # whole predicate and anchors nothing.

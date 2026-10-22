@@ -103,6 +103,21 @@ def _read_statement_timeout_ms() -> int:
         return _READ_STATEMENT_TIMEOUT_MS_DEFAULT
 
 
+async def _apply_join_order(conn, gen) -> None:
+    """Keep the written join order when the generator chose it (`issues/293`).
+
+    `gen.fixed_join_order` is set only where the generator's cardinality model
+    predicted its order at least `bgp_cardinality.ENFORCE_MIN_GAIN` times
+    cheaper than the default. With eight or fewer relations Postgres otherwise
+    re-plans the order from its own estimates, which are what the model
+    corrects: a probe estimated at ~10 rows that returns ~1,000, a pair
+    estimated at 1 that holds 1,159. Postgres still chooses the join METHODS.
+    SET LOCAL: scoped to this statement's transaction.
+    """
+    if getattr(gen, "fixed_join_order", False):
+        await conn.execute("SET LOCAL join_collapse_limit = 1")
+
+
 async def _apply_read_fence(conn) -> None:
     """Set the read-path `statement_timeout` for the current transaction.
 
@@ -2558,12 +2573,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     async with conn.transaction():
                         await _apply_read_fence(conn)
                         await conn.execute("SET LOCAL enable_sort = off")
+                        await _apply_join_order(conn, gen)
                         rows = await conn.fetch(sql)
                 else:
                     # Same transaction wrapper purely so `SET LOCAL` scopes to
                     # this statement and cannot leak onto the pooled connection.
                     async with conn.transaction():
                         await _apply_read_fence(conn)
+                        await _apply_join_order(conn, gen)
                         rows = await conn.fetch(sql)
                 t_exec = _time.monotonic()
                 _marks["execute"] = t_exec

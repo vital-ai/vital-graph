@@ -258,6 +258,11 @@ class EmitContext:
         # request lists are, so a SLICE emitted inside a subquery still
         # surfaces to the executor rather than setting a flag nobody reads.
         self._needs_ordered_scan = [False]
+        # Set by emit_bgp when the generator's cardinality model chose a join
+        # order it predicts at least `bgp_cardinality.ENFORCE_MIN_GAIN` times
+        # cheaper than the default (`issues/293`). The executor then keeps the
+        # written order (`join_collapse_limit = 1`). Shared like the flag above.
+        self._fixed_join_order = [False]
         # FuzzyRequests: vg:fuzzyMatch calls that need MinHash LSH + RapidFuzz
         # resolution before SQL execution.
         self._fuzzy_requests: List['FuzzyRequest'] = []
@@ -479,6 +484,14 @@ class EmitContext:
     def needs_ordered_scan(self, value: bool) -> None:
         self._needs_ordered_scan[0] = bool(value)
 
+    @property
+    def fixed_join_order(self) -> bool:
+        return self._fixed_join_order[0]
+
+    @fixed_join_order.setter
+    def fixed_join_order(self, value: bool) -> None:
+        self._fixed_join_order[0] = bool(value)
+
     def child(self, types: Optional[TypeRegistry] = None) -> EmitContext:
         """Create a child context for nested emission.
 
@@ -511,6 +524,8 @@ class EmitContext:
         ctx._deferred_uuids = self._deferred_uuids
         # Share the ordered-scan flag (issues/047)
         ctx._needs_ordered_scan = self._needs_ordered_scan
+        # Share the fixed-join-order flag (issues/293)
+        ctx._fixed_join_order = self._fixed_join_order
         # Share unresolved-variable records so nested contexts (EXISTS bodies,
         # UNION branches) surface to the same post-generation check
         ctx._unresolved_vars = self._unresolved_vars

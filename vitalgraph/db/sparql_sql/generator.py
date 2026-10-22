@@ -70,6 +70,12 @@ class GenerateResult:
     # cannot fall back to a blocking sort over the whole match set
     # (issues/047).
     needs_ordered_scan: bool = False
+    # True when a BGP's join order was chosen by the generator's cardinality
+    # model on a predicted gain past `bgp_cardinality.ENFORCE_MIN_GAIN`. The
+    # executor keeps the written order (`join_collapse_limit = 1`), because
+    # with eight or fewer relations Postgres re-plans the order from the very
+    # estimates the model corrects (`issues/293`).
+    fixed_join_order: bool = False
     # Every pass that considered a faster shape for this query and refused,
     # with the values it refused on (`declines.py`). Carried on the result
     # rather than left in the log because the question it answers — "why is
@@ -360,19 +366,33 @@ async def _load_quad_stats(
     lock_uri = getattr(aliases, "graph_lock_uri", None)
     ck = (space_id, lock_uri)
     if ck in _stats_cache:
-        aliases.quad_stats, aliases.pred_stats = _stats_cache[ck]
+        (aliases.quad_stats, aliases.pred_stats,
+         aliases.pred_object_counts) = _stats_cache[ck]
         return
 
     from . import db_provider as db
 
     try:
+        # `object_count` is DISTINCT OBJECTS per predicate, so a probe BY
+        # OBJECT can be priced at its mean fan-out `row_count / object_count`
+        # instead of PostgreSQL's per-column guess (`issues/293`).
+        #
+        # Read through `to_jsonb(row)`, NOT by name: on a space not yet
+        # migrated the column does not exist, and naming it raises. Inside a
+        # caller's transaction that error aborts the transaction, so every
+        # later stats read fails too and the query is planned with NO stats --
+        # caught by `test_a_space_without_the_column_keeps_its_other_stats`.
+        # A missing key is just NULL.
         pred_rows = await db.execute_query(
-            f"SELECT predicate_uuid::text, row_count "
-            f"FROM {space_prefix(space_id)}_rdf_pred_stats",
+            f"SELECT ps.predicate_uuid::text, ps.row_count, "
+            f"(to_jsonb(ps) ->> 'object_count')::bigint AS object_count "
+            f"FROM {space_prefix(space_id)}_rdf_pred_stats ps",
             conn_params=conn_params, conn=conn,
             lock_timeout_ms=STATS_LOCK_TIMEOUT_MS,
         )
         pred_stats = {r["predicate_uuid"]: r["row_count"] for r in pred_rows}
+        pred_object_counts = {r["predicate_uuid"]: r["object_count"]
+                              for r in pred_rows if r["object_count"]}
 
         quad_rows = await db.execute_query(
             # Cap the stats load: at 1B quads rdf_stats can have 50-200M rows;
@@ -430,7 +450,8 @@ async def _load_quad_stats(
 
         aliases.quad_stats = quad_stats
         aliases.pred_stats = pred_stats
-        _stats_cache[ck] = (quad_stats, pred_stats)
+        aliases.pred_object_counts = pred_object_counts
+        _stats_cache[ck] = (quad_stats, pred_stats, pred_object_counts)
         logger.debug("Loaded %d pred stats, %d quad stats for %s",
                      len(pred_stats), len(quad_stats), space_id)
 
@@ -452,9 +473,11 @@ async def _load_quad_stats(
                 "query without stats and NOT caching the miss",
                 space_id, type(e).__name__, e)
             aliases.quad_stats, aliases.pred_stats = {}, {}
+            aliases.pred_object_counts = {}
             return
         logger.debug("No quad stats for %s (MV may not exist): %s", space_id, e)
-        _stats_cache[ck] = ({}, {})
+        aliases.pred_object_counts = {}
+        _stats_cache[ck] = ({}, {}, {})
 
 
 # ---------------------------------------------------------------------------
@@ -2522,6 +2545,7 @@ async def _generate_sql(
             vector_requests=ctx.vector_requests,
             fuzzy_requests=ctx.fuzzy_requests,
             needs_ordered_scan=ctx.needs_ordered_scan,
+            fixed_join_order=ctx.fixed_join_order,
             traversal_decision=getattr(aliases, "traversal_decision", None),
         )
 
