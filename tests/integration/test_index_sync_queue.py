@@ -138,6 +138,104 @@ async def test_release_gives_back_only_this_consumers_rows(test_space, pg_conn):
 
 
 # ---------------------------------------------------------------------------
+# A consumer never waits on a writer (`issues/294`)
+#
+# A frame delete queues its frames' rows in one statement and, later in the
+# same transaction, its owner entity's row (the modification stamp). A
+# consumer finishing a batch with both used a plain DELETE: it took the entity
+# row, waited on a frame row the writer held, and the writer's stamp then
+# waited on the entity row. 15 deadlocks in two days on the test stack, one
+# of them a user's frame delete rolled back.
+# ---------------------------------------------------------------------------
+
+async def _writer_holding(pg_pool, space, subjects):
+    """A writer mid-transaction: its first statement has queued `subjects`."""
+    from vitalgraph.vectorization import index_sync_queue as q
+    conn = await pg_pool.acquire()
+    tx = conn.transaction()
+    await tx.start()
+    await q.enqueue(conn, space, _ctx(), subjects, "upsert")
+    return conn, tx
+
+
+async def test_complete_does_not_wait_on_a_row_a_writer_holds(test_space, pg_pool):
+    from vitalgraph.vectorization import index_sync_queue as q
+    entity, frame = sorted([uuid.uuid4(), uuid.uuid4()])
+    async with pg_pool.acquire() as conn:
+        await _clear(conn, test_space)
+        await q.enqueue(conn, test_space, _ctx(), [entity, frame], "upsert")
+        claimed = await q.claim(conn, test_space, "c1", 10)
+    w, tx = await _writer_holding(pg_pool, test_space, [frame])
+    try:
+        async with pg_pool.acquire() as conn:
+            # Old code: blocks until the writer commits. Bounded here so a
+            # regression fails rather than hangs.
+            await asyncio.wait_for(q.complete(conn, test_space, "c1", claimed), 10)
+            rows = {r["subject_uuid"]: r for r in await _rows(conn, test_space)}
+        assert entity not in rows, "the row it could lock is finished"
+        assert rows[frame]["claimed_by"] == "c1", (
+            "the held row keeps its claim: left to the lease, never lost")
+        # The writer's later statement, the stamp, now takes the entity row
+        # without waiting on the consumer. Before the fix, the deadlock.
+        await asyncio.wait_for(
+            q.enqueue(w, test_space, _ctx(), [entity], "upsert"), 10)
+    finally:
+        await tx.commit()
+        await pg_pool.release(w)
+    async with pg_pool.acquire() as conn:
+        rows = {r["subject_uuid"]: r for r in await _rows(conn, test_space)}
+    assert rows[frame]["generation"] == 2 and rows[entity]["generation"] == 1
+
+
+async def test_a_writer_committing_during_the_retries_is_released_not_lost(
+        test_space, pg_pool):
+    from vitalgraph.vectorization import index_sync_queue as q
+    frame = uuid.uuid4()
+    async with pg_pool.acquire() as conn:
+        await _clear(conn, test_space)
+        await q.enqueue(conn, test_space, _ctx(), [frame], "upsert")
+        claimed = await q.claim(conn, test_space, "c1", 10)
+    w, tx = await _writer_holding(pg_pool, test_space, [frame])
+
+    async def commit_soon():
+        await asyncio.sleep(0.08)
+        await tx.commit()
+    try:
+        async with pg_pool.acquire() as conn:
+            overtaken, _ = await asyncio.gather(
+                q.complete(conn, test_space, "c1", claimed), commit_soon())
+            [row] = await _rows(conn, test_space)
+    finally:
+        await pg_pool.release(w)
+    assert overtaken == 1
+    assert row["generation"] == 2 and row["claimed_by"] is None, (
+        "the writer's bump survives, and the row is claimable again at once")
+
+
+async def test_fail_and_release_do_not_wait_on_a_writer(test_space, pg_pool):
+    from vitalgraph.vectorization import index_sync_queue as q
+    a, b = sorted([uuid.uuid4(), uuid.uuid4()])
+    async with pg_pool.acquire() as conn:
+        await _clear(conn, test_space)
+        await q.enqueue(conn, test_space, _ctx(), [a, b], "upsert")
+        claimed = await q.claim(conn, test_space, "c1", 10)
+    w, tx = await _writer_holding(pg_pool, test_space, [b])
+    try:
+        async with pg_pool.acquire() as conn:
+            await asyncio.wait_for(q.fail(conn, test_space, "c1", claimed, "boom"), 10)
+            rows = {r["subject_uuid"]: r for r in await _rows(conn, test_space)}
+            assert rows[a]["claimed_by"] is None and rows[a]["last_error"] == "boom"
+            assert rows[b]["claimed_by"] == "c1"
+            assert await asyncio.wait_for(q.release(conn, test_space, "c1"), 10) == 0
+    finally:
+        await tx.rollback()
+        await pg_pool.release(w)
+    async with pg_pool.acquire() as conn:
+        assert await q.release(conn, test_space, "c1") == 1, (
+            "once the writer is gone, the held row is released")
+
+
+# ---------------------------------------------------------------------------
 # The consumers
 # ---------------------------------------------------------------------------
 

@@ -22,14 +22,30 @@ duplicate sync, never a lost one.
 
 Rows are written and claimed in key order, so two multi-row statements cannot
 lock the same rows in opposite orders.
+
+THE CONSUMER NEVER WAITS ON A ROW LOCK (`issues/294`). Key order holds within
+one statement, not across a writer's transaction: a frame delete queues its
+frames' rows in its first statement and its owner entity's row in a later
+one (the modification stamp), so it locks them out of key order. A consumer
+that deleted its finished batch with a plain DELETE took the entity's row,
+then waited on a frame row the writer held, while the writer's stamp waited
+on the entity's: 15 deadlocks in two days on the test stack, one of them
+killing a user's frame delete. `complete`, `fail` and `release` therefore
+lock their rows with `FOR UPDATE SKIP LOCKED` first and touch only what they
+hold. A transaction that never waits cannot be part of a cycle, whatever any
+writer does. A row a writer holds is retried briefly outside the transaction
+and, if still held, left to its lease: a duplicate sync, never a lost one.
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence, Tuple
 from vitalgraph.db.sparql_sql.space_names import space_prefix
+
+logger = logging.getLogger(__name__)
 
 NOTIFY_CHANNEL = "vg_index_sync"
 
@@ -114,26 +130,94 @@ def _arrays(claimed: Sequence[Claimed]) -> Tuple[list, list, list]:
             [c.generation for c in claimed])
 
 
+# Retries for rows a writer holds when a consumer finishes: short, outside any
+# transaction. A writer's transaction is milliseconds unless it is slow, and a
+# row still held after these waits out its lease instead.
+_HELD_RETRIES = 4
+_HELD_BACKOFF_SECONDS = 0.05
+
+
+async def _lock_held(conn, t: str, ctxs: list, subs: list):
+    """Lock what can be locked of these keys, in key order, WITHOUT waiting.
+
+    Returns (locked, held): `locked` are the keys this transaction now holds;
+    `held` are keys that exist but another transaction holds. A key that is in
+    neither no longer exists. Must run inside a transaction.
+    """
+    rows = await conn.fetch(
+        f"SELECT q.context_uuid, q.subject_uuid FROM {t} q "
+        f"JOIN unnest($1::uuid[], $2::uuid[]) AS d(c, s) "
+        f"  ON q.context_uuid = d.c AND q.subject_uuid = d.s "
+        f"ORDER BY q.context_uuid, q.subject_uuid "
+        f"FOR UPDATE OF q SKIP LOCKED", ctxs, subs)
+    locked = {(r["context_uuid"], r["subject_uuid"]) for r in rows}
+    rest = [(c, s) for c, s in zip(ctxs, subs) if (c, s) not in locked]
+    held = set()
+    if rest:
+        # A plain read does not wait on row locks, so this tells a row another
+        # transaction holds from one that is gone.
+        rows = await conn.fetch(
+            f"SELECT q.context_uuid, q.subject_uuid FROM {t} q "
+            f"JOIN unnest($1::uuid[], $2::uuid[]) AS d(c, s) "
+            f"  ON q.context_uuid = d.c AND q.subject_uuid = d.s",
+            [c for c, _ in rest], [s for _, s in rest])
+        held = {(r["context_uuid"], r["subject_uuid"]) for r in rows}
+    return locked, held
+
+
+async def _without_waiting(conn, t: str, claimed: Sequence[Claimed], step):
+    """Run `step(conn, claimed_subset)` on the rows that can be locked now,
+    retrying rows another transaction holds. Returns (step results, still held)."""
+    import asyncio
+    remaining = sorted(claimed, key=lambda c: (c.context_uuid, c.subject_uuid))
+    results = []
+    for attempt in range(_HELD_RETRIES + 1):
+        async with conn.transaction():
+            locked, held = await _lock_held(
+                conn, t, [c.context_uuid for c in remaining],
+                [c.subject_uuid for c in remaining])
+            mine = [c for c in remaining if (c.context_uuid, c.subject_uuid) in locked]
+            if mine:
+                results.append(await step(conn, mine))
+        remaining = [c for c in remaining if (c.context_uuid, c.subject_uuid) in held]
+        if not remaining or attempt == _HELD_RETRIES:
+            break
+        await asyncio.sleep(_HELD_BACKOFF_SECONDS * 2 ** attempt)
+    return results, remaining
+
+
 async def complete(conn, space_id: str, consumer: str,
                    claimed: Sequence[Claimed]) -> int:
     """Finish `claimed`. Returns how many rows were overtaken by a newer write
-    and so stay queued (released from this claim, due now)."""
+    and so stay queued (released from this claim, due now).
+
+    Never waits on a row lock (see the module note). A row a writer still holds
+    after the retries keeps its claim and is synced again when the lease runs
+    out; the writer is bumping it, so it would have stayed queued anyway.
+    """
     if not claimed:
         return 0
     t = queue_table(space_id)
-    ctxs, subs, gens = _arrays(claimed)
-    async with conn.transaction():
-        await conn.execute(
+
+    async def step(c, rows):
+        ctxs, subs, gens = _arrays(rows)
+        await c.execute(
             f"DELETE FROM {t} q USING unnest($1::uuid[], $2::uuid[], $3::bigint[]) "
             f"  AS d(c, s, g) "
             f"WHERE q.context_uuid = d.c AND q.subject_uuid = d.s AND q.generation = d.g",
             ctxs, subs, gens)
-        status = await conn.execute(
+        status = await c.execute(
             f"UPDATE {t} q SET claimed_by = NULL, claimed_until = NULL "
             f"FROM unnest($1::uuid[], $2::uuid[]) AS d(c, s) "
             f"WHERE q.context_uuid = d.c AND q.subject_uuid = d.s AND q.claimed_by = $3",
             ctxs, subs, consumer)
-    return int(status.split()[-1]) if status else 0
+        return int(status.split()[-1]) if status else 0
+
+    results, held = await _without_waiting(conn, t, claimed, step)
+    if held:
+        logger.info("index sync %s: %d finished row(s) held by a writer; left to "
+                    "their lease", space_id, len(held))
+    return sum(results)
 
 
 def backoff_seconds(attempts: int) -> int:
@@ -145,31 +229,44 @@ async def fail(conn, space_id: str, consumer: str, claimed: Sequence[Claimed],
     """Give `claimed` back for a retry after a backoff from its attempt count.
 
     A row a newer write has bumped (attempts reset to 0) is due at once; the
-    backoff is for the failure, and the new write is a new request.
+    backoff is for the failure, and the new write is a new request. Never
+    waits on a row lock; a row a writer holds keeps its claim until the lease
+    runs out, and is retried then.
     """
     if not claimed:
         return
     t = queue_table(space_id)
-    ctxs, subs, gens = _arrays(claimed)
-    await conn.execute(
-        f"UPDATE {t} q SET claimed_by = NULL, claimed_until = NULL, "
-        f"  last_error = left($4, 2000), "
-        f"  next_attempt_at = CASE WHEN q.generation = d.g "
-        f"    THEN NOW() + make_interval(secs => LEAST($5::float8, "
-        f"         $6::float8 * power(2, GREATEST(q.attempts - 1, 0)))) "
-        f"    ELSE NOW() END "
-        f"FROM unnest($1::uuid[], $2::uuid[], $3::bigint[]) AS d(c, s, g) "
-        f"WHERE q.context_uuid = d.c AND q.subject_uuid = d.s AND q.claimed_by = $7",
-        ctxs, subs, gens, error, float(_BACKOFF_MAX_SECONDS),
-        float(_BACKOFF_BASE_SECONDS), consumer)
+
+    async def step(c, rows):
+        ctxs, subs, gens = _arrays(rows)
+        await c.execute(
+            f"UPDATE {t} q SET claimed_by = NULL, claimed_until = NULL, "
+            f"  last_error = left($4, 2000), "
+            f"  next_attempt_at = CASE WHEN q.generation = d.g "
+            f"    THEN NOW() + make_interval(secs => LEAST($5::float8, "
+            f"         $6::float8 * power(2, GREATEST(q.attempts - 1, 0)))) "
+            f"    ELSE NOW() END "
+            f"FROM unnest($1::uuid[], $2::uuid[], $3::bigint[]) AS d(c, s, g) "
+            f"WHERE q.context_uuid = d.c AND q.subject_uuid = d.s AND q.claimed_by = $7",
+            ctxs, subs, gens, error, float(_BACKOFF_MAX_SECONDS),
+            float(_BACKOFF_BASE_SECONDS), consumer)
+
+    await _without_waiting(conn, t, claimed, step)
 
 
 async def release(conn, space_id: str, consumer: str) -> int:
     """Give back every row `consumer` holds, due now -- at shutdown, so a
     deploy does not leave them waiting out their lease."""
-    status = await conn.execute(
-        f"UPDATE {queue_table(space_id)} SET claimed_by = NULL, claimed_until = NULL "
-        f"WHERE claimed_by = $1", consumer)
+    t = queue_table(space_id)
+    async with conn.transaction():
+        # Locked without waiting, like `complete`: a row a writer holds keeps
+        # this claim until its lease runs out.
+        status = await conn.execute(
+            f"UPDATE {t} q SET claimed_by = NULL, claimed_until = NULL "
+            f"FROM (SELECT context_uuid, subject_uuid FROM {t} WHERE claimed_by = $1 "
+            f"      ORDER BY context_uuid, subject_uuid FOR UPDATE SKIP LOCKED) h "
+            f"WHERE q.context_uuid = h.context_uuid AND q.subject_uuid = h.subject_uuid",
+            consumer)
     return int(status.split()[-1]) if status else 0
 
 

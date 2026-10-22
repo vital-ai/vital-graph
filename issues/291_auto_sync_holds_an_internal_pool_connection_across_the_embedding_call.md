@@ -151,7 +151,11 @@ before. Plan: `planning/planning_vector_geo/index_sync_outbox_trigger_plan.md`
   triggers `trg_{space}_isq_ins` / `trg_{space}_isq_del`.
   - Each is `AFTER ... REFERENCING NEW|OLD TABLE ... FOR EACH STATEMENT`: one
     `INSERT ... SELECT DISTINCT ... ON CONFLICT` per write statement, in key
-    order so writers cannot deadlock on the queue rows.
+    order so writers cannot deadlock on the queue rows. **Corrected by
+    `issues/294`:** key order holds within ONE statement. A write that queues
+    rows in two statements (a frame delete, then its entity's stamp)
+    deadlocked with a consumer's `complete()`. The consumer side is safe now
+    because it never waits on a row lock, not because of this ordering.
   - It sends a `pg_notify`, which PostgreSQL deduplicates and delivers at
     commit.
   - Proven first on PostgreSQL 18.4, on a hash-partitioned table, for COPY and
