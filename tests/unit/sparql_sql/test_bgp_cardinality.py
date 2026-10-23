@@ -141,3 +141,46 @@ def test_the_gate_declines_what_it_cannot_price(monkeypatch):
     leaves = dict(_DASHBOARD, q1=_leaf("q1", rows=None, objs=None))
     order, d = _gate(monkeypatch, leaves, ["q0", "q1", "q2", "q3"])
     assert order is None and not d.fired
+
+
+# ---------------------------------------------------------------------------
+# EXISTS bodies: correlated variables bound per outer row (`issues/293`)
+# ---------------------------------------------------------------------------
+
+def test_a_bound_variable_prices_one_probe_not_the_whole_body():
+    """With ?d bound (an EXISTS body correlated on it) the chain starts at one
+    row: the work of one probe, not the 1,159 decisions."""
+    est = estimate_order(_by_reason_shape(), _DASHBOARD, ["q1", "q2", "q3"],
+                         bound_vars=["d"])
+    assert est[0] == pytest.approx(505.8, rel=1e-3)   # ?d's graph members
+    assert est[1] <= est[0]                           # contained in the pin
+
+
+def test_the_gate_prices_both_orders_with_the_bound_variables(monkeypatch):
+    """`enforced_order` hands `bound_vars` to both the model's order and the
+    default's, and records them, so a body is not priced as a full scan."""
+    plan = _by_reason_shape()
+    tables = [TableRef(ref_id=a, kind="quad", table_name="t", alias=a)
+              for a in ("q0", "q1", "q2", "q3")]
+    monkeypatch.setattr(BC, "leaves_from", lambda *a, **k: _DASHBOARD)
+    aliases = AliasGenerator()
+    BC.enforced_order(plan, aliases, tables, {}, lambda t: None,
+                      ["q0", "q1", "q2", "q3"], ["d"])
+    [d] = [d for d in aliases.plan_decisions.decisions if d.name == BC.NAME]
+    assert d.detail.get("bound") == ["d"]
+
+
+def test_an_exists_body_gets_the_outer_planning_stats():
+    """A body's AliasGenerator is born empty. Without the outer statistics it
+    was ordered blind: only_cause's NOT EXISTS ran 3,551,621 probes (25.8 s),
+    6,950 (2.3 s) with them."""
+    from vitalgraph.db.sparql_sql.emit_expressions import _share_planning_stats
+    outer, inner = AliasGenerator(), AliasGenerator(alias_prefix="ex_")
+    outer.quad_stats = {("p", "o"): 7}
+    outer.pred_stats = {"p": 70}
+    outer.pred_object_counts = {"p": 10}
+    inner.pred_stats = {"own": 1}          # a body's own value is not overwritten
+    _share_planning_stats(outer, inner)
+    assert inner.quad_stats == {("p", "o"): 7}
+    assert inner.pred_object_counts == {"p": 10}
+    assert inner.pred_stats == {"own": 1}

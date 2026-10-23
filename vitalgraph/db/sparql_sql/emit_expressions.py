@@ -1999,6 +1999,33 @@ def expr_to_sql_exists_with_overrides(expr: ExprExists, ctx: EmitContext,
     return _exists_to_sql(expr, ctx, outer_uuid_overrides=overrides)
 
 
+#: Statistics an EXISTS body plans with, keyed by predicate/object uuid (never
+#: by alias), so the outer query's copy is the body's too.
+_SHARED_STATS = ("quad_stats", "pred_stats", "pred_object_counts",
+                 "extra_quad_stats", "saturated_pairs", "edge_fanout",
+                 "plan_decisions")
+
+
+def _share_planning_stats(outer, inner) -> None:
+    """Give an EXISTS body the outer query's planning statistics (`issues/293`).
+
+    A body gets its own AliasGenerator so its constants stay its own, and that
+    generator was born empty: no pair counts, no predicate stats. Every body
+    was ordered by `reorder_joins` with nothing to go on, the model could not
+    price it, and slot groups could not fire in it. only_cause's NOT EXISTS
+    body was good only because a statement-wide pin froze its written order.
+    Shared at emit time because some of these are filled after the bodies are
+    prepared. The decision recorder is shared too, so body decisions are seen.
+    """
+    for name in _SHARED_STATS:
+        val = getattr(outer, name, None)
+        if val is not None and not getattr(inner, name, None):
+            try:
+                setattr(inner, name, val)
+            except Exception:
+                pass
+
+
 def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
                    outer_uuid_overrides: Optional[dict] = None) -> Optional[str]:
     """Emit EXISTS / NOT EXISTS as a correlated SQL subquery.
@@ -2032,6 +2059,7 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
     if expr.prepared_plan is not None and expr.prepared_aliases is not None:
         inner_plan = expr.prepared_plan
         inner_aliases = expr.prepared_aliases
+        _share_planning_stats(ctx.aliases, inner_aliases)
     else:
         inner_aliases = AliasGenerator(alias_prefix="ex_")
         inner_plan = collect(gp, ctx.space_id, inner_aliases,
@@ -2081,6 +2109,9 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
     # onto a context nobody reads, which is exactly how issue 027 stayed
     # invisible.
     inner_ctx._unresolved_vars = ctx._unresolved_vars
+    # Likewise the statement-wide join-order pin: a model order written inside
+    # the body is only kept if the executor pins the statement.
+    inner_ctx._fixed_join_order = ctx._fixed_join_order
 
     outer_vars = set(ctx.types.all_vars())
     inner_scope = compute_scope(inner_plan)

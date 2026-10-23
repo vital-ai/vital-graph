@@ -586,6 +586,70 @@ statistics ledger's count), and with no groups the code path is unchanged.
 Tests: `test_slot_group_cte.py`, three precedence tests. The displacement one
 fails on the previous code.
 
+### Re-measured 2026-10-22: the model's error, and whether the gate can come down
+
+q-error (`model_vs_pg.py`, the emitted order's prefixes vs actual counts):
+
+| corpus | model geo-mean | model max | prefixes > 6x | Postgres geo-mean |
+|---|---|---|---|---|
+| UW, corrected fixture (`uw_prodshape2`) | **1.34** | **3.4** | 0 / 122 | 247.6 |
+| UW, old fixture (`uw_prodshape`, earlier) | 2.58 | 847 | | 189.9 |
+| leads (held out, `sp_lead_synth_100k`) | 3.73 | 6,788,018 | 5 / 33 | 41.0 |
+
+The old fixture's dangling frames had inflated the UW error too. On realistic
+UW data the model is within 3.4x everywhere. The lead corpus keeps the extreme
+cases `issues/297` names (uniform-data containment, child frames that are
+never an object).
+
+Gate sweep on real plans (`gate_sweep.py`, gates 10/5/3/1, both corpora,
+identical result multisets except `l2_page`, whose `LIMIT 25` cuts a 59-way
+tie at 100.0; same ratings both ways):
+
+- **gate 5**: no change anywhere (one more BGP fires on lead `l3`, same plan
+  cost).
+- **gate 3**: latest_per_deal 246 -> 137 ms, decision_page 300 -> 261 ms, but
+  **category_page 1,670 -> 3,850 ms** with identical loops.
+- **gate 1**: as gate 3 on UW; leads `l2_page` 25.3 -> 18.0 s, `l5` 35.2 ->
+  25.6 s.
+
+Decision: **keep 10.** Lowering it buys a few queries and costs category_page
+2.3x, and that cost is the statement-wide pin, not the model's estimate: pinning
+today's own order slowed category the same way (P arm above). What blocks a
+lower gate is that a fire anywhere pins the whole statement. A per-BGP pin
+(none available: 296) or a pin limited to the statement's own BGP join would
+be the change that lets it come down.
+
+### Done 2026-10-22: EXISTS bodies plan with the outer query's statistics
+
+Each EXISTS body is collected into its own AliasGenerator (`ex_` prefix, so
+its constants stay its own), and that generator was born **empty**: no pair
+counts, no predicate stats, no object counts. Every body was ordered by
+`reorder_joins` with nothing to go on, the model could not price it (the 7
+"could not price" prefixes in every `model_vs_pg` run were only_cause's body),
+and slot groups could not fire in it. only_cause was tolerable only because a
+statement-wide pin froze its body's written order (above).
+
+`emit_expressions._share_planning_stats` gives a body the outer generator's
+uuid-keyed statistics at emit time (some are filled after the bodies are
+prepared), plus the decision recorder. The body's context now shares the
+statement's join-order pin. The model prices a body with its correlated
+variables bound (`bound_vars`, one value per outer row; `enforced_order` passes
+them to both orders and records them).
+
+`uw_prodshape2`, only_cause, identical result multisets, medians of 5:
+
+| body planned with | busiest loops | median |
+|---|---|---|
+| no statistics (before) | 3,551,621 | 25.8 s |
+| statistics; the model's bound-variable order | 90,567 | 4.4 s |
+| statistics; slot groups (what runs, by the precedence rule) | **6,950** | **2.3 s** |
+
+The side-effect dependency is gone in the sense that matters: the body is now
+planned from statistics, not rescued by a pin. DAWG unchanged (1,532 passed);
+integration 711 passed, 1 failed: `test_index_sync_queue.py::
+test_a_burst_is_bounded_and_does_not_starve_the_pool`, which also fails 1 in 4
+on the committed code (a queue-drain timing flake, not SPARQL).
+
 ## Attempted 2026-10-22, and reverted: lift `only_cause`'s correlated FILTER out of the NOT EXISTS body
 
 **Hypothesis:** `only_cause`'s `NOT EXISTS` runs as a SubPlan per outer row

@@ -270,8 +270,12 @@ def _model_join_order(plan: PlanV2, ctx: EmitContext, quad_tables, leaf_card):
             quad_tables, plan.tagged_constraints,
             quad_stats=ctx.aliases.quad_stats, pred_stats=ctx.aliases.pred_stats,
             leaf_cardinality=leaf_card)
+        # Inside an EXISTS body the correlated variables are bound, one value
+        # per outer row: price the probe, not the whole body.
+        bound = sorted(set(getattr(ctx, "correlated_scope", None) or ())
+                       & set(plan.var_slots))
         return enforced_order(plan, ctx.aliases, quad_tables, leaf_card, uuid_of,
-                              [t.alias for t in default])
+                              [t.alias for t in default], bound)
     except Exception as exc:
         logger.warning("model join order failed, using the default: %s", exc)
         return None

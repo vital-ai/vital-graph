@@ -144,7 +144,8 @@ def step_factor(leaf: Leaf, subject_bound: bool, object_bound: bool) -> Optional
     return (rows / objs) if (rows and objs) else None
 
 
-def estimate_order(plan, leaves: Dict[str, Leaf], order: Sequence[str]) -> List[Optional[float]]:
+def estimate_order(plan, leaves: Dict[str, Leaf], order: Sequence[str],
+                   bound_vars: Sequence[str] = ()) -> List[Optional[float]]:
     """Estimated rows after joining each prefix of `order` (left-deep).
 
     Tracks DISTINCT VALUES per variable (`ndv`), because containment caps the
@@ -153,21 +154,26 @@ def estimate_order(plan, leaves: Dict[str, Leaf], order: Sequence[str]) -> List[
     variable's distinct count comes from what introduced it: the rows, for a
     fresh subject; at most the predicate's distinct objects, for an object.
 
+    `bound_vars`: variables bound BEFORE the join, one value each, as an
+    EXISTS probe sees its correlated key. The estimate then starts at one row,
+    and is the probe's work per outer row.
+
     None from the first step that cannot be priced onward: an unpriced factor
     is reported as unknown, never guessed.
     """
     var_at, holders = _positions(plan)
     placed: Set[str] = set()
-    ndv: Dict[str, float] = {}
+    seeded = set(bound_vars)
+    ndv: Dict[str, float] = {v: 1.0 for v in seeded}
     out: List[Optional[float]] = []
-    est: Optional[float] = None
+    est: Optional[float] = 1.0 if seeded else None
     for i, a in enumerate(order):
         leaf = leaves[a]
         s_var, o_var = var_at.get((a, "subject_uuid")), var_at.get((a, "object_uuid"))
-        s_bound = bool(s_var and (holders.get(s_var, set()) & placed))
-        o_bound = bool(o_var and (holders.get(o_var, set()) & placed))
+        s_bound = bool(s_var and (s_var in seeded or holders.get(s_var, set()) & placed))
+        o_bound = bool(o_var and (o_var in seeded or holders.get(o_var, set()) & placed))
 
-        if i == 0:
+        if i == 0 and not seeded:
             est = leaf.scan_rows
         elif est is not None:
             f = step_factor(leaf, s_bound, o_bound)
@@ -190,8 +196,8 @@ def estimate_order(plan, leaves: Dict[str, Leaf], order: Sequence[str]) -> List[
     return out
 
 
-def choose_order(plan, leaves: Dict[str, Leaf],
-                 aliases: Sequence[str]) -> Tuple[Optional[List[str]], Optional[float]]:
+def choose_order(plan, leaves: Dict[str, Leaf], aliases: Sequence[str],
+                 bound_vars: Sequence[str] = ()) -> Tuple[Optional[List[str]], Optional[float]]:
     """The left-deep order the model prices cheapest, and its cost.
 
     Cost is the sum of every prefix's estimated rows (C_out): what each step
@@ -207,21 +213,29 @@ def choose_order(plan, leaves: Dict[str, Leaf],
         for a in hs:
             vars_of.setdefault(a, set()).add(v)
 
+    seeded = set(bound_vars)
+
     def connected(a, placed):
-        return any(holders[v] & placed for v in vars_of.get(a, ()))
+        return any((v in seeded) or (holders[v] & placed) for v in vars_of.get(a, ()))
 
     best: Tuple[Optional[List[str]], Optional[float]] = (None, None)
     for root in aliases:
-        if leaves[root].scan_rows is None:
+        if seeded:
+            if not connected(root, set()):
+                continue
+            first = estimate_order(plan, leaves, [root], bound_vars)[-1]
+        else:
+            first = leaves[root].scan_rows
+        if first is None:
             continue
-        order, cost, placed = [root], leaves[root].scan_rows, {root}
+        order, cost, placed = [root], first, {root}
         ok = True
         while len(order) < len(aliases):
             cands = []
             for a in aliases:
                 if a in placed or not connected(a, placed):
                     continue
-                est = estimate_order(plan, leaves, order + [a])[-1]
+                est = estimate_order(plan, leaves, order + [a], bound_vars)[-1]
                 if est is not None:
                     cands.append((est, aliases.index(a), a))
             if not cands:
@@ -248,8 +262,12 @@ NAME = "model_join_order"
 
 
 def enforced_order(plan, aliases, quad_tables, leaf_card: Dict[str, float], uuid_of,
-                   default_order: Sequence[str]) -> Optional[List[str]]:
+                   default_order: Sequence[str],
+                   bound_vars: Sequence[str] = ()) -> Optional[List[str]]:
     """The model's order, when it beats `default_order` by ENFORCE_MIN_GAIN.
+
+    `bound_vars`: variables bound per outer row, as an EXISTS body's correlated
+    variables are. Both orders are then priced as the work of one probe.
 
     Records the verdict in `plan_decisions` either way. None keeps the default.
     """
@@ -259,17 +277,17 @@ def enforced_order(plan, aliases, quad_tables, leaf_card: Dict[str, float], uuid
     if len(aliases_list) < 2:
         return None
     leaves = leaves_from(plan, aliases, quad_tables, leaf_card, uuid_of)
-    order, cost = choose_order(plan, leaves, aliases_list)
+    order, cost = choose_order(plan, leaves, aliases_list, bound_vars)
     if not order:
         rec.declined(NAME, "the model cannot price a complete order", tables=len(aliases_list))
         return None
-    est = estimate_order(plan, leaves, list(default_order))
+    est = estimate_order(plan, leaves, list(default_order), bound_vars)
     if any(e is None for e in est):
         rec.declined(NAME, "the model cannot price the default order", tables=len(aliases_list))
         return None
     default_cost = sum(est)
     gain = default_cost / cost if cost else float("inf")
-    detail = dict(tables=len(aliases_list), gain=round(gain, 1),
+    detail = dict(tables=len(aliases_list), gain=round(gain, 1), bound=sorted(bound_vars),
                   default_root=default_order[0], model_root=order[0],
                   default_cost=round(default_cost), model_cost=round(cost))
     if gain < ENFORCE_MIN_GAIN:
