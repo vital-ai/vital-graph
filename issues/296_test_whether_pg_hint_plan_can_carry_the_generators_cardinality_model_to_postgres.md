@@ -1,6 +1,6 @@
 # 296 — Test whether `pg_hint_plan` can carry the generator's cardinality model to Postgres
 
-## Status: OPEN — experiment, not started (2026-10-22). Not a defect: a question with a decision at the end.
+## Status: OPEN — arm C measured 2026-10-22: per-BGP `Leading()` is not available (one `Leading()` per statement; a partial one pushes the rest onto disabled paths). Arms B and D not run. See "Results, arm C first".
 
 **Related:** `issues/293` (the generator's cardinality model and how its order is
 enforced today), `issues/119` §9 ("do not fix the estimate", measured),

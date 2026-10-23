@@ -1,6 +1,6 @@
 # 297 — The cardinality model guesses where characteristic sets and pairs would count
 
-## Status: OPEN — proposal, not started (2026-10-22). Step 0 (a cheap census) decides whether any of the rest is built.
+## Status: OPEN — step 0 (census) run 2026-10-23 and passed; step 1 (offline estimate) is next and not started. K must be data-derived (UW has 1,010 slot types). See "Step 0 census".
 
 **Related:** `issues/293` (the generator's cardinality model; its "Known
 limits" name this gap: "Choosing per step needs co-occurrence statistics
