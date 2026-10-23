@@ -248,11 +248,7 @@ def _model_join_order(plan: PlanV2, ctx: EmitContext, quad_tables, leaf_card):
     # roots on those ahead of any row count, for measured reasons (`issues/181`,
     # `202`: 25x to 1,000x from rooting elsewhere), and the model does not price
     # them the way that rule needs.
-    anchored = (bool((leaf_card.get("__range_aliases__") or set()))
-                or bool(getattr(plan, "fts_leaf_rows", None))
-                or any(k in sql for _, sql in plan.tagged_constraints
-                       for k in ("LIKE", "~*", "~ '", "IN (SELECT term_uuid")))
-    if anchored:
+    if _has_unpriced_anchor(plan, leaf_card):
         from .plan_decisions import recorder_for
         recorder_for(ctx.aliases).declined(
             "model_join_order", "a text, range or FTS anchor keeps the default order")
@@ -304,6 +300,62 @@ def _slot_group_ctes(plan: PlanV2, ctx: EmitContext, quad_tables, tagged,
                             reorder_joins), unanchored
     except Exception as exc:
         logger.warning("slot-group CTE failed, using the flat join: %s", exc)
+        return None
+
+
+def _has_unpriced_anchor(plan, leaf_card) -> bool:
+    """A TEXT, RANGE or FTS anchor, which `reorder_joins` roots on ahead of
+    any row count for measured reasons (`issues/181`, `202`) and the model
+    does not price that way."""
+    return (bool((leaf_card.get("__range_aliases__") or set()))
+            or bool(getattr(plan, "fts_leaf_rows", None))
+            or any(k in sql for _, sql in (plan.tagged_constraints or [])
+                   for k in ("LIKE", "~*", "~ '", "IN (SELECT term_uuid")))
+
+
+def _hop_wise_start_dearer(plan, ctx, quad_tables, decision):
+    """Facts for declining hop-wise when the rows its walk starts from are at
+    least ENFORCE_MIN_GAIN times the model's cost of the whole flat join, or
+    None (proceed). None too whenever anything is unpriced: the traversal
+    decision then stands, as it did before the model priced edges."""
+    try:
+        from .bgp_cardinality import (ENFORCE_MIN_GAIN, PRICED_KINDS, choose_order,
+                                      leaves_from)
+        if any(t.kind not in PRICED_KINDS for t in quad_tables):
+            return None
+        chain = decision.chain
+        start_alias = (chain.head_constraint_alias
+                       if getattr(decision, "direction", None) == "head"
+                       else chain.tail_constraint_alias)
+        if not start_alias:
+            return None
+        consts = getattr(ctx.aliases, "constants", None) or {}
+        resolved = getattr(ctx.aliases, "resolved_constants", None) or {}
+
+        def uuid_of(term):
+            col = consts.get(_widen_term(term))
+            return resolved.get(col) if col else None
+
+        leaf_card = _leaf_cardinality(plan, ctx)
+        # A TEXT, RANGE or FTS anchor: the model does not price it the way
+        # the traversal needs (the same exclusion `_model_join_order` makes).
+        # Without it a range-comparator walk was declined against a flat cost
+        # that ignored its range: KGQuery range_penalty[100k] 6,245 ->
+        # 171,588 buffers.
+        if _has_unpriced_anchor(plan, leaf_card):
+            return None
+        leaves = leaves_from(plan, ctx.aliases, quad_tables, leaf_card, uuid_of)
+        aliases = [t.alias for t in quad_tables]
+        if any(a not in leaves for a in aliases) or start_alias not in leaves:
+            return None
+        start = leaves[start_alias].scan_rows
+        _, flat = choose_order(plan, leaves, aliases)
+        if start is None or flat is None or start < ENFORCE_MIN_GAIN * flat:
+            return None
+        return dict(start=start_alias, start_rows=round(start), flat_cost=round(flat),
+                    direction=getattr(decision, "direction", None))
+    except Exception as exc:
+        logger.warning("hop-wise start pricing failed, keeping the decision: %s", exc)
         return None
 
 
@@ -439,6 +491,20 @@ def _try_hop_wise(plan: PlanV2, ctx: EmitContext, quad_tables,
                 "the frame_slot collapse serves the flat path for this shape, "
                 "and hop-wise has no reorder_joins to place the pin",
                 tables=sorted({getattr(t, "kind", "?") for t in quad_tables}))
+        # A walk that starts from far more rows than the whole flat join costs
+        # stays flat (`issues/293` stage 6). The chain's ends are only what
+        # `traversal_chain` recognised; a pin elsewhere in the BGP (an entity
+        # on the OTHER slot arm of a frame) is not one of them, so the walk
+        # opens on an unselective end and the pin lands as a late filter, the
+        # mechanism `issues/195` describes. Measured on wordnet_frames, the
+        # destination entity fixed: hop-wise 1,141,392 loops (28 s), flat
+        # 1,342 (52 ms), same 671 rows. Only where the model prices every
+        # leaf, edges included; otherwise the decision stands.
+        dearer = _hop_wise_start_dearer(plan, ctx, quad_tables, decision)
+        if dearer is not None:
+            from .emit_traversal import HOP_WISE
+            return HOP_WISE.decline(
+                "the walk's start is far dearer than the flat join", **dearer)
         # The direction is the decision's, not the emitter's: it is chosen
         # from statistics loaded at an earlier stage (issues/090).
         return emit_hop_wise(plan, decision.chain, quad_tables, sql_names,

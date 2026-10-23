@@ -122,6 +122,16 @@ def _derived_leaf(t, tagged, pred_stats, objects, quad_stats, extra, resolved) -
         rows = quad_stats.get((st, role), extra.get((st, role)))
         if not rows:
             return None
+        # The frame's type, absorbed into the table by the rewrite
+        # (`fsmvN.frame_type_uuid = <C>`): containment, at most the frames of
+        # that type.
+        ftype = _const_of(tagged, a, "frame_type_uuid", resolved)
+        if ftype is not None:
+            vt = _iri_uuid(_VC + "vitaltype")
+            typed = quad_stats.get((vt, ftype), extra.get((vt, ftype)))
+            if typed is None:
+                return None
+            rows = min(rows, typed)
         ev = _iri_uuid(_HK + "hasEntitySlotValue")
         ents = _objects(ev, pred_stats.get(ev), objects, quad_stats)
         # One slot of a role per frame; entities at most the predicate's.

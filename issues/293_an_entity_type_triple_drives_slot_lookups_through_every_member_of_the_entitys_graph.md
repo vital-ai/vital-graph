@@ -704,6 +704,52 @@ graph-expanding split and keeping one with an unpriced leaf.
 Not covered yet: the hop-wise traversal path (`_try_hop_wise`), which a
 frame query with a constant entity takes, and the frame type absorbed into
 `frame_slot.frame_type_uuid` (priced as unrestricted).
+
+### 2026-10-23: the remaining edge counts, the hop-wise path, the absorbed frame type
+
+**Machine state.** From here the vg Mac swapped hard (45 GB of 46 GB swap,
+4.5 billion swap-outs), so wall-clock is unusable. The same plan took 65 s and
+then 212 s. Loop counts are the measure.
+
+**The two slow edge COUNTs** (`count_pin_ab.py`): after the gate reverts their
+split, the merged BGP is planned by Postgres (the model's order predicts only
+1.8x, inside the gate). Busiest loops, identical counts in every arm:
+
+| query | Postgres free | written order pinned | model's order pinned |
+|---|---|---|---|
+| mql_edge_count | 919,000 | 919,000 | **100,000** |
+| high_rated_edge_count | 919,000 | 919,000 | 919,000 |
+
+The model's order roots on the 100,000 `MQLv2` slots. `high_rated` is
+range-anchored (`rating >= 65`), which the model deliberately does not price
+(`_has_unpriced_anchor`). These counts need on the order of 10^5-10^6 rows
+whichever way they run. Their real time needs a machine that is not swapping.
+
+**Hop-wise path** (`hopwise_ab.py`, `corpus/wordnet_fs`): a frame query with
+the entity fixed at the DESTINATION ran hop-wise at **1,141,392 loops** (28 s)
+against the flat join's **1,342** (52 ms), same 671 rows. The traversal chain
+`traversal_chain` found was one edge hop, frame -> slot. Its head was every
+KGFrame (285,348), and the fixed entity sat on the OTHER arm's
+`hasEntitySlotValue`, outside the chain. Driving from the head applied the pin
+late: issue 195's mechanism, with no `reorder_joins` on that path.
+
+Fix (`emit_bgp._hop_wise_start_dearer`): hop-wise is declined when the rows its
+walk starts from are at least ENFORCE_MIN_GAIN times the model's cost of the
+whole flat join. Only where every leaf is priced and there is no text, range
+or FTS anchor; otherwise the traversal decision stands. Result: `fs_to_hub`
+1,141,392 -> 1,342 loops; `fs_from_hub` unchanged (the guard does not fire).
+
+The first version had no anchor exclusion, and the performance suite caught
+it. A range-comparator KGQuery walk was declined against a flat cost that
+ignored its range: `range_penalty[100k]` 6,245 -> 171,588 buffers (status ok ->
+failed), plus `test_range_comparator_pays_for_every_candidate[100k]` failing.
+With the exclusion (`_has_unpriced_anchor`, now shared with
+`_model_join_order`), the targeted rerun passed 30/30 and `range_penalty` is
+back at 7,507.
+
+**Absorbed frame type**: a frame_slot arm with `frame_type_uuid = <C>` is
+priced as containment against the count of `vitaltype = <C>`. It is unpriced
+when that count is missing, never guessed.
 ## Attempted 2026-10-22, and reverted: lift `only_cause`'s correlated FILTER out of the NOT EXISTS body
 
 **Hypothesis:** `only_cause`'s `NOT EXISTS` runs as a SubPlan per outer row

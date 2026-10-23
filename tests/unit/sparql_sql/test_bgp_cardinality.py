@@ -300,3 +300,61 @@ def test_the_gate_keeps_a_split_with_an_unpriced_leaf(monkeypatch):
     edge = TableRef(ref_id="mv0", kind="edge", table_name="t", alias="mv0")
     keep, d = _split_case(monkeypatch, _DASHBOARD, extra_tables=[edge])
     assert keep and not d.fired and "no statistics" in d.reason
+
+
+def test_an_absorbed_frame_type_restricts_the_frame_slot_arm():
+    """The frame_slot rewrite absorbs `?frame vitaltype <C>` into
+    `frame_type_uuid`; the arm is then at most the frames of that type."""
+    st, vt = BC._iri_uuid(BC._HK + "hasKGSlotType"), BC._iri_uuid(BC._VC + "vitaltype")
+    fs = TableRef(ref_id="fsmv0", kind="frame_slot", table_name="t", alias="fsmv0")
+    tagged = [("fsmv0", "fsmv0.role_uuid = __CONST_c_7__"),
+              ("fsmv0", "fsmv0.frame_type_uuid = __CONST_c_8__")]
+    resolved = {"c_7": "role-1", "c_8": "type-C"}
+    stats = {(st, "role-1"): 40_000, (vt, "type-C"): 300}
+    arm = BC._derived_leaf(fs, tagged, {}, {}, stats, {}, resolved)
+    assert arm.scan_rows == 300
+    # An unknown type count is unpriced, not guessed.
+    assert BC._derived_leaf(fs, tagged, {}, {}, {(st, "role-1"): 40_000}, {}, resolved) is None
+
+
+# ---------------------------------------------------------------------------
+# Hop-wise stands aside when its walk starts far dearer than the flat join
+# ---------------------------------------------------------------------------
+
+def _hop_guard(monkeypatch, start_alias):
+    from vitalgraph.db.sparql_sql import emit_bgp as E
+    from .emit_helpers import _make_ctx
+    plan = _by_reason_shape()
+    tables = [TableRef(ref_id=a, kind="quad", table_name="t", alias=a)
+              for a in ("q0", "q1", "q2", "q3")]
+    monkeypatch.setattr(BC, "leaves_from", lambda *a, **k: _DASHBOARD)
+    monkeypatch.setattr(E, "_leaf_cardinality", lambda plan, ctx: {})
+    decision = SimpleNamespace(direction="head", chain=SimpleNamespace(
+        head_constraint_alias=start_alias, tail_constraint_alias=None))
+    return E._hop_wise_start_dearer(plan, _make_ctx({}), tables, decision)
+
+
+def test_hop_wise_declines_a_walk_from_an_unselective_end(monkeypatch):
+    """wordnet_frames, destination entity fixed: the chain's head was every
+    KGFrame (285,348) while the flat join cost 13,420; hop-wise ran
+    1,141,392 loops, flat 1,342."""
+    unselective = dict(_DASHBOARD, q0=_leaf("q0", scan=5_000_000, rows=5_000_000,
+                                             objs=8, oconst=True))
+    monkeypatch.setattr(BC, "leaves_from", lambda *a, **k: unselective)
+    from vitalgraph.db.sparql_sql import emit_bgp as E
+    from .emit_helpers import _make_ctx
+    decision = SimpleNamespace(direction="head", chain=SimpleNamespace(
+        head_constraint_alias="q0", tail_constraint_alias=None))
+    monkeypatch.setattr(E, "_leaf_cardinality", lambda plan, ctx: {})
+    tables = [TableRef(ref_id=a, kind="quad", table_name="t", alias=a)
+              for a in ("q0", "q1", "q2", "q3")]
+    facts = E._hop_wise_start_dearer(_by_reason_shape(), _make_ctx({}), tables, decision)
+    assert facts and facts["start_rows"] == 5_000_000
+
+
+def test_hop_wise_keeps_a_walk_from_a_selective_end(monkeypatch):
+    assert _hop_guard(monkeypatch, "q0") is None       # 1,159 rows: cheap start
+
+
+def test_hop_wise_keeps_its_decision_when_an_end_is_unpriced(monkeypatch):
+    assert _hop_guard(monkeypatch, None) is None
