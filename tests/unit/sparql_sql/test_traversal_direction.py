@@ -138,3 +138,40 @@ class TestDecideUsesIt:
         no stats to be priced at 1."""
         d = decide(_chain(3, head=True), **self.CRIT)
         assert d.hop_wise is True and d.direction == "head"
+
+
+class TestARangeAtAnEndCapsItsSize:
+    """`issues/293`: a range is not a constant, so `refine_chain_constraints`
+    never weighed it. KGQuery `rating >= 65` at the slot end tied 100,000
+    against 100,000 and drove from the entity end: 10,803,929 rows processed
+    for a count of 35,003; from the slot end 1,540,415."""
+
+    TIE = {SLOT_TYPE: 100_000, ENT_TYPE: 100_000}
+
+    def test_the_tie_breaks_toward_the_ranged_end(self):
+        ch = _chain(head_c=ENT_TYPE, tail_c=SLOT_TYPE)
+        assert choose_direction(ch, self.TIE) == "head"
+        ch.tail_range_rows = 35_592
+        assert _end_sizes(ch, self.TIE) == (100_000, 35_592)
+        assert choose_direction(ch, self.TIE) == "tail"
+
+    def test_a_range_wider_than_its_end_changes_nothing(self):
+        ch = _chain(head_c=ENT_TYPE, tail_c=SLOT_TYPE)
+        ch.tail_range_rows = 400_000
+        assert _end_sizes(ch, self.TIE) == (100_000, 100_000)
+
+    def test_a_range_prices_an_otherwise_open_end(self):
+        ch = _chain(head_c=ENT_TYPE)
+        ch.tail_range_rows = 500
+        assert _end_sizes(ch, self.TIE) == (100_000, 500)
+
+    def test_a_page_keeps_todays_direction(self):
+        """Under a LIMIT the range is not weighed: a page walked from the other
+        end stops early, and driven from a mid-range end it took 14,119 ->
+        62,373 buffers (`paging_fence_coverage`, unfenced, page 25)."""
+        from vitalgraph.db.sparql_sql.ir import PlanV2, KIND_SLICE, KIND_BGP
+        from vitalgraph.db.sparql_sql.traversal_decision import refine_chain_ranges
+        ch = _chain(head_c=ENT_TYPE, tail_c=SLOT_TYPE)
+        page = PlanV2(kind=KIND_SLICE, limit=25, children=[PlanV2(kind=KIND_BGP)])
+        refine_chain_ranges([ch], page, None, {("p", ">=", "65"): 35_592})
+        assert ch.tail_range_rows is None and ch.head_range_rows is None

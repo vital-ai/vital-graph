@@ -178,8 +178,87 @@ def _end_sizes(chain, pair_rows, pair_bounds=None):
             if b is not None:
                 return b
         return None
-    return (size(chain.pinned_head, chain.head_constraint),
-            size(chain.pinned_tail, chain.tail_constraint))
+
+    def capped(n, rng):
+        # A range at this end (`refine_chain_ranges`): the end admits no more
+        # than the range does.
+        if rng is None:
+            return n
+        return rng if n is None else min(n, rng)
+
+    return (capped(size(chain.pinned_head, chain.head_constraint),
+                   getattr(chain, "head_range_rows", None)),
+            capped(size(chain.pinned_tail, chain.tail_constraint),
+                   getattr(chain, "tail_range_rows", None)))
+
+
+def _has_limit(node, depth: int = 0) -> bool:
+    """A LIMIT anywhere in the plan (conservative: any page keeps today's
+    direction)."""
+    if node is None or depth > 40:
+        return False
+    if getattr(node, "kind", None) == "slice" and (getattr(node, "limit", -1) or -1) >= 0:
+        return True
+    return any(_has_limit(c, depth + 1) for c in (getattr(node, "children", None) or []))
+
+
+def refine_chain_ranges(chains, plan, aliases, range_stats):
+    """Record, per chain end, the rows a numeric or temporal RANGE at that end
+    admits (`issues/293`), for `_end_sizes`.
+
+    `refine_chain_constraints` repoints an end at its most selective CONSTANT;
+    a range is not a constant, so it never competed. A KGQuery `rating >= 65`
+    on the slot end of an entity -> frame -> frame -> slot walk:
+
+        head  hasKGEntityType = Lead     100,000
+        tail  hasKGSlotType   = Rating   100,000
+              rating >= 65                35,592   <- the real filter
+
+    tied again, drove from the entity end: 10,803,929 rows processed and
+    23,630,942 buffers for a count of 35,003. From the slot end 1,540,415 and
+    3,097,314, the same count.
+
+    The range is placed on an end when its leaf's SUBJECT is the end node, the
+    subject of the end's constraint leaf, in the same BGP. Only the SIZE moves;
+    the emitter still drives from the end's constraint. Mutates the chains.
+    """
+    if not chains or not range_stats or plan is None:
+        return chains
+    # Not under a LIMIT. A page walked from the other end stops once it holds
+    # enough rows; driven from the range it first takes in the whole range.
+    # Measured on the performance suite's KGQuery pages, which run unfenced:
+    # range-mid generic 100k 14,119 -> 62,373 buffers at page 25 when ranges
+    # moved the direction there, while the COUNT above gained 7x.
+    if _has_limit(plan):
+        return chains
+    from .semijoin import _bgps, _range_exprs, object_leaf
+
+    def subject_var(bgp, alias):
+        for v, slot in (getattr(bgp, "var_slots", None) or {}).items():
+            if (alias, "subject_uuid") in (slot.positions or []):
+                return v
+        return None
+
+    bgps = list(_bgps(plan))
+    for var, op, lit in _range_exprs(plan):
+        for bgp in bgps:
+            hit = object_leaf(bgp, var, aliases)
+            if not hit:
+                continue
+            leaf_alias, p_uuid = hit
+            rows = range_stats.get((p_uuid, op, lit))
+            node = subject_var(bgp, leaf_alias)
+            if rows is None or node is None:
+                break
+            for ch in chains:
+                for a_attr, r_attr in (("head_constraint_alias", "head_range_rows"),
+                                       ("tail_constraint_alias", "tail_range_rows")):
+                    end_alias = getattr(ch, a_attr, None)
+                    if end_alias and subject_var(bgp, end_alias) == node:
+                        prev = getattr(ch, r_attr, None)
+                        setattr(ch, r_attr, rows if prev is None else min(prev, rows))
+            break
+    return chains
 
 
 def refine_chain_constraints(chains, pair_rows=None, pair_bounds=None):

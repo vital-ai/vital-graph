@@ -239,11 +239,27 @@ def needed_ranges(plan, aliases) -> set:
     nothing for it — and left unestimated the gate declines to probe, which is
     the wrong answer for exactly the queries a range makes broad.
     """
+    out = set()
+    for var, op, lit in _range_exprs(plan):
+        # The variable's leaf gives the predicate whose objects the range
+        # constrains — that pair is what the count is over.
+        for bgp in _bgps(plan):
+            hit = object_leaf(bgp, var, aliases)
+            p_uuid = hit[1] if hit else None
+            if p_uuid:
+                out.add((p_uuid, op, lit))
+                break
+    return out
+
+
+def _range_exprs(plan):
+    """(variable, operator, literal) for each numeric or temporal range in the
+    plan's FILTERs, the literal rendered as `_try_numeric_filter` renders it
+    (the count is looked up by that exact form)."""
     from .filter_pushdown import (_NUMERIC_OPS, _numeric_literal,
                                   _datetime_literal, _FLIPPED)
     from ..jena_sparql.jena_types import ExprVar, ExprFunction
 
-    out = set()
     for filt in _filters(plan):
         for expr in (filt.filter_exprs or []):
             if not isinstance(expr, ExprFunction):
@@ -252,9 +268,6 @@ def needed_ranges(plan, aliases) -> set:
             if op is None or len(expr.args or []) != 2:
                 continue
             left, right = expr.args
-            # Rendered exactly as `_try_numeric_filter` renders it, numeric
-            # first then temporal, because the count is looked up by this
-            # literal and a differently-formatted one silently misses.
             if isinstance(left, ExprVar):
                 var = left.var
                 lit = _numeric_literal(right)
@@ -270,15 +283,7 @@ def needed_ranges(plan, aliases) -> set:
                 continue
             if lit is None:
                 continue
-            # The variable's leaf gives the predicate whose objects the range
-            # constrains — that pair is what the count is over.
-            for bgp in _bgps(plan):
-                hit = object_leaf(bgp, var, aliases)
-                p_uuid = hit[1] if hit else None
-                if p_uuid:
-                    out.add((p_uuid, op, lit))
-                    break
-    return out
+            yield var, op, lit
 
 
 # Lexical forms that mean the same boolean. `true`/`1` are two TERMS and one

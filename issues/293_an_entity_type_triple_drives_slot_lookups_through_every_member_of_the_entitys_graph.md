@@ -750,6 +750,41 @@ back at 7,507.
 **Absorbed frame type**: a frame_slot arm with `frame_type_uuid = <C>` is
 priced as containment against the count of `vitaltype = <C>`. It is unpriced
 when that count is missing, never guessed.
+
+### 2026-10-23: a range at a traversal end decides its direction (counts only)
+
+Work measured instead of time (the machine swaps; rows and buffers do not
+depend on it): `count_work.py` totals rows processed (sum of rows x loops
+over every plan node) and buffers touched (shared hit + read).
+
+`high_rated_edge_count` is a 3-hop walk, entity -> frame -> frame -> slot,
+with `rating >= 65` on the slot. `choose_direction` compared the ends by
+their constants: entity type 100,000, slot type 100,000. Tied, so it drove
+from the entity end and applied the range last: **10,585,275 rows processed,
+22,535,942 buffers** for a count of 35,003. `refine_chain_constraints`
+(issues/161) already repoints an end at its most selective CONSTANT. A range
+is not a constant, so it never competed.
+
+`traversal_decision.refine_chain_ranges` places each range on the chain end
+whose node is its leaf's subject and records the range's rows
+(`range_stats`, the histogram or bounded count). `_end_sizes` takes the
+smaller of the constant's price and the range. Only the size moves; the
+emitter drives from the same constraint. The count now drives from the slot
+end: **1,540,415 rows, 3,097,314 buffers** (7.3x), same result. The other
+five lead edge files are identical.
+
+**Not under a LIMIT.** The first version also moved KGQuery pages. Those run
+unfenced (`needs_ordered_scan` False, fencing measured 6x worse there), and
+driven from a range end a page takes in the whole range before it can fill:
+`paging_fence_coverage` range-mid generic 100k 14,119 -> 62,373 buffers at
+page 25, 23,897 -> 62,673 at 100 (the fenced form improved 99.9%, but it is not
+what runs). A plan with any LIMIT now keeps today's direction (`_has_limit`):
+the targeted rerun passed 139/139, no plan changes, the paging benches back
+to baseline, the count still 7.3x.
+
+Validation of the range change: DAWG 1,532 passed; integration 712 passed;
+full performance suite 0 status and 0 plan changes (before the LIMIT rule);
+targeted rerun after it as above.
 ## Attempted 2026-10-22, and reverted: lift `only_cause`'s correlated FILTER out of the NOT EXISTS body
 
 **Hypothesis:** `only_cause`'s `NOT EXISTS` runs as a SubPlan per outer row

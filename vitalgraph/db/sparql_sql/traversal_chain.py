@@ -167,6 +167,10 @@ class TraversalChain:
     # ((pred_uuid, obj_uuid), alias) per constant, not bare pairs — see above.
     head_constants: tuple = ()
     tail_constants: tuple = ()
+    # Rows a RANGE at each end admits, when one sits there (set by
+    # `traversal_decision.refine_chain_ranges`; read by `_end_sizes`).
+    head_range_rows: Optional[float] = None
+    tail_range_rows: Optional[float] = None
 
     def reversed(self) -> "TraversalChain":
         """The same chain walked from the other end.

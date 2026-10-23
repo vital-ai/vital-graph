@@ -2325,9 +2325,14 @@ async def _generate_sql(
                 # constant — so both ends priced 100,000, the comparison tied,
                 # and the walk drove from the entity end and seq-scanned the
                 # edge table (`issues/161`).
-                from .traversal_decision import refine_chain_constraints
+                from .traversal_decision import (refine_chain_constraints,
+                                                 refine_chain_ranges)
                 refine_chain_constraints(_chains, pair_rows=_pairs,
                                          pair_bounds=_bounds)
+                # And a RANGE at an end caps that end's size (`issues/293`):
+                # `refine_chain_constraints` sees constants only.
+                refine_chain_ranges(_chains, plan, aliases,
+                                    getattr(aliases, "range_stats", None) or {})
 
                 # `issues/160`. An equality is a CONSTANT in the BGP, so none of
                 # the histograms above see it. Only slot-VALUE constants count —
