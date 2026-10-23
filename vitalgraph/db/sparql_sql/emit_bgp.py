@@ -147,14 +147,35 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
         tagged = plan.tagged_constraints
         # The generator's own join order, where its cardinality model predicts
         # a gain past its measured error (`issues/293` stage 3). Kept by the
-        # executor (`join_collapse_limit = 1`). Taken BEFORE the slot-group
-        # rewrite and instead of it: an anchored BGP needs only the order.
+        # executor (`join_collapse_limit = 1`).
         model_order = _model_join_order(plan, ctx, quad_tables, leaf_card)
         # A slot group whose graph link PostgreSQL would expand per entity is
         # emitted as one MATERIALIZED CTE driven from its slot type
         # (`issues/293`); its aliases become columns of the CTE.
-        regrouped = None if model_order else _slot_group_ctes(
+        #
+        # Groups take precedence over the model's order. The model searches
+        # left-deep orders only, and a star of slot groups around one entity
+        # has no good left-deep order: once ?d is bound, each further slot
+        # either probes ?d's ~900 graph members or starts from an unconnected
+        # pin. The good plan is bushy, each group driven from its own pin and
+        # hash-joined on ?d, which is what the CTEs build. With the model first,
+        # decision_page under an enforced model order ran 1,033,972 slot-type
+        # probes, 279 ms -> 4,055 ms. Pricing the groups as units in the model's
+        # own C_out chose the groups on every dashboard BGP where both applied
+        # (`group_cost_probe.py`), so the rule is the precedence itself.
+        regrouped = _slot_group_ctes(
             plan, ctx, quad_tables, tagged, inner_cols, leaf_card)
+        if regrouped is not None and model_order:
+            # The order is displaced, but the statement-wide pin it would have
+            # set is KEPT. only_cause depends on it: the pin also fixes the
+            # written order of its NOT EXISTS body, which the model does not
+            # price, and without it that body ran 11,671,298 probes, 25 s ->
+            # 149 s. Keeping it leaves every pin decision as it was.
+            from .plan_decisions import recorder_for
+            recorder_for(ctx.aliases).declined(
+                "model_join_order", "displaced by slot-group CTEs; the pin is kept")
+            ctx.fixed_join_order = True
+            model_order = None
         if regrouped is not None:
             (quad_tables, tagged, inner_cols, leaf_card, cte_sql), unanchored = regrouped
             inner_parts = [f"SELECT {', '.join(inner_cols)}"]

@@ -237,3 +237,61 @@ def test_mean_fanout_reads_only_its_own_predicate():
     stats = {("p", "a"): 10, ("p", "b"): 30, ("other", "a"): 1_000}
     assert mean_fanout(stats, "p") == 20
     assert mean_fanout(stats, "missing") is None
+
+
+# ---------------------------------------------------------------------------
+# Precedence over the model's join order (emit_bgp._emit_flat_inner)
+# ---------------------------------------------------------------------------
+
+def _emit_with(monkeypatch, *, model_order, with_groups):
+    """`_emit_flat_inner` on the 293 shape with the model's verdict and the
+    slot-group rewrite stubbed, so only the precedence between them is tested."""
+    from vitalgraph.db.sparql_sql import emit_bgp as E
+    from .emit_helpers import _make_ctx
+
+    plan = _shape()
+    card = {"q0": 1_159, "q1": 1_000_000, "q2": 9_318, "q3": 2_000_000}
+    gctx = _ctx()
+    groups = find_groups(plan, gctx, plan.tables, card, _uuid_of)
+
+    def regroup(plan, ctx, quad_tables, tagged, inner_cols, leaf_card):
+        if not with_groups:
+            return None
+        return apply_groups(groups, quad_tables, tagged, inner_cols, leaf_card,
+                            reorder_joins), None
+
+    monkeypatch.setattr(E, "_leaf_cardinality", lambda plan, ctx: dict(card))
+    monkeypatch.setattr(E, "_model_join_order", lambda *a, **k: model_order)
+    monkeypatch.setattr(E, "_slot_group_ctes", regroup)
+    ctx = _make_ctx({})
+    sql = E._emit_flat_inner(plan, ctx, plan.tables, {"d": "v0", "s": "v1", "v": "v2"})
+    return sql, ctx
+
+
+def test_slot_groups_displace_the_model_order_and_keep_its_pin(monkeypatch):
+    """A left-deep model order cannot express a star of slot groups driven
+    from their pins; with it first, decision_page ran 1,033,972 slot-type
+    probes. The pin it would have set stays: only_cause's NOT EXISTS body
+    relies on it (25 s with, 149 s without)."""
+    sql, ctx = _emit_with(monkeypatch, model_order=["q0", "q1", "q2", "q3"],
+                          with_groups=True)
+    assert "AS MATERIALIZED" in sql
+    assert ctx.fixed_join_order
+    declined = [d for d in ctx.aliases.plan_decisions.decisions
+                if d.name == "model_join_order" and not d.fired]
+    assert declined and "displaced by slot-group" in declined[-1].reason
+
+
+def test_without_groups_the_model_order_is_written_and_pinned(monkeypatch):
+    sql, ctx = _emit_with(monkeypatch, model_order=["q2", "q1", "q0", "q3"],
+                          with_groups=False)
+    assert "AS MATERIALIZED" not in sql
+    froms = re.findall(r"(?:FROM|JOIN) \S+ AS (q\d)", sql)
+    assert froms == ["q2", "q1", "q0", "q3"]
+    assert ctx.fixed_join_order
+
+
+def test_groups_without_a_model_order_set_no_pin(monkeypatch):
+    sql, ctx = _emit_with(monkeypatch, model_order=None, with_groups=True)
+    assert "AS MATERIALIZED" in sql
+    assert not ctx.fixed_join_order

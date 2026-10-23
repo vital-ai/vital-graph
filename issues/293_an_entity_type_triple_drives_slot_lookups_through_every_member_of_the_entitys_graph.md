@@ -453,6 +453,139 @@ unrelated, pre-existing wrong answer, failing identically under both rules:
 `issues/299` (an UNDEF row's matches lost the variable the other side bound),
 fixed separately.
 
+### Follow-up 2026-10-22: the fixture had shared reason frames; the corrected one moves the cost, not removes it
+
+`category_page`'s remaining ~0.8 s on `uw_prodshape` was the reason CTE
+building a 1,593,419-row intermediate: `?f_c hasFrameGraphURI ?f` probed by
+`?f` returned 229 rows per kind slot. A reason frame should hold ~8 slots.
+Cause: the dev source space has 21 reason driver frames with no triples at all
+(dangling `hasFrameGraphURI` objects), and `build_prodshape_csv.py` renamed
+only graph members, so all ~96 clones of a template pointed at its one
+dangling frame: ~97 kind slots per frame. Production (the production UW space, read-only
+check) has 10,124 kind slots in 10,124 frames, 0 dangling, 80,592 slots in
+them (~8 per frame).
+
+The builder now renames every URI under the template decision's prefix.
+`uw_prodshape2` (same 14,354,922 quads) has 6,950 kind slots in 6,950 frames,
+~7.7 slots per frame. `uw_prodshape` is kept as it was, so earlier numbers stay
+reproducible.
+
+On `uw_prodshape2`, category_page is NOT faster. Postgres takes the other
+bad route inside the reason CTE: `?k hasKGGraphURI ?d` probed by `?d`,
+estimated 12 rows per decision, actually 773, across 2,360 loops (1,824,861
+rows). That is this issue's original misestimate again. Nothing stops it: the
+slot-group gate declines the kind-slot group ("a smaller driver reaches the
+slot without the graph link"), expecting the code side to drive, and the
+model's order is not enforced below `ENFORCE_MIN_GAIN`.
+
+**Gate experiment** (`gate_ab.py`, gate 10 vs 1, both fixtures, identical
+result multisets throughout, medians of 5, swap high):
+
+| query | fixture | gate 10 | gate 1 |
+|---|---|---|---|
+| category_page | old | 1,057 ms, 6,950 loops | 10,131 ms, 74,313 loops |
+| category_page | corrected | 3,795 ms | 8,736 ms |
+| decision_page | old | 430 ms, 3,991 loops | 3,435 ms, 1,033,972 loops |
+| decision_page | corrected | 283 ms | 2,607 ms |
+| naics_for_category, all_of, by_reason | both | within noise or slightly better | |
+
+Enforcing everywhere loses. One cause is visible without more measurement:
+enforcement is `SET LOCAL join_collapse_limit = 1`, which freezes the join
+order of the WHOLE statement, not the BGP the model ordered. With 7 BGPs
+firing, every join between them (OPTIONALs, the VALUES join, the CTE joins)
+is pinned in written order too. So the gate is doing two jobs: guarding the
+model's error, and limiting the blast radius of a statement-wide setting.
+Two consequences for stage 6:
+
+- the gain is computed against the generator's written order, which is not
+  what Postgres runs when nothing is pinned, so the gate compares against the
+  wrong baseline;
+- per-BGP enforcement needs a per-BGP mechanism (a fence such as the slot
+  group's MATERIALIZED CTE, or 296's `Leading()` hints), not a statement GUC.
+  **296 tested the hints (2026-10-22): they cannot do it.** `pg_hint_plan`
+  applies one `Leading()` per statement (later ones are dropped as
+  duplicates), and a `Leading()` over one BGP pushed the rest of `all_of` onto
+  disabled paths (191 ms -> 26.8 s). That leaves the fence, or the generator
+  writing a complete order for the whole statement.
+
+**Which order regresses (`pin_ab.py`, 2026-10-22, `uw_prodshape2`, identical
+results in all arms, medians of 5):** A = today; P = today's SQL with
+`join_collapse_limit = 1` ALWAYS (the written order pinned); A1 = the model's
+order everywhere (gate 1), pinned.
+
+| query | A | P | A1 |
+|---|---|---|---|
+| decision_page | 279 ms, 3,991 loops | 379 ms, 3,991 | 4,055 ms, 1,033,972 |
+| category_page | 3,654 ms, 6,950 | 4,653 ms, 6,950 | 7,815 ms, 74,313 |
+| latest_per_deal_by_outcome | 344 ms | 166 ms | 3,528 ms |
+| by_outcome | 202 ms | 186 ms | 444 ms |
+| all_of | 307 ms | 126 ms | 125 ms |
+| naics_for_category | 504 ms | 652 ms | 359 ms |
+| only_cause | 39 s | 25 s | 34 s |
+
+Pinning the written order is harmless: same loops as A everywhere, often
+faster. So the statement-wide pin is not what regresses; the model's orders
+are. On `decision_page` the model's order does not reorder the OPTIONAL slot
+BGPs (same as today). It **replaces the slot-group CTEs** of the required BGP
+(decision + three slots), because `_emit_flat_inner` takes the model's order
+before slot groups, with one 10-table left-deep chain. The hot nodes are the
+second and third slots' `hasKGGraphURI` probes by `?d` (estimated 12 per
+decision, actually 892, x 1,159), then each member's slot-type check
+1,033,972 times.
+
+The model chose that knowingly: it is the cheapest **left-deep** order. Once
+`?d` is bound, each further slot either probes `?d`'s ~900 members or starts
+from an unconnected pin. The good plan is **bushy**: each slot group driven
+from its own pin, the groups hash-joined on `?d`. That is what
+`slot_group_cte` builds, and the model's search space cannot represent it.
+
+**Consequence for stage 6:** before the model's order can be enforced more
+widely, its search must include slot groups as units. Each group is one leaf
+priced at its pinned rows, and the units are ordered and hash-joined on the
+shared variable. The immediate rule is that a model order never displaces slot
+groups: groups first, then the model orders what remains. Enforcement
+mechanics are not the bottleneck; the statement-wide pin worked in P.
+
+**Done 2026-10-22: slot groups take precedence over the model's order, and
+the pin stays** (`emit_bgp._emit_flat_inner`). Two things were found on the
+way:
+
+- *Groups first alone breaks only_cause* (25 s -> 149 s, 11,671,298 loops).
+  The cost was not its outer BGP but its NOT EXISTS body, which nothing
+  prices: when the model's order fired on the outer BGP, the statement-wide
+  pin also froze the body in its written order, and that order is good. With
+  the model displaced and no pin, Postgres planned the body freely. So a
+  displaced model order still sets the pin; every pin decision is as before.
+  This is a dependency on a side effect, kept knowingly. The real fix is
+  pricing EXISTS bodies (stage 6 coverage).
+- *Unit-aware pricing changes no decision here.* `group_plan_cost` (each group
+  a unit priced at its CTE, joined whole; ordered with the remaining leaves in
+  one greedy search, in the model's C_out) chose the groups on every dashboard
+  BGP where both applied: decision_page 28,362 vs the model's 1,799,799,
+  category_page 87,001 vs 5,097,414, latest_per_deal 20,888 vs 601,291, and
+  only_cause's outer BGP too, 35,190 vs 49,561. By the statistics policy it is
+  not shipped. It lives in `group_cost_probe.py` as a validation tool.
+
+Real code, old precedence (emulated) vs new, `uw_prodshape2`, identical
+result multisets in every cell, medians of 5, swap high:
+
+| query | old@10 | new@10 | old@1 | new@1 |
+|---|---|---|---|---|
+| decision_page | 337 ms, 3,991 loops | 305 ms, 3,991 | 2,674 ms, 1,033,972 | **304 ms, 3,991** |
+| category_page | 3,459 ms, 6,950 | 3,423 ms, 6,950 | 13,539 ms, 74,313 | **5,691 ms, 6,950** |
+| latest_per_deal | 274 ms | 324 ms | 1,921 ms | **255 ms** |
+| by_outcome | 194 ms | 186 ms | 441 ms | **203 ms** |
+| only_cause | 22,904 ms, 3,551,621 | 22,275 ms, 3,551,621 | 33,301 ms | 31,698 ms |
+| all_of, by_reason, naics, total | even | even | even | even |
+
+At today's gate (10) nothing changes: same loops on all nine. At gate 1 every
+loop-count regression the model's order caused is gone. The gate can now be
+revisited (that needs the model's error re-measured, not just these nine). The
+perf suite cannot reach the rule: slot groups fire on 0 of its queries (the
+statistics ledger's count), and with no groups the code path is unchanged.
+Tests: `test_slot_group_cte.py`, three precedence tests. The displacement one
+fails on the previous code.
+
 ## Attempted 2026-10-22, and reverted: lift `only_cause`'s correlated FILTER out of the NOT EXISTS body
 
 **Hypothesis:** `only_cause`'s `NOT EXISTS` runs as a SubPlan per outer row
