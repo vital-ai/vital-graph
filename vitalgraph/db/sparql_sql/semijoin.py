@@ -714,6 +714,31 @@ def _split_anchors(node: Optional[PlanV2], distinct_seen: bool,
         _split_anchors(child, distinct_seen, key, undo)
 
 
+def _under_limit(node: Optional[PlanV2], target: PlanV2, key: Optional[str],
+                 limited: bool = False, depth: int = 0) -> bool:
+    """Whether `target` is reached through a LIMIT that can stop evaluation
+    early. GROUP BY needs every row; so does ORDER BY, unless it orders only
+    by the split's key, which the anchor delivers in order (KGQuery's
+    `ORDER BY ?entity LIMIT 25`: 9 ms as a split)."""
+    if node is None or depth > 40:
+        return False
+    if node is target:
+        return limited
+    if node.kind == KIND_SLICE and (node.limit or -1) >= 0:
+        limited = True
+    elif node.kind == KIND_GROUP:
+        limited = False
+    elif node.kind == KIND_ORDER:
+        conds = node.order_conditions or []
+        def _name(c):
+            e = c[0] if isinstance(c, (tuple, list)) else c
+            return e if isinstance(e, str) else getattr(e, "var", None)
+        by_key = bool(conds) and all(_name(c) == key for c in conds)
+        limited = limited and by_key
+    return any(_under_limit(c, target, key, limited, depth + 1)
+               for c in (node.children or []))
+
+
 def mark_semijoins(plan: PlanV2, aliases=None) -> PlanV2:
     """Annotate the JOINs that can be emitted as existence tests."""
     # Split first so the walk has a boundary to work with, then UNDO any split
@@ -737,6 +762,32 @@ def mark_semijoins(plan: PlanV2, aliases=None) -> PlanV2:
     for parent, i, original, split in undo:
         if not split.hints.get('semijoin'):
             parent.children[i] = original
+            reverted += 1
+            continue
+        # A MARKED split is priced too (`issues/293` stage 6): its anchor is
+        # chosen structurally, and where the generator's cardinality model
+        # predicts the merged join far cheaper, the original BGP goes back.
+        # Never fails the query: the split stands if the model raises.
+        # Under a LIMIT the probe stops once the page is full: the split costs
+        # a few hundred probes, not one per anchor row, and the model prices
+        # the full evaluation. Reverting there took mql_edge_page from 12 ms to
+        # 14 s while the same gate took its COUNT from > 300 s to 65 s.
+        key = next((k for k in (split.children[1].var_slots or {})
+                    if k in (split.children[0].var_slots or {})), None)
+        if _under_limit(plan, split, key):
+            continue
+        try:
+            from .bgp_cardinality import semijoin_is_cheaper
+            keep = key is None or aliases is None or semijoin_is_cheaper(
+                original, split, key, aliases)
+        except Exception as exc:
+            logger.warning("semijoin model gate failed, keeping the split: %s", exc)
+            keep = True
+        if not keep:
+            parent.children[i] = original
+            split.hints.pop('semijoin', None)
+            if split in marked:
+                marked.remove(split)
             reverted += 1
 
     if marked:

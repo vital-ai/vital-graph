@@ -184,3 +184,119 @@ def test_an_exists_body_gets_the_outer_planning_stats():
     assert inner.quad_stats == {("p", "o"): 7}
     assert inner.pred_object_counts == {"p": 10}
     assert inner.pred_stats == {"own": 1}
+
+
+# ---------------------------------------------------------------------------
+# Edge and frame_slot leaves (`issues/293` stage 6 coverage)
+# ---------------------------------------------------------------------------
+
+def _edge_plan():
+    """?e (mv0) from ?entity to ?frame; ?frame (q1) has a constant type."""
+    return PlanV2(kind=KIND_BGP, var_slots={
+        "entity": VarSlot("entity", [("mv0", "source_node_uuid")]),
+        "frame": VarSlot("frame", [("mv0", "dest_node_uuid"), ("q1", "subject_uuid")]),
+        "e": VarSlot("e", [("mv0", "edge_uuid")]),
+    })
+
+
+def _edge_leaf(rows=5_277_000, n_src=1_300_000, n_dst=5_277_000):
+    return Leaf("mv0", None, False, False, rows, rows, None,
+                cols={"edge_uuid": rows, "source_node_uuid": n_src, "dest_node_uuid": n_dst})
+
+
+def test_an_edge_probed_by_source_is_edges_per_source():
+    leaves = {"q1": _leaf("q1", scan=900_000, rows=1_200_000, objs=12, oconst=True),
+              "mv0": _edge_leaf()}
+    est = estimate_order(_edge_plan(), leaves, ["mv0"], bound_vars=["entity"])
+    assert est[0] == pytest.approx(5_277_000 / 1_300_000)
+
+
+def test_an_edge_probed_by_its_destination_is_one_edge():
+    leaves = {"q1": _leaf("q1", scan=900_000, rows=1_200_000, objs=12, oconst=True),
+              "mv0": _edge_leaf()}
+    est = estimate_order(_edge_plan(), leaves, ["q1", "mv0"])
+    assert est == [900_000, pytest.approx(900_000)]
+
+
+def test_derived_leaves_come_from_the_predicates_they_replace():
+    """An edge from hasEdgeSource/hasEdgeDestination's rows and distinct
+    objects; a frame_slot arm from its role's slot count. Without
+    object_count there is no edge leaf: rdf_stats keeps only the largest
+    pairs, and an edge's are never among them."""
+    src, dst = BC._iri_uuid(BC._VC + "hasEdgeSource"), BC._iri_uuid(BC._VC + "hasEdgeDestination")
+    st = BC._iri_uuid(BC._HK + "hasKGSlotType")
+    edge = TableRef(ref_id="mv0", kind="edge", table_name="t", alias="mv0")
+    fs = TableRef(ref_id="fsmv0", kind="frame_slot", table_name="t", alias="fsmv0")
+    tagged = [("fsmv0", "fsmv0.role_uuid = __CONST_c_7__")]
+    resolved = {"c_7": "role-1"}
+    leaf = BC._derived_leaf(edge, tagged, {src: 100}, {src: 25, dst: 100}, {}, {}, resolved)
+    assert leaf.cols == {"edge_uuid": 100.0, "source_node_uuid": 25.0, "dest_node_uuid": 100.0}
+    assert BC._derived_leaf(edge, tagged, {src: 100}, {}, {}, {}, resolved) is None
+    arm = BC._derived_leaf(fs, tagged, {}, {}, {(st, "role-1"): 40}, {}, resolved)
+    assert arm.scan_rows == 40 and arm.cols["frame_uuid"] == 40
+    assert BC._derived_leaf(fs, [], {}, {}, {(st, "role-1"): 40}, {}, resolved) is None
+
+
+# ---------------------------------------------------------------------------
+# The semijoin gate stands aside under a LIMIT it can stop early (`semijoin`)
+# ---------------------------------------------------------------------------
+
+def test_a_split_under_a_limit_is_left_to_stop_early():
+    """KGQuery's `ORDER BY ?entity LIMIT 25` probes ~25 anchors: 9 ms as a
+    split, 25 s when the gate reverted it to the merged join (mql_edge_page).
+    An ORDER BY on anything else, or a GROUP BY, needs every row."""
+    from vitalgraph.db.jena_sparql.jena_types import ExprVar
+    from vitalgraph.db.sparql_sql.ir import KIND_ORDER, KIND_SLICE, KIND_GROUP
+    from vitalgraph.db.sparql_sql.semijoin import _under_limit
+
+    def tree(mid):
+        split = PlanV2(kind=KIND_BGP)
+        node = split if mid is None else PlanV2(kind=mid.kind, order_conditions=mid.order_conditions,
+                                                 children=[split])
+        return PlanV2(kind=KIND_SLICE, limit=25, children=[node]), split
+
+    root, split = tree(None)
+    assert _under_limit(root, split, "entity")
+    root, split = tree(PlanV2(kind=KIND_ORDER, order_conditions=[("entity", "ASC")]))
+    assert _under_limit(root, split, "entity")
+    root, split = tree(PlanV2(kind=KIND_ORDER, order_conditions=[(ExprVar(var="entity"), "ASC")]))
+    assert _under_limit(root, split, "entity")
+    root, split = tree(PlanV2(kind=KIND_ORDER, order_conditions=[("rating", "DESC")]))
+    assert not _under_limit(root, split, "entity")
+    root, split = tree(PlanV2(kind=KIND_GROUP))
+    assert not _under_limit(root, split, "entity")
+    assert not _under_limit(PlanV2(kind=KIND_ORDER, children=[split]), split, "entity")
+
+
+# ---------------------------------------------------------------------------
+# The semijoin model gate (`issues/293` stage 6)
+# ---------------------------------------------------------------------------
+
+def _split_case(monkeypatch, leaves, extra_tables=()):
+    plan = _by_reason_shape()
+    plan.tables = [TableRef(ref_id=a, kind="quad", table_name="t", alias=a)
+                   for a in ("q0", "q1", "q2", "q3")] + list(extra_tables)
+    anchor = PlanV2(kind=KIND_BGP, tables=[plan.tables[0]])
+    rest = PlanV2(kind=KIND_BGP, tables=plan.tables[1:])
+    split = PlanV2(kind="join", children=[anchor, rest])
+    monkeypatch.setattr(BC, "leaves_from", lambda *a, **k: leaves)
+    monkeypatch.setattr("vitalgraph.db.sparql_sql.emit_bgp._leaf_cardinality",
+                        lambda plan, ctx: {})
+    aliases = AliasGenerator()
+    keep = BC.semijoin_is_cheaper(plan, split, "d", aliases)
+    [d] = [d for d in aliases.plan_decisions.decisions if d.name == BC.SEMIJOIN_NAME]
+    return keep, d
+
+
+def test_the_gate_reverts_a_split_that_probes_every_graph(monkeypatch):
+    """Anchored on the 1,159 decisions, each probe walks ~506 graph members;
+    the merged join driven from the 6,950 slot pins is far cheaper."""
+    keep, d = _split_case(monkeypatch, _DASHBOARD)
+    assert not keep and d.fired
+    assert d.detail["gain"] >= BC.ENFORCE_MIN_GAIN
+
+
+def test_the_gate_keeps_a_split_with_an_unpriced_leaf(monkeypatch):
+    edge = TableRef(ref_id="mv0", kind="edge", table_name="t", alias="mv0")
+    keep, d = _split_case(monkeypatch, _DASHBOARD, extra_tables=[edge])
+    assert keep and not d.fired and "no statistics" in d.reason

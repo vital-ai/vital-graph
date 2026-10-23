@@ -241,7 +241,8 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
 def _model_join_order(plan: PlanV2, ctx: EmitContext, quad_tables, leaf_card):
     """`bgp_cardinality.enforced_order` for a flat quad BGP, or None. Never
     fails the query: the default order is correct, only slower."""
-    if len(quad_tables) < 2 or any(t.kind != "quad" for t in quad_tables):
+    from .bgp_cardinality import PRICED_KINDS
+    if len(quad_tables) < 2 or any(t.kind not in PRICED_KINDS for t in quad_tables):
         return None
     # A TEXT, RANGE or FTS anchor keeps the default order. `reorder_joins`
     # roots on those ahead of any row count, for measured reasons (`issues/181`,

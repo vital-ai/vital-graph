@@ -650,6 +650,60 @@ integration 711 passed, 1 failed: `test_index_sync_queue.py::
 test_a_burst_is_bounded_and_does_not_starve_the_pool`, which also fails 1 in 4
 on the committed code (a queue-drain timing flake, not SPARQL).
 
+
+### Done 2026-10-23: the model prices EDGE tables; the semijoin gate uses it
+
+**Was Postgres wrong on edge BGPs at all?** `nonquad_vs_pg.py` (the q-error
+harness for BGPs with edge/frame_slot tables, including the two-phase probe
+`emit_bgp_exists` emits) on the six lead edge-mode KGQuery files:
+Postgres geo-mean q-error **778.5**, max **459,500**, > 10x on 44 of 56
+prefixes. Estimates of 1-3 rows where 9,227 to 919,000 arrive, the same class
+as this issue. The three `*_edge_count` queries ran past 300 s: anchored on
+all 100,000 leads, an EXISTS probe per lead walked its frames and slots, and
+the selective test (`rating >= 65`) applied last. On `frame_slot` (WordNet,
+two entity-slot arms) Postgres is already right (q 1.0): the table is real
+and analysed, its columns carry the meaning.
+
+**Edge leaves** (`bgp_cardinality._derived_leaf`): a column leaf, rows x
+prod(1/ndv) over the bound columns. Edges from `hasEdgeSource` rows and the
+distinct objects of `hasEdgeSource`/`hasEdgeDestination`; a frame_slot arm
+from its role's slot count. On the same 56 prefixes the model is at geo-mean
+**1.09**, max **2.3**, and better on all 56.
+
+**`object_count` review (the ledger's open item): keep.** Edge leaves cannot
+be priced without it. The `rdf_stats` fallback never holds an edge pair
+(a node has a few edges; the 50,000 largest pairs are elsewhere). It was
+migrated on `sp_lead_synth_100k` and `wordnet_frames` (test stack, opt-in
+script, 83 s and 22 s recompute) for this.
+
+**Decision:** `semijoin_is_cheaper` (and `_model_join_order`) now accept
+`PRICED_KINDS = (quad, edge, frame_slot)` when every leaf is priced, and
+decline otherwise. The gate stands aside for a split under a LIMIT that can
+stop early (no GROUP BY, ORDER BY only on the split key). Without that,
+reverting `mql_edge_page`'s split took it from 9 ms to 25 s.
+`sp_lead_synth_100k`, old (quads only) vs new, identical result multisets
+where both finished, medians of 3:
+
+| query | old | new |
+|---|---|---|
+| state_ca_edge_count | 122,697 ms, 1,053,772 loops | **368 ms**, 9,227 |
+| mql_edge_count | > 300 s (timeout) | 65 s |
+| high_rated_edge_count | > 300 s (timeout) | 86 s |
+| the three `*_edge_page` | 9 / 10 / 48 ms | 7 / 9 / 43 ms, identical loops |
+
+The two timed-out counts have no old result to compare. Their new counts
+(49,775, 35,003) equal the harness's independent `count(*)` of the same BGP
+joined whole. They are still slow, 919,000 loops: the merged join is not
+driven from the rating/MQL slot. That is the next decision to price.
+
+Tests: DAWG unchanged; integration 712 passed; perf suite 0 status and 0
+plan changes over 167 benches vs the previous run, the same 4 pre-existing
+failures. Unit: edge/frame_slot leaves, the LIMIT rule, the gate reverting a
+graph-expanding split and keeping one with an unpriced leaf.
+
+Not covered yet: the hop-wise traversal path (`_try_hop_wise`), which a
+frame query with a constant entity takes, and the frame type absorbed into
+`frame_slot.frame_type_uuid` (priced as unrestricted).
 ## Attempted 2026-10-22, and reverted: lift `only_cause`'s correlated FILTER out of the NOT EXISTS body
 
 **Hypothesis:** `only_cause`'s `NOT EXISTS` runs as a SubPlan per outer row

@@ -31,7 +31,9 @@ both estimates with actual counts, prefix by prefix (q-error).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+import uuid as _uuid
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 #: `step_factor`'s marker for a containment step (min, not a product).
@@ -47,6 +49,11 @@ class Leaf:
     scan_rows: Optional[float]   # rows when this leaf is scanned on its constants
     pred_rows: Optional[float]   # all rows of its predicate
     pred_objects: Optional[float]  # distinct objects of its predicate
+    # A DERIVED-TABLE leaf (edge, frame_slot): distinct values per column. A
+    # step costs rows x prod(1 / ndv) over the columns already bound
+    # (independence), and a fresh column carries at most its ndv. Quad leaves
+    # leave this empty and keep the subject/object rules.
+    cols: Dict[str, float] = field(default_factory=dict, compare=False, hash=False)
 
     @property
     def restricted(self) -> bool:
@@ -57,9 +64,78 @@ class Leaf:
             and self.scan_rows < self.pred_rows)
 
 
+_HK = "http://vital.ai/ontology/haley-ai-kg#"
+_VC = "http://vital.ai/ontology/vital-core#"
+
+
+def _iri_uuid(iri: str) -> str:
+    """The term uuid of an IRI, as the term table keys it."""
+    return str(_uuid.uuid5(_VITALGRAPH_NS(), f"{iri}\x00U"))
+
+
+def _VITALGRAPH_NS():
+    from .fast_slot_sort import _VITALGRAPH_NS as ns
+    return ns
+
+
+def _const_of(tagged, alias: str, col: str, resolved) -> Optional[str]:
+    """uuid of `alias.col = __CONST_x__` in the tagged constraints, if resolved."""
+    pat = re.compile(rf"{re.escape(alias)}\.{col} = __CONST_(\w+)__")
+    for owner, sql in tagged:
+        m = pat.fullmatch(sql.strip())
+        if m:
+            return resolved.get(m.group(1))
+    return None
+
+
+def _objects(p, rows, objects, quad_stats) -> Optional[float]:
+    """Distinct objects of predicate `p`: `rdf_pred_stats.object_count` where
+    the space has it, else rows over the mean pair size from rdf_stats (biased
+    high, as `leaves_from` does for quad leaves)."""
+    n = objects.get(p)
+    if n is None and rows:
+        from .slot_group_cte import mean_fanout
+        fan = mean_fanout(quad_stats, p)
+        n = (rows / fan) if fan else None
+    return n
+
+
+def _derived_leaf(t, tagged, pred_stats, objects, quad_stats, extra, resolved) -> Optional[Leaf]:
+    """A Leaf for an edge or frame_slot table, priced from the quad statistics
+    of the predicates it was derived from (`issues/293` stage 6). None when a
+    number is missing: unpriced, never guessed."""
+    a = t.alias
+    if t.kind == "edge":
+        src, dst = _iri_uuid(_VC + "hasEdgeSource"), _iri_uuid(_VC + "hasEdgeDestination")
+        rows = pred_stats.get(src)
+        n_src, n_dst = _objects(src, rows, objects, quad_stats), _objects(dst, rows, objects, quad_stats)
+        if not (rows and n_src and n_dst):
+            return None
+        return Leaf(a, None, False, False, float(rows), float(rows), None,
+                    cols={"edge_uuid": float(rows), "source_node_uuid": float(n_src),
+                          "dest_node_uuid": float(n_dst)})
+    if t.kind == "frame_slot":
+        role = _const_of(tagged, a, "role_uuid", resolved)
+        st = _iri_uuid(_HK + "hasKGSlotType")
+        if role is None:
+            return None
+        rows = quad_stats.get((st, role), extra.get((st, role)))
+        if not rows:
+            return None
+        ev = _iri_uuid(_HK + "hasEntitySlotValue")
+        ents = _objects(ev, pred_stats.get(ev), objects, quad_stats)
+        # One slot of a role per frame; entities at most the predicate's.
+        cols = {"slot_uuid": float(rows), "frame_uuid": float(rows),
+                "entity_uuid": float(min(rows, ents)) if ents else float(rows)}
+        return Leaf(a, None, False, False, float(rows), float(rows), None, cols=cols)
+    return None
+
+
 def leaves_from(plan, aliases, quad_tables, leaf_card: Dict[str, float],
                 uuid_of) -> Dict[str, Leaf]:
-    """One `Leaf` per quad alias of a flat BGP, from the IR and loaded stats."""
+    """One `Leaf` per alias of a flat BGP, from the IR and loaded stats. Edge
+    and frame_slot tables get a column leaf (`_derived_leaf`) or are left out
+    (the caller then cannot price an order through them)."""
     leaf_terms = getattr(plan, "leaf_terms", None) or {}
     pred_stats = getattr(aliases, "pred_stats", None) or {}
     objects = getattr(aliases, "pred_object_counts", None) or {}
@@ -68,8 +144,14 @@ def leaves_from(plan, aliases, quad_tables, leaf_card: Dict[str, float],
     resolved = getattr(aliases, "resolved_constants", None) or {}
     in_lists = _in_lists(getattr(plan, "tagged_constraints", None) or [], resolved)
     out: Dict[str, Leaf] = {}
+    tagged = getattr(plan, "tagged_constraints", None) or []
     for t in quad_tables:
         a = t.alias
+        if t.kind in ("edge", "frame_slot"):
+            leaf = _derived_leaf(t, tagged, pred_stats, objects, quad_stats, extra, resolved)
+            if leaf is not None:
+                out[a] = leaf
+            continue
         p_term = leaf_terms.get((a, "predicate_uuid"))
         p = uuid_of(p_term) if p_term else None
         rows = pred_stats.get(p) if p else None
@@ -169,6 +251,11 @@ def estimate_order(plan, leaves: Dict[str, Leaf], order: Sequence[str],
     est: Optional[float] = 1.0 if seeded else None
     for i, a in enumerate(order):
         leaf = leaves[a]
+        if leaf.cols:
+            est = _column_step(leaf, a, i, est, seeded, var_at, holders, placed, ndv)
+            placed.add(a)
+            out.append(est)
+            continue
         s_var, o_var = var_at.get((a, "subject_uuid")), var_at.get((a, "object_uuid"))
         s_bound = bool(s_var and (s_var in seeded or holders.get(s_var, set()) & placed))
         o_bound = bool(o_var and (o_var in seeded or holders.get(o_var, set()) & placed))
@@ -194,6 +281,32 @@ def estimate_order(plan, leaves: Dict[str, Leaf], order: Sequence[str],
         placed.add(a)
         out.append(est)
     return out
+
+
+def _column_step(leaf: Leaf, a: str, i: int, est, seeded, var_at, holders, placed,
+                 ndv) -> Optional[float]:
+    """One step of `estimate_order` for a column leaf (edge, frame_slot)."""
+    cols = [(c, var_at.get((a, c))) for c in leaf.cols]
+    bound = [c for c, v in cols if v and (v in seeded or holders.get(v, set()) & placed)]
+    if i == 0 and not seeded:
+        est = leaf.scan_rows
+    elif est is not None:
+        if not bound:
+            est = None if leaf.scan_rows is None else est * leaf.scan_rows
+        else:
+            f = leaf.scan_rows
+            for c in bound:
+                f = f / leaf.cols[c] if leaf.cols[c] else None
+                if f is None:
+                    break
+            est = None if f is None else est * f
+    if est is not None:
+        for c, v in cols:
+            if v and c not in bound:
+                ndv[v] = min(est, leaf.cols[c])
+        for v in list(ndv):
+            ndv[v] = min(ndv[v], est)
+    return est
 
 
 def choose_order(plan, leaves: Dict[str, Leaf], aliases: Sequence[str],
@@ -260,6 +373,10 @@ ENFORCE_MIN_GAIN = 10.0
 
 NAME = "model_join_order"
 
+#: Table kinds the model prices: quads, and the edge and frame_slot tables
+#: priced from the quad statistics of the predicates they replace.
+PRICED_KINDS = ("quad", "edge", "frame_slot")
+
 
 def enforced_order(plan, aliases, quad_tables, leaf_card: Dict[str, float], uuid_of,
                    default_order: Sequence[str],
@@ -277,6 +394,10 @@ def enforced_order(plan, aliases, quad_tables, leaf_card: Dict[str, float], uuid
     if len(aliases_list) < 2:
         return None
     leaves = leaves_from(plan, aliases, quad_tables, leaf_card, uuid_of)
+    if any(a not in leaves for a in aliases_list):
+        rec.declined(NAME, "a leaf has no statistics (edge or frame_slot without object_count)",
+                     tables=len(aliases_list))
+        return None
     order, cost = choose_order(plan, leaves, aliases_list, bound_vars)
     if not order:
         rec.declined(NAME, "the model cannot price a complete order", tables=len(aliases_list))
@@ -295,3 +416,63 @@ def enforced_order(plan, aliases, quad_tables, leaf_card: Dict[str, float], uuid
         return None
     rec.fired(NAME, "", **detail)
     return order
+
+
+SEMIJOIN_NAME = "semijoin_model_gate"
+
+
+def semijoin_is_cheaper(original, split, key: str, aliases) -> bool:
+    """Whether the semi-join split of `original` is worth keeping (`issues/293` stage 6).
+
+    The split anchors on the patterns that bind only `key`, which for an entity
+    query is always the type triple (`issues/161`: "selectivity never enters
+    the choice"), and probes the rest once per anchor row. Priced here:
+
+        split   = anchor rows + anchor rows x (the probe's work per row)
+        merged  = the merged BGP's cost in its cheapest order
+
+    The split is reverted only when the merged form is predicted at least
+    ENFORCE_MIN_GAIN cheaper, above the model's measured error. Anything the
+    model cannot price keeps the split: it exists because it wins elsewhere
+    (`issues/045`, 24 s -> 2 ms). Measured on KGQuery graph mode, the split's
+    100,000 probes against the merged join: 55x, 15x and 1.5x slower.
+    """
+    from types import SimpleNamespace
+    from .emit_bgp import _leaf_cardinality, _widen_term
+    from .plan_decisions import recorder_for
+    rec = recorder_for(aliases)
+    tables = [t for t in original.tables if t.kind not in ("term",)]
+    if any(t.kind not in PRICED_KINDS for t in tables):
+        rec.declined(SEMIJOIN_NAME, "the BGP has tables the model does not price")
+        return True
+    consts = getattr(aliases, "constants", None) or {}
+    resolved = getattr(aliases, "resolved_constants", None) or {}
+
+    def uuid_of(term):
+        col = consts.get(_widen_term(term))
+        return resolved.get(col) if col else None
+
+    card = _leaf_cardinality(original, SimpleNamespace(aliases=aliases))
+    leaves = leaves_from(original, aliases, tables, card, uuid_of)
+    if any(t.alias not in leaves for t in tables):
+        rec.declined(SEMIJOIN_NAME, "a leaf has no statistics (edge or frame_slot without object_count)")
+        return True
+    anchor = [t.alias for t in split.children[0].tables if t.kind in PRICED_KINDS]
+    rest = [t.alias for t in split.children[1].tables if t.kind in PRICED_KINDS]
+    a_order, _ = choose_order(original, leaves, anchor)
+    a_rows = estimate_order(original, leaves, a_order)[-1] if a_order else None
+    _, probe = choose_order(original, leaves, rest, bound_vars=[key])
+    _, merged = choose_order(original, leaves, [t.alias for t in tables])
+    if a_rows is None or probe is None or merged is None:
+        rec.declined(SEMIJOIN_NAME, "the model cannot price both forms",
+                     anchor_rows=a_rows, probe=probe, merged=merged)
+        return True
+    split_cost = a_rows + a_rows * probe
+    gain = split_cost / merged if merged else float("inf")
+    detail = dict(anchor_rows=round(a_rows), probe_per_row=round(probe, 2),
+                  split_cost=round(split_cost), merged_cost=round(merged), gain=round(gain, 1))
+    if gain < ENFORCE_MIN_GAIN:
+        rec.declined(SEMIJOIN_NAME, "merged join not predicted clearly cheaper; split kept", **detail)
+        return True
+    rec.fired(SEMIJOIN_NAME, "split reverted: merged join predicted cheaper", **detail)
+    return False
