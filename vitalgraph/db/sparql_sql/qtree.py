@@ -19,6 +19,7 @@ switch off.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -63,12 +64,34 @@ class Leaf:
     # understates it. None when the predicate has no stored pairs.
     probe_fan: Optional[float] = None
     o_uuid: Optional[str] = None    # uuid of the constant object, when there is one
+    # Every variable column other than the key, as (column, variable). A quad
+    # leaf has at most one (object_uuid); a derived-table row has several: an
+    # edge row (edge_uuid key) carries source_node_uuid and dest_node_uuid, a
+    # frame_slot row (slot_uuid key) frame_uuid and entity_uuid.
+    o_vars: List[Tuple[str, str]] = field(default_factory=list)
+    # Derived-table leaves: rows per value when probed by a column, and distinct
+    # values per column (PostgreSQL's own statistics on the table, `derived_stats`).
+    col_fan: Dict[str, float] = field(default_factory=dict)
+    col_ndv: Dict[str, float] = field(default_factory=dict)
 
     @property
     def constant(self) -> bool:
-        """Restricted by its own constants (object, IN, range, FTS), so it can
-        anchor a unit without probing anything."""
-        return self.o_const is not None or self.scan.rule in ("range", "fts", "in", "values", "values_bound")
+        """Restricted by its own constants (object, IN, range, FTS, a derived
+        row's constant columns), so it can anchor a unit without probing anything."""
+        return self.o_const is not None or self.scan.rule in (
+            "range", "fts", "in", "values", "values_bound", "derived_count")
+
+    def fan(self, col: Optional[str]) -> Optional[float]:
+        """Rows one index probe of this leaf reads, by column `col`."""
+        if self.kind == "quad":
+            if self.probe_fan:
+                return self.probe_fan
+            return (self.pred_rows / self.pred_objects) if self.pred_rows and self.pred_objects else None
+        return self.col_fan.get(col) if col else None
+
+    def ndv(self, col: Optional[str]) -> Optional[float]:
+        """Distinct values of the variable at `col` (quad: the predicate's objects)."""
+        return self.pred_objects if self.kind == "quad" else self.col_ndv.get(col)
 
     def short(self) -> str:
         p = (self.pred or "?").rsplit("#", 1)[-1].rsplit("/", 1)[-1]
@@ -137,20 +160,48 @@ class _Stats:
         return self.resolved.get(col) if col else None
 
 
+#: The column that identifies a derived-table row's subject (its unit), in order
+#: of preference; every other variable column is an object (`Leaf.o_vars`).
+DERIVED_KEYS = {"edge": ("edge_uuid", "source_node_uuid"),
+                "frame_slot": ("slot_uuid", "frame_uuid")}
+
+#: PostgreSQL's statistics for derived tables and capped counts of their
+#: constant-filtered leaves, loaded by `qcard.load_derived` before analysis:
+#:   DERIVED_STATS[table] = {"rows": reltuples, "ndv": {column: distinct}}
+#:   DERIVED_COUNTS[(table, filters)] = rows (capped; >= the cap reads as the cap)
+DERIVED_STATS: Dict[str, dict] = {}
+DERIVED_COUNTS: Dict[Tuple[str, Tuple[str, ...]], float] = {}
+
+
+def derived_filters(alias: str, filters: List[str]) -> Tuple[str, ...]:
+    """A derived leaf's filters with the alias stripped: its count's cache key."""
+    return tuple(sorted(f.replace(f"{alias}.", "") for f in filters))
+
+
 def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
     from .emit_bgp import _leaf_cardinality
     card = _leaf_cardinality(plan, ctx)
     var_at: Dict[Tuple[str, str], str] = {}
+    by_alias: Dict[str, List[Tuple[str, str]]] = {}
     for var, slot in plan.var_slots.items():
         for pos in slot.positions:
             var_at[pos] = var
+            by_alias.setdefault(pos[0], []).append((pos[1], var))
     range_aliases = {a for (a, _c) in (getattr(plan, "range_leaves", None) or {})}
     fts = getattr(plan, "fts_leaf_rows", None) or {}
     out = []
+    # a leaf's OWN filters: constraints that reference no other alias (as qplan._Pos)
+    filters_by: Dict[str, List[str]] = {}
+    for owner, sql in getattr(plan, "tagged_constraints", None) or []:
+        if set(re.findall(r"\b([a-z][a-z0-9_]*[0-9])\.", sql)) <= {owner}:
+            filters_by.setdefault(owner, []).append(sql)
     for t in plan.tables:
         if t.kind not in LEAF_KINDS:
             continue
         a = t.alias
+        if t.kind in DERIVED_KINDS:
+            out.append(_derived_leaf(t, by_alias.get(a, []), filters_by.get(a, []), ctx))
+            continue
         terms = plan.leaf_terms
         p_term = terms.get((a, "predicate_uuid"))
         o_term = terms.get((a, "object_uuid"))
@@ -168,8 +219,37 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
             pred_objects=st.pred_objects.get(p_uuid) if p_uuid else None,
             pred_uuid=p_uuid,
             probe_fan=st.size_biased_fan(p_uuid),
-            o_uuid=st.uuid_of(o_term) if o_term else None))
+            o_uuid=st.uuid_of(o_term) if o_term else None,
+            o_vars=[("object_uuid", var_at[(a, "object_uuid")])] if (a, "object_uuid") in var_at else []))
     return out
+
+
+def _derived_leaf(t, cols: List[Tuple[str, str]], filters: List[str], ctx) -> Leaf:
+    """An edge or frame_slot row as a leaf: keyed by its identifying column,
+    every other variable column an object, priced from PostgreSQL's statistics
+    on the table and, with constant filters, a capped count (`DERIVED_*`)."""
+    a = t.alias
+    colvar = dict(cols)
+    key = next((c for c in DERIVED_KEYS.get(t.kind, ()) if c in colvar), None)
+    st = DERIVED_STATS.get(t.table_name) or {}
+    rows = st.get("rows")
+    ndv = {c: float(n) for c, n in (st.get("ndv") or {}).items()}
+    # constant filters beyond the graph: role, frame type, edge type ...
+    const = [f for f in filters if not re.match(rf"\s*{re.escape(a)}\.context_uuid\s*=", f)
+             and re.match(rf"\s*{re.escape(a)}\.\w+\s*=\s*\S+\s*$", f)]
+    scan = Est(rows, "derived" if rows is not None else "unpriced")
+    if const:
+        from .generator import substitute_constants
+        n = DERIVED_COUNTS.get((t.table_name, derived_filters(a, [substitute_constants(f, ctx.aliases) for f in filters])))
+        if n is not None:
+            scan = Est(float(n), "derived_count")
+    fan = {c: (rows / max(ndv[c], 1.0)) for c in ndv} if rows else {}
+    return Leaf(alias=a, kind=t.kind, pred=None,
+                s_var=colvar.get(key) if key else None, o_var=None,
+                s_const=None, o_const=None, scan=scan,
+                pred_rows=rows, pred_objects=None,
+                o_vars=[(c, v) for c, v in cols if c != key],
+                col_fan=fan, col_ndv=ndv)
 
 
 def _unit(subject: str, leaves: List[Leaf]) -> Unit:

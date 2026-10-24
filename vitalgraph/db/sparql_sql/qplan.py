@@ -56,6 +56,8 @@ class Edge:
     kind: str                       # link | shared
     leaf_u: Leaf                    # u's leaf whose object is ?var
     leaf_v: Optional[Leaf] = None   # shared: v's leaf whose object is ?var
+    col_u: Optional[str] = None     # leaf_u's column holding ?var (object_uuid; a derived row's own)
+    col_v: Optional[str] = None     # shared: leaf_v's column
     # sampled physical fan-out (`qcard`): target unit -> rows one probe reads
     fan: Dict[int, float] = field(default_factory=dict)
 
@@ -95,6 +97,11 @@ class Query:
     limit: Optional[int] = None
     offset: int = 0
     exclude: frozenset = frozenset()    # leaves left out as implied (`pattern_verdict`)
+    # A sub-SELECT directly under the outer aggregate: `SELECT (COUNT(*) …) { SELECT
+    # DISTINCT ?e … }`. Its projection (and DISTINCT) is applied to the pattern
+    # before the outer GROUP reads it; the outer query sees only these variables.
+    sub_project: Optional[List[str]] = None
+    sub_distinct: bool = False
 
 
 class _Shim:
@@ -118,6 +125,17 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
         # (`SELECT (COUNT(*) …) { SELECT DISTINCT ?e … }`): read as one level,
         # its inner projection replaced the outer one and the render decoded a
         # column the aggregate level never produces (KGQuery count queries).
+        # The one supported nesting: a projection (optionally DISTINCT) directly
+        # below the outer GROUP, i.e. an aggregate over a sub-SELECT's rows.
+        # (The algebra may put the DISTINCT above or below the sub-SELECT's PROJECT.)
+        if seen_group and p.kind == KIND_PROJECT and q.sub_project is None:
+            q.sub_project = list(p.project_vars or [])
+            p = p.children[0]
+            continue
+        if seen_group and p.kind in (KIND_DISTINCT, KIND_REDUCED) and not q.sub_distinct:
+            q.sub_distinct = True
+            p = p.children[0]
+            continue
         if (p.kind == KIND_PROJECT and q.project is not None) or (p.kind == KIND_SLICE and q.limit is not None) \
                 or (seen_group and p.kind in (KIND_PROJECT, KIND_DISTINCT, KIND_REDUCED, KIND_SLICE, KIND_ORDER)):
             raise Unsupported(f"sub-SELECT ({p.kind} below the outer query's modifiers)")
@@ -243,7 +261,7 @@ def _build_region(parts, ctx, aliases) -> Region:
     quad_stats = getattr(a, "quad_stats", None) or {}
     extra = getattr(a, "extra_quad_stats", None) or {}
     for var, uuids in values.items():
-        holders = [l for l in leaves if l.o_var == var]
+        holders = [l for l in leaves if any(v == var for _c, v in l.o_vars)]
         if not holders:
             raise Unsupported(f"VALUES ?{var} binds no pattern")
         for l in holders:
@@ -270,13 +288,16 @@ def _build_region(parts, ctx, aliases) -> Region:
     subj = {u.subject[1:]: i for i, u in enumerate(units) if u.subject.startswith("?")}
     for i, u in enumerate(units):
         for l in u.leaves:
-            if l.o_var and l.o_var in subj and subj[l.o_var] != i:
-                edges.append(Edge(i, subj[l.o_var], l.o_var, "link", l))
+            for c, ov in l.o_vars:
+                if ov in subj and subj[ov] != i:
+                    edges.append(Edge(i, subj[ov], ov, "link", l, col_u=c))
     for i, j in itertools.combinations(range(len(units)), 2):
         for li in units[i].leaves:
             for lj in units[j].leaves:
-                if li.o_var and li.o_var == lj.o_var and li.o_var not in subj:
-                    edges.append(Edge(i, j, li.o_var, "shared", li, lj))
+                for ci, vi in li.o_vars:
+                    for cj, vj in lj.o_vars:
+                        if vi == vj and vi not in subj:
+                            edges.append(Edge(i, j, vi, "shared", li, lj, col_u=ci, col_v=cj))
     return Region(units=units, edges=edges, values=values, plans=parts["plans"],
                   aliases=aliases, optionals=parts["optionals"], antis=parts["antis"])
 
@@ -285,7 +306,7 @@ def region_vars(r: Region) -> Set[str]:
     out = set()
     for u in r.units:
         for l in u.leaves:
-            for v in (l.s_var, l.o_var):
+            for v in [l.s_var] + [ov for _c, ov in l.o_vars]:
                 if v:
                     out.add(v)
     return out
@@ -314,11 +335,12 @@ def _unit_ndv(u: Unit, values: Dict[str, List[str]], bound: Dict[str, float]) ->
     if u.subject.startswith("?"):
         out[u.subject[1:]] = r
     for l in u.leaves:
-        if l.o_var:
-            n = min(r, l.pred_objects) if l.pred_objects else r
-            if l.o_var in values:
-                n = min(n, float(len(values[l.o_var])))
-            out[l.o_var] = min(out.get(l.o_var, n), n)
+        for c, ov in l.o_vars:
+            d = l.ndv(c)
+            n = min(r, d) if d else r
+            if ov in values:
+                n = min(n, float(len(values[ov])))
+            out[ov] = min(out.get(ov, n), n)
     return out
 
 
@@ -337,14 +359,11 @@ def _connecting(r: Region, s1: frozenset, s2: frozenset) -> List[Edge]:
     return [e for e in r.edges if (e.u in s1 and e.v in s2) or (e.u in s2 and e.v in s1)]
 
 
-def _object_fan(l: Optional[Leaf]) -> Optional[float]:
-    """Rows per probe of leaf `l` BY OBJECT, the value coming from the data:
-    the size-biased mean from rdf_stats, else the predicate's plain mean."""
-    if l is None:
-        return None
-    if l.probe_fan:
-        return l.probe_fan
-    return (l.pred_rows / l.pred_objects) if l.pred_rows and l.pred_objects else None
+def _object_fan(l: Optional[Leaf], col: Optional[str] = None) -> Optional[float]:
+    """Rows per probe of leaf `l` by a non-key column, the value coming from the
+    data: for a quad, the size-biased mean from rdf_stats, else the predicate's
+    plain mean; for a derived row, the table's rows / distinct values of `col`."""
+    return l.fan(col) if l is not None else None
 
 
 def _probe_fan(e: Edge, target: int) -> Optional[float]:
@@ -359,9 +378,9 @@ def _probe_fan(e: Edge, target: int) -> Optional[float]:
         return e.fan[target]
     if e.kind == "link":
         if e.u == target:                       # target holds the link leaf: probe it by object
-            return _object_fan(e.leaf_u)
+            return _object_fan(e.leaf_u, e.col_u)
         return 1.0                              # target is the link's subject: probe by subject
-    return _object_fan(e.leaf_u if e.u == target else e.leaf_v)
+    return _object_fan(e.leaf_u, e.col_u) if e.u == target else _object_fan(e.leaf_v, e.col_v)
 
 
 MAX_CCP_PAIRS = 20_000               # ~100 ms of Python; above this, greedy instead of DP
@@ -445,8 +464,15 @@ def _edges_between(by_pair, m1: int, m2: int) -> List[Edge]:
 
 #: Per-operator costs in microseconds, fitted from executed plans on the planner stack
 #: (test_scripts_internal/planner_ext/calib/fit.py, 72 plans, results/calibration.md).
-#: COST_MODEL "cout" keeps the original C_out (every intermediate row costs 1).
-COST_MODEL = "cout"
+#: "calib" (the default since 2026-10-24) prices an index probe row ~10x a hash row, as
+#: measured. "cout" is plain C_out (every intermediate row costs 1): within 3% of calib
+#: on the UW dashboards, but on wordnet's frame_slot count it chose 285k index probes
+#: over a hash join, 2.4x slower than today's SQL; calib matches today there.
+COST_MODEL = "calib"
+# EXPERIMENTS: VG_PLANNER_COST_MODEL=calib|cout overrides the default for a process.
+import os as _os
+if _os.getenv("VG_PLANNER_COST_MODEL") in ("cout", "calib"):
+    COST_MODEL = _os.environ["VG_PLANNER_COST_MODEL"]
 W = {
     "idx_lookup": 3.38,      # one index descent (Index Scan, per loop)
     "idx_row": 1.09,         # one row returned by an index scan (heap fetch included)
@@ -659,6 +685,9 @@ class _Pos:
         self.filters: Dict[str, List[str]] = {}
         self.positions: Dict[str, List[Tuple[str, str]]] = {}
         self.term_table: Optional[str] = None
+        # leaf alias -> the alias of the term sub-select its range/IN criterion
+        # reads (`_name_sublink`), added to every advised set containing the leaf
+        self.sublinks: Dict[str, List[str]] = {}
         for p in plans:
             for t in p.tables:
                 if t.kind == "term":
@@ -668,7 +697,7 @@ class _Pos:
             for owner, sql in p.tagged_constraints:
                 refs = set(_ALIAS.findall(sql))
                 if refs <= {owner}:
-                    self.filters.setdefault(owner, []).append(sql)
+                    self.filters.setdefault(owner, []).append(self._name_sublink(owner, sql))
                 elif not re.fullmatch(r"\s*\w+\.\w+ = \w+\.\w+\s*", sql):
                     raise Unsupported(f"cross-table condition that is not a variable equality: {sql}")
             for var, slot in p.var_slots.items():
@@ -679,6 +708,34 @@ class _Pos:
             lits = ", ".join(f"'{u}'::uuid" for u in uuids)
             for a, col in self.positions.get(var, []):
                 self.filters.setdefault(a, []).append(f"{a}.{col} IN ({lits})")
+
+
+_SUBLINK = re.compile(r"^\s*(\w+)\.(\w+) IN \(SELECT term_uuid FROM (\w+) WHERE (.+)\)\s*$", re.S)
+
+
+def _name_sublink_sql(owner: str, sql: str, taken: List[str]) -> Tuple[str, Optional[str]]:
+    m = _SUBLINK.match(sql)
+    if not m or m.group(1) != owner:
+        return sql, None
+    alias = f"r_{owner}" + (f"_{len(taken) + 1}" if taken else "")
+    return (f"{owner}.{m.group(2)} IN (SELECT {alias}.term_uuid FROM {m.group(3)} AS {alias} "
+            f"WHERE {m.group(4)})"), alias
+
+
+def _pos_name_sublink(self, owner: str, sql: str) -> str:
+    """A leaf criterion read from the term table (`o IN (SELECT term_uuid FROM
+    term WHERE num_val >= 65)`) gets its sub-select ALIASED, so the advice can
+    name it. PostgreSQL pulls the sub-select up and, term_uuid being unique,
+    turns it into an ordinary join: a relation in every join above the leaf.
+    Unnamed, it made every advised size and method above the leaf match
+    nothing (KGQuery range criteria: 15 items not applied)."""
+    out, alias = _name_sublink_sql(owner, sql, self.sublinks.get(owner, []))
+    if alias:
+        self.sublinks.setdefault(owner, []).append(alias)
+    return out
+
+
+_Pos._name_sublink = _pos_name_sublink
 
 
 class _R:
@@ -852,6 +909,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     pos = _Pos(reg.plans, reg.values)
     if pos.term_table is None:
         raise Unsupported("no term table")
+    poses = [pos]
     tree = main_tree or search(reg)
     base_sizes = _base_sizes(reg)
     r = _R(pos)
@@ -865,6 +923,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     # OPTIONAL blocks, each planned on its own, left-joined on the shared vars
     for opt in reg.optionals:
         opos = _Pos(opt.plans, opt.values)
+        poses.append(opos)
         otree = search(opt)
         orr = _R(opos)
         osql, op, opend = _render_node(otree, opt, orr)
@@ -901,6 +960,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             _fv(f)
         corr = sorted((region_vars(body) | fvars) & set(r.bound))
         bpos = _Pos(body.plans, body.values)
+        poses.append(bpos)
         set_tree = search(body)
         dec_cost = set_tree.cost + rows
         body.bound = {v: 1.0 for v in corr}
@@ -936,7 +996,16 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         anti_notes.append(_early_stop_note(q, reg, tree, rows))
     # the key set
     agg_vars = {v: ph for v, ph in q.extend.items()}
-    term_vars = [v for v in (q.project or []) if v not in agg_vars]
+    # A projected variable that no pattern of the query mentions is UNBOUND on every
+    # row (`SELECT ?x WHERE { ... <const> ... }`): no key and no column, as today's
+    # SQL (wordnet hub queries: the hub is a constant).
+    mentioned = region_vars(reg)
+    for o in reg.optionals:
+        mentioned |= region_vars(o)
+    unbound = {v for v in (q.project or []) if v not in agg_vars and v not in mentioned
+               and v not in (q.group_vars or [])}
+    q.order = [(v, d) for v, d in q.order if v not in unbound]
+    term_vars = [v for v in (q.project or []) if v not in agg_vars and v not in unbound]
     need = set(term_vars) | set(q.group_vars or [])
     for ph, agg in q.aggregates.items():
         if agg.expr is not None:
@@ -944,11 +1013,20 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     for v, _d in q.order:
         if v not in agg_vars:
             need.add(v)
+    if q.sub_distinct and q.sub_project is None:
+        raise Unsupported("DISTINCT below the GROUP without a sub-SELECT projection")
+    if q.sub_project is not None:
+        # an aggregate over a sub-SELECT: the outer query sees only its projection
+        outside = need - set(q.sub_project)
+        if outside:
+            raise Unsupported(f"the outer query reads ?{', ?'.join(sorted(outside))}, not projected by its sub-SELECT")
+        need = set(q.sub_project)
     for v in need:
         if v not in r.bound:
             raise Unsupported(f"?{v} is not bound by the plan")
     keys = [f"{r.bound[v]} AS k_{v}" for v in sorted(need)]
-    inner = "SELECT " + ", ".join(keys) + "\nFROM " + core + ("\nWHERE " + " AND ".join(where) if where else "")
+    inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + ", ".join(keys) + "\nFROM " + core
+             + ("\nWHERE " + " AND ".join(where) if where else ""))
     level = inner
     out_keys = sorted(need)
     if q.group_vars is not None:
@@ -994,11 +1072,13 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     from .sql_type_generation import TypeRegistry
     # Every output variable must be a column of the level the decode reads: a
     # mismatch is a planner defect, declined here rather than sent as SQL that fails.
-    missing = [v for v in (q.project or []) if v not in agg_vars and v not in out_keys]
+    missing = [v for v in (q.project or []) if v not in agg_vars and v not in out_keys and v not in unbound]
     if missing:
         raise Unsupported(f"projected ?{', ?'.join(missing)} not produced by the plan's top level")
     cols, djoins = [], []
     for v in (q.project or []):
+        if v in unbound:
+            continue            # no column: the executor leaves an unbound variable out of the bindings
         sn = names.get(v)
         if sn is None:
             raise Unsupported(f"no SQL name for ?{v}")
@@ -1026,8 +1106,19 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     sizes = base_sizes + sizes
     lines = ["/*vg:plan 1"]
     lines += [f"bgp u{i} {a}" for i, a in enumerate(units_adv)]
-    lines += [f"size k{i} {max(rws, 1):.0f} {' '.join(al)}" for i, (rws, al) in enumerate(sizes) if len(al) >= 1]
-    lines += [f"method m{i} {how} {' '.join(al)}" for i, (how, al) in enumerate(methods) if len(al) >= 2]
+    subl: Dict[str, List[str]] = {}
+    for ps in poses:
+        for k, v in ps.sublinks.items():
+            subl.setdefault(k, []).extend(x for x in v if x not in subl.get(k, []))
+
+    def named(al: List[str]) -> List[str]:
+        # a join set containing a leaf also contains the leaf's aliased sub-select
+        # (a scan of the leaf alone does not: its size is the leaf's own)
+        if len(al) < 2:
+            return al
+        return al + [x for a in al for x in subl.get(a, [])]
+    lines += [f"size k{i} {max(rws, 1):.0f} {' '.join(named(al))}" for i, (rws, al) in enumerate(sizes) if len(al) >= 1]
+    lines += [f"method m{i} {how} {' '.join(named(al))}" for i, (how, al) in enumerate(methods) if len(al) >= 2]
     lines.append("*/")
     return Rendered(sql=outer, advice="\n".join(lines),
                     plan=describe(tree, reg) + "".join(f"; {n}" for n in anti_notes), cost=tree.cost)
@@ -1037,7 +1128,7 @@ def _early_stop_note(q: Query, reg: Region, tree: Node, rows: float) -> str:
     """Estimated C_out of walking the sort variable's values in order and
     probing the rest of the pattern per candidate until `limit` rows match."""
     v = q.order[0][0]
-    holder = next((l for u in reg.units for l in u.leaves if l.o_var == v), None)
+    holder = next((l for u in reg.units for l in u.leaves if l.o_var == v and l.kind == "quad"), None)
     if holder is None or not holder.pred_rows or not rows:
         return "early stop: unpriced"
     hit = min(1.0, rows / holder.pred_rows)          # candidates that survive the pattern
@@ -1094,8 +1185,9 @@ def _search_bound(r: Region, corr: List[str]) -> Node:
     edges = list(r.edges)
     for i, u in enumerate(r.units):
         for l in u.leaves:
-            if l.o_var in corr:
-                edges.append(Edge(i, n, l.o_var, "link_outer", l))
+            for c, ov in l.o_vars:
+                if ov in corr:
+                    edges.append(Edge(i, n, ov, "link_outer", l, col_u=c))
             if l.s_var in corr and l is u.anchor:
                 edges.append(Edge(i, n, l.s_var, "subject_outer", l))
     rr = Region(units=units, edges=edges, values=r.values, plans=r.plans, aliases=r.aliases)
@@ -1122,7 +1214,7 @@ def _search_bound(r: Region, corr: List[str]) -> Node:
                         t = next(iter(s2))
                         for e in es:
                             if e.kind == "link_outer":
-                                fan = _object_fan(e.leaf_u)
+                                fan = _object_fan(e.leaf_u, e.col_u)
                             elif e.kind == "subject_outer":
                                 fan = 1.0
                             else:
@@ -1169,7 +1261,7 @@ def _render_node(node: Node, reg: Region, r: _R):          # noqa: F811
         first = node.edge.leaf_u
         rest = [l for l in [u.anchor] + list(u.probes) if l is not first]
         present: Set[str] = set()
-        fan = (_object_fan(first) or 1.0) if node.edge.kind == "link_outer" else 1.0
+        fan = (_object_fan(first, node.edge.col_u) or 1.0) if node.edge.kind == "link_outer" else 1.0
         sql, pend = _chain(r, [first] + rest, present, None, [])
         # the root's prefixes, per outer row: the probe's candidates, then its result
         acc = [first.alias]

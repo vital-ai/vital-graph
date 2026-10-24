@@ -198,8 +198,23 @@ async def plan_with_qtree(plan, ctx, var_map: Dict[str, str], space_id: Optional
     from .plan_decisions import recorder_for
     rec = recorder_for(ctx.aliases)
     from . import qplan
+    if conn is not None:
+        # derived-table leaves (edge, frame_slot) are priced from PostgreSQL's
+        # own statistics and capped counts, loaded before analysis (`qcard`)
+        from . import qcard
+        try:
+            await qcard.load_derived(plan, ctx, conn)
+        except Exception as exc:  # unpriced derived leaves: the planner declines them
+            rec.declined("qtree_derived_stats", f"{type(exc).__name__}: {exc}"[:300])
     try:
         q = qplan.analyze(plan, ctx)
+        # The generator chose an EARLY-STOP plan (an ordered scan that stops at
+        # the LIMIT: `needs_ordered_scan`). The planner has no top-k cost term
+        # yet (planning_planner/09 item 6), so its plan computes every match
+        # and cuts after: measured on KGQuery edge pages, 4,982 matches for 25
+        # rows, 95 ms against today's 12 ms. Until top-k is costed, it stands aside.
+        if q.limit is not None and getattr(ctx, "needs_ordered_scan", False):
+            raise qplan.Unsupported("the generator's early-stop plan for LIMIT (top-k is not costed yet)")
     except Exception as exc:     # Unsupported, or a planner defect: keep today's SQL
         rec.declined("qtree_plan", f"{type(exc).__name__}: {exc}"[:300])
         return None
