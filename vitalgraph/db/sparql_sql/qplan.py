@@ -113,6 +113,14 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
     while p.kind in (KIND_SLICE, KIND_PROJECT, KIND_DISTINCT, KIND_REDUCED, KIND_ORDER,
                      KIND_EXTEND, KIND_GROUP) or (p.kind == KIND_FILTER and not seen_group
                                                   and _is_having(p, q)):
+        # One level of modifiers only. A second PROJECT, or any projection,
+        # DISTINCT, ORDER or LIMIT below the GROUP, is a SUB-SELECT
+        # (`SELECT (COUNT(*) …) { SELECT DISTINCT ?e … }`): read as one level,
+        # its inner projection replaced the outer one and the render decoded a
+        # column the aggregate level never produces (KGQuery count queries).
+        if (p.kind == KIND_PROJECT and q.project is not None) or (p.kind == KIND_SLICE and q.limit is not None) \
+                or (seen_group and p.kind in (KIND_PROJECT, KIND_DISTINCT, KIND_REDUCED, KIND_SLICE, KIND_ORDER)):
+            raise Unsupported(f"sub-SELECT ({p.kind} below the outer query's modifiers)")
         if p.kind == KIND_SLICE:
             q.limit = p.limit if p.limit >= 0 else None
             q.offset = p.offset or 0
@@ -984,6 +992,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     from .emit_bgp import (_BOOLEAN_DT, _DATETIME_DATATYPES, _NUMERIC_DATATYPES,
                            _NUMERIC_DT_SQL_LIST)
     from .sql_type_generation import TypeRegistry
+    # Every output variable must be a column of the level the decode reads: a
+    # mismatch is a planner defect, declined here rather than sent as SQL that fails.
+    missing = [v for v in (q.project or []) if v not in agg_vars and v not in out_keys]
+    if missing:
+        raise Unsupported(f"projected ?{', ?'.join(missing)} not produced by the plan's top level")
     cols, djoins = [], []
     for v in (q.project or []):
         sn = names.get(v)
