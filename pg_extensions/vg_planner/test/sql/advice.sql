@@ -217,3 +217,21 @@ method m1 hash a b
 */ SELECT * FROM q7 a LEFT JOIN q7 b ON b.s = a.s AND b.p = 2 WHERE a.p = 1;
 SELECT vg_planner_last_report();
 DROP TABLE q7;
+
+-- A relation the advice never names is transparent: a sub-select pulled up into
+-- a semi-join (the generator's range criteria) joins with its leaf, and the
+-- sizes and methods above it still match.
+CREATE TABLE q8 (s int, p int, o int);
+CREATE TABLE q8t (u int, v int);
+INSERT INTO q8 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+INSERT INTO q8t SELECT g, g % 100 FROM generate_series(1, 1013) g;
+CREATE INDEX q8_ps ON q8 (p, s);
+ANALYZE q8; ANALYZE q8t;
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+size k1 77 a b
+method m1 hash a b
+*/ SELECT * FROM q8 a JOIN q8 b ON b.s = a.s
+   WHERE a.p = 1 AND b.p = 2 AND a.o IN (SELECT u FROM q8t WHERE v >= 65);
+SELECT vg_planner_last_report();
+DROP TABLE q8, q8t;

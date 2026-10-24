@@ -292,6 +292,39 @@ vgp_problem_begin(PlannerInfo *root, List *initial_rels, VgpAdvice *advice)
 	if (useful == 0)
 		return NULL;
 
+	{
+		Relids		named = NULL;
+		int			x = -1;
+
+		for (int b = 0; b < p->nbgps; b++)
+			named = bms_add_members(named, p->pbgps[b].all);
+		for (int z = 0; z < p->nsizes; z++)
+			named = bms_add_members(named, p->psizes[z].relids);
+		for (int z = 0; z < p->nmethods; z++)
+			named = bms_add_members(named, p->pmethods[z].relids);
+		foreach(lc, root->join_info_list)
+		{
+			SpecialJoinInfo *sj = (SpecialJoinInfo *) lfirst(lc);
+
+			if (sj->jointype == JOIN_SEMI)
+				p->transparent = bms_add_members(p->transparent, sj->syn_righthand);
+		}
+		p->transparent = bms_del_members(p->transparent, named);
+		while ((x = bms_next_member(p->transparent, x)) >= 0)
+		{
+			RangeTblEntry *rte = root->simple_rte_array[x];
+
+			if (rte && rte->rtekind == RTE_RELATION && rte->eref)
+			{
+				MemoryContext old = MemoryContextSwitchTo(advice->cxt);
+
+				advice->transparent_names = lappend(advice->transparent_names,
+													pstrdup(rte->eref->aliasname));
+				MemoryContextSwitchTo(old);
+			}
+		}
+	}
+
 	if (advice->seen == NULL)
 	{
 		memset(&ctl, 0, sizeof(ctl));

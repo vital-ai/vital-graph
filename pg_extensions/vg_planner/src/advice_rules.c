@@ -98,7 +98,7 @@ vgp_joinrel_built(PlannerInfo *root, RelOptInfo *joinrel,
 	 * Base relations only: since PG 16 a join relation that completes an
 	 * outer join also carries that join's own RT index in its relids.
 	 */
-	base = bms_difference(joinrel->relids, root->outer_join_rels);
+	base = bms_difference(bms_difference(joinrel->relids, root->outer_join_rels), p->transparent);
 	e->factor = palloc(sizeof(double) * Max(p->nbgps, 1));
 	for (int b = 0; b < p->nbgps; b++)
 		e->factor[b] = 1.0;
@@ -215,7 +215,8 @@ pair_allowance(VgpProblem *p, RelOptInfo *joinrel,
 	/* method items: the planner's choice for exactly this join relation */
 	if (p->nmethods > 0)
 	{
-		Relids		base = bms_difference(joinrel->relids, p->root->outer_join_rels);
+		Relids		base = bms_difference(bms_difference(joinrel->relids, p->root->outer_join_rels),
+										  p->transparent);
 
 		for (int z = 0; z < p->nmethods; z++)
 		{

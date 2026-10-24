@@ -193,9 +193,25 @@ visit(Plan *plan, CheckBgp *cb, int ncb)
 		visit((Plan *) lfirst(lc), cb, ncb);
 }
 
-/* Range-table indexes of the RTE_RELATION aliases scanned under `plan`. */
+/* Was `name` the inner side of a semi-join during join search (VgpProblem.transparent)? */
 static bool
-alias_set_equals(PlannedStmt *pstmt, Bitmapset *rtis, VgpMethodItem *m)
+is_transparent(VgpAdvice *advice, const char *name)
+{
+	ListCell   *lc;
+
+	foreach(lc, advice->transparent_names)
+		if (strcmp((const char *) lfirst(lc), name) == 0)
+			return true;
+	return false;
+}
+
+/*
+ * The RTE_RELATION aliases scanned under a join node (`rtis`) equal method item
+ * m's, ignoring the relations join search found on the inner side of a
+ * semi-join (VgpProblem.transparent), as join search itself does.
+ */
+static bool
+alias_set_equals(PlannedStmt *pstmt, Bitmapset *rtis, VgpMethodItem *m, VgpAdvice *advice)
 {
 	int			n = 0,
 				x = -1;
@@ -206,6 +222,8 @@ alias_set_equals(PlannedStmt *pstmt, Bitmapset *rtis, VgpMethodItem *m)
 		bool		hit = false;
 
 		if (rte->rtekind != RTE_RELATION)
+			continue;
+		if (rte->eref && is_transparent(advice, rte->eref->aliasname))
 			continue;
 		n++;
 		for (int i = 0; i < m->naliases && !hit; i++)
@@ -233,7 +251,7 @@ check_methods(PlannedStmt *pstmt, Plan *plan, VgpAdvice *advice)
 		{
 			VgpMethodItem *it = &advice->methods[z];
 
-			if (it->seen == VGP_M_NONE && alias_set_equals(pstmt, all, it))
+			if (it->seen == VGP_M_NONE && alias_set_equals(pstmt, all, it, advice))
 			{
 				it->seen = m;
 				it->status = (it->set_based == (m == VGP_M_HASH || m == VGP_M_MERGE))

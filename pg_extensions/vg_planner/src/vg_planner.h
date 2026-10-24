@@ -118,6 +118,14 @@ typedef struct VgpAdvice
 	 * its correction factors must travel with it.
 	 */
 	struct HTAB *seen;
+	/*
+	 * Aliases of the relations PostgreSQL pulled up from a sub-select into a
+	 * SEMI-join, collected during join search (VgpProblem.transparent); the
+	 * post-plan check ignores them as join search does. Allocated in `cxt`,
+	 * the context the advice was parsed in, which outlives planning.
+	 */
+	List	   *transparent_names;
+	MemoryContext cxt;
 } VgpAdvice;
 
 /* advice_parse.c */
@@ -164,6 +172,17 @@ typedef struct VgpProblem
 	int			nmethods;
 	VgpProblemMethod *pmethods;
 	struct HTAB *seen;			/* joinrels already handled at point 1 */
+	/*
+	 * The inner side of every SEMI-join, minus anything the advice names. A
+	 * join relation is matched against an advice item on its base relids
+	 * WITHOUT these: a sub-select PostgreSQL pulled up into a semi-join (the
+	 * generator's range criteria, `o IN (SELECT term_uuid ... WHERE num_val
+	 * >= 65)`) only filters its leaf, a filter the advice's rows already
+	 * include; without this, every join above such a leaf matched nothing.
+	 * ONLY semi-joins: an ordinary join to a relation the advice does not
+	 * name changes the row count, and stays visible.
+	 */
+	Relids		transparent;
 } VgpProblem;
 
 extern void vgp_statement_push(VgpAdvice *advice);

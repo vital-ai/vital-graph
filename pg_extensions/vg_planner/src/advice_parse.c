@@ -313,6 +313,8 @@ vgp_parse_advice(const char *text)
 	ListCell   *lc;
 	int			i = 0;
 
+	adv->cxt = CurrentMemoryContext;
+
 	close = strstr(text, "*/");
 	lx.p = text + strlen(ADVICE_MARK);
 	lx.end = close ? close : text + strlen(text);
