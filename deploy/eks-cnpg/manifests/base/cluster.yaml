@@ -21,7 +21,9 @@ spec:
   primaryUpdateStrategy: unsupervised
   primaryUpdateMethod: switchover
 
-  # One pod per zone: the RDS Multi-AZ placement.
+  # One pod per zone: the RDS Multi-AZ placement. Two instances; the node pool
+  # offers three zones so a lost zone's copy can be rebuilt in the third
+  # (overlays/eks/nodepool.yaml).
   affinity:
     enablePodAntiAffinity: true
     topologyKey: topology.kubernetes.io/zone

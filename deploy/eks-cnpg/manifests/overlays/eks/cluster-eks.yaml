@@ -48,6 +48,8 @@ spec:
                 service.beta.kubernetes.io/aws-load-balancer-type: external
                 service.beta.kubernetes.io/aws-load-balancer-scheme: internal
                 service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+                # private subnets in the SAME three AZs as the node pool, so the NLB
+                # reaches the primary in whichever zone it is after a failover
                 service.beta.kubernetes.io/aws-load-balancer-subnets: REPLACE_ME
             spec:
               type: LoadBalancer

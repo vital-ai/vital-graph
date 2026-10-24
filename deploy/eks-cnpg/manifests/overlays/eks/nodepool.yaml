@@ -1,5 +1,12 @@
 # EKS Auto Mode node pool for the database: Graviton memory-optimized 2xlarge (the
 # db.r6g.2xlarge equivalent), on-demand, tainted so only PostgreSQL lands there.
+#
+# THREE ZONES for TWO instances. The Cluster puts its primary and standby in
+# different zones (podAntiAffinityType: required). If a whole zone is lost, the
+# standby is promoted, and the operator rebuilds the lost copy, which must go to a
+# zone that holds neither: with only two zones it could not be scheduled until the
+# lost one returned, leaving one copy. Use the install's three AZs; the
+# subnets the cluster (and the NLB) use must cover the same three.
 apiVersion: karpenter.sh/v1
 kind: NodePool
 metadata:
@@ -30,6 +37,9 @@ spec:
         - key: eks.amazonaws.com/instance-size
           operator: In
           values: ["2xlarge"]
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: ["us-east-1a", "us-east-1b", "us-east-1c"]   # REPLACE with the install's AZs
   # A database node is never consolidated away under a running primary; node
   # replacement for patching goes through the operator's switchover.
   disruption:
