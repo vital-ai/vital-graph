@@ -11,8 +11,12 @@ price that probe itself.
 The column is NULLABLE and added empty: NULL means "not yet counted", and the
 generator falls back to what it had. `ADD COLUMN` without a default is a
 catalog change, so the ACCESS EXCLUSIVE lock is momentary. A recompute then
-fills it (`recompute_stats_tables`; +8.1 s on a 74.2M-quad space, measured on
-the vg test stack); `--no-recompute` leaves that to the next maintenance cycle.
+fills it. That is the FULL `recompute_stats_tables`, not just this column: the
+column adds 8.1 s to it on a 74.2M-quad space (vg test stack), but the whole
+recompute takes ~40 s there and was cancelled by production's 60 s
+`statement_timeout` on its large spaces, so it runs with the timeout off
+(`issues/304`). `--no-recompute` leaves
+the column to the next maintenance cycle.
 
 Run as the role that owns the tables (`vitalgraph_user` on production): ALTER
 needs ownership, and `issues/` records what objects owned by the RDS master
@@ -79,7 +83,13 @@ async def migrate_space(conn, space_id: str, dry_run: bool, recompute: bool) -> 
     out = {"space": space_id, "status": "column added" if not has else "column present"}
     if recompute:
         t0 = time.monotonic()
-        counts = await recompute_stats_tables(conn, space_id)
+        async with conn.transaction():
+            # The FULL stats recompute, not just this column, so it scans the
+            # whole quad table. Production's parameter group sets 60 s and a
+            # 76M-quad space takes longer (issues/304). LOCAL so it ends with
+            # the transaction; the recompute's own becomes a savepoint.
+            await conn.execute("SET LOCAL statement_timeout = 0")
+            counts = await recompute_stats_tables(conn, space_id)
         out.update(status="migrated", recompute_s=round(time.monotonic() - t0, 1),
                    predicates=counts.get("pred_stats"),
                    counted=await conn.fetchval(
