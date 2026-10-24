@@ -132,5 +132,6 @@ had never been migrated.
 Two leftovers. `dawg_test_rdf_pred_stats` on the test stack has no `space` row,
 so `--all` never reaches it. And an EMPTY space never reads as migrated:
 `bool_and` over zero rows is NULL, so `rt_verify` (test stack) and
-`test_multivalue` (host) are recomputed, in 0.0 s, on every run. Harmless;
-`coalesce(…, true)` on that probe would end it.
+`test_multivalue` (host) were recomputed, in 0.0 s, on every run. Harmless,
+and FIXED: the probe is now `coalesce(bool_and(…), true)`. `--all --dry-run`
+on both clusters then reports every space `already migrated`.

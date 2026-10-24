@@ -55,8 +55,10 @@ async def migrate_space(conn, space_id: str, dry_run: bool, recompute: bool) -> 
     if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", t):
         return {"space": space_id, "status": "no such table"}
     has = await _has_column(conn, t, "object_count")
+    # coalesce: `bool_and` over no rows is NULL, and an empty space has nothing
+    # left to count; without it, it read as unfilled on every run (issues/304).
     filled = has and bool(await conn.fetchval(
-        f"SELECT bool_and(object_count IS NOT NULL) FROM {t}"))
+        f"SELECT coalesce(bool_and(object_count IS NOT NULL), true) FROM {t}"))
     if has and (filled or not recompute):
         return {"space": space_id, "status": "already migrated"}
     if dry_run:
