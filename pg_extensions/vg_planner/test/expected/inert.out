@@ -1,0 +1,67 @@
+-- The library is preloaded; a statement without advice is untouched.
+CREATE EXTENSION vg_planner;
+SELECT vg_planner_info();
+              vg_planner_info              
+-------------------------------------------
+ vg_planner 0.2.0 advice=1 hooks=installed
+(1 row)
+
+SHOW vg_planner.enabled;
+ vg_planner.enabled 
+--------------------
+ on
+(1 row)
+
+SHOW vg_planner.on_mismatch;
+ vg_planner.on_mismatch 
+------------------------
+ error
+(1 row)
+
+SELECT vg_planner_last_report() IS NULL AS no_report_yet;
+ no_report_yet 
+---------------
+ t
+(1 row)
+
+CREATE TABLE q (s int, p int, o int);
+INSERT INTO q SELECT g % 97, g % 7, g FROM generate_series(1, 5000) g;
+CREATE INDEX q_ps ON q (p, s);
+ANALYZE q;
+EXPLAIN (COSTS OFF)
+SELECT * FROM q a JOIN q b ON a.s = b.s WHERE a.p = 1 AND b.p = 2;
+                    QUERY PLAN                     
+---------------------------------------------------
+ Nested Loop
+   ->  Bitmap Heap Scan on q a
+         Recheck Cond: (p = 1)
+         ->  Bitmap Index Scan on q_ps
+               Index Cond: (p = 1)
+   ->  Memoize
+         Cache Key: a.s
+         Cache Mode: logical
+         ->  Index Scan using q_ps on q b
+               Index Cond: ((p = 2) AND (s = a.s))
+(10 rows)
+
+-- An ordinary comment is not advice.
+EXPLAIN (COSTS OFF)
+/* some comment */ SELECT * FROM q a JOIN q b ON a.s = b.s WHERE a.p = 1 AND b.p = 2;
+                    QUERY PLAN                     
+---------------------------------------------------
+ Nested Loop
+   ->  Bitmap Heap Scan on q a
+         Recheck Cond: (p = 1)
+         ->  Bitmap Index Scan on q_ps
+               Index Cond: (p = 1)
+   ->  Memoize
+         Cache Key: a.s
+         Cache Mode: logical
+         ->  Index Scan using q_ps on q b
+               Index Cond: ((p = 2) AND (s = a.s))
+(10 rows)
+
+SET vg_planner.on_mismatch = 'bogus';
+ERROR:  invalid value for parameter "vg_planner.on_mismatch": "bogus"
+HINT:  Available values: error, warning.
+DROP TABLE q;

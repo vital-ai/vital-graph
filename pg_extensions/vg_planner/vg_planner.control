@@ -1,0 +1,10 @@
+# vg_planner: apply the VitalGraph generator's planning advice
+comment = 'VitalGraph planner advice: join sizes, methods and order from the SQL generator'
+default_version = '0.2'
+# A bare name, resolved through dynamic_library_path (default '$libdir'), so the
+# same files work installed into the server's own directories AND mounted from
+# a CloudNativePG image volume (extension_control_path / dynamic_library_path,
+# deploy/eks-cnpg). '$libdir/vg_planner' would only ever look in pkglibdir.
+module_pathname = 'vg_planner'
+relocatable = true
+superuser = true

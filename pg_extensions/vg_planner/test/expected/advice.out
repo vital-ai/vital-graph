@@ -1,0 +1,621 @@
+-- Parsing, aliases, row estimates, methods, order, and the report.
+CREATE TABLE quad (s int, p int, o int);
+INSERT INTO quad SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+CREATE INDEX quad_ps ON quad (p, s);
+CREATE INDEX quad_po ON quad (p, o);
+ANALYZE quad;
+-- Malformed advice is an error, never skipped.
+/*vg:plan 2
+bgp b0 steps(a b)
+*/ SELECT 1;
+ERROR:  vg_planner: advice format 2 is not supported (this build reads 1)
+/*vg:plan 1
+bgp b0 steps(a)
+*/ SELECT 1;
+ERROR:  vg_planner: malformed advice: steps(...) needs at least two aliases
+DETAIL:  At: "
+"
+/*vg:plan 1
+bgp b0 rows(a:1)
+*/ SELECT 1;
+ERROR:  vg_planner: malformed advice: steps(...) must come first
+DETAIL:  At: "(a:1)
+"
+/*vg:plan 1
+bgp b0 steps(a b) rows(a:10)
+*/ SELECT 1;
+ERROR:  vg_planner: malformed advice: rows(...) cannot apply to the first step "a"
+DETAIL:  At: ":10)
+"
+/*vg:plan 1
+bgp b0 steps(a b) join(b:spiral)
+*/ SELECT 1;
+ERROR:  vg_planner: malformed advice: unknown join method (nl, nlmemo, hash, merge)
+DETAIL:  At: ")
+"
+/*vg:plan 1
+bgp b0 steps(a b) rows(c:5)
+*/ SELECT 1;
+ERROR:  vg_planner: malformed advice: rows(...) names "c", which is not in steps(...)
+DETAIL:  At: ":5)
+"
+/*vg:plan 1
+bgp b0 steps(a b) bogus
+*/ SELECT 1;
+ERROR:  vg_planner: malformed advice: unknown clause (steps, rows, join, order)
+DETAIL:  At: "
+"
+/*vg:plan 1
+bgp b0 steps(a b)
+bgp b1 steps(b c)
+*/ SELECT 1;
+ERROR:  vg_planner: malformed advice: alias "b" is in two bgps
+/*vg:plan 1 bgp b0 steps(a b) rows(b:1e999) */ SELECT 1;
+ERROR:  vg_planner: malformed advice: bad number
+DETAIL:  At: ") "
+/*vg:plan 1 bgp b0 steps(A b) */ SELECT 1;
+ERROR:  vg_planner: malformed advice: expected an alias in steps(...)
+DETAIL:  At: "A b) "
+-- An advised alias the statement does not have: a mismatch.
+/*vg:plan 1
+bgp b0 steps(a zz) rows(zz:5)
+*/ SELECT count(*) FROM quad a WHERE a.p = 1;
+ERROR:  vg_planner: advised alias not in the statement: b0.zz
+SET vg_planner.on_mismatch = warning;
+/*vg:plan 1
+bgp b0 steps(a zz) rows(zz:5)
+*/ SELECT count(*) FROM quad a WHERE a.p = 1;
+WARNING:  vg_planner: advised alias not in the statement: b0.zz
+WARNING:  vg_planner: advice not applied: b0.zz rows
+DETAIL:  bgp b0
+  zz: rows 5 NOT APPLIED
+ count 
+-------
+  1847
+(1 row)
+
+RESET vg_planner.on_mismatch;
+-- An advised alias naming two relations: always an error.
+/*vg:plan 1
+bgp b0 steps(a b)
+*/ SELECT count(*) FROM quad a JOIN quad b ON b.s = a.s
+   WHERE a.p = 1 AND b.p = 2 AND EXISTS (SELECT 1 FROM quad a WHERE a.p = 3);
+ERROR:  vg_planner: advised alias "a" names 2 relations in the statement
+HINT:  Advice requires aliases unique across the whole statement.
+-- rows: the prefix's estimate is the model's.
+EXPLAIN (COSTS ON)
+SELECT * FROM quad a JOIN quad b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Hash Join  (cost=245.38..495.02 rows=3422 width=24)
+   Hash Cond: (a.s = b.s)
+   ->  Bitmap Heap Scan on quad a  (cost=34.60..187.69 rows=1847 width=12)
+         Recheck Cond: (p = 1)
+         ->  Bitmap Index Scan on quad_po  (cost=0.00..34.14 rows=1847 width=0)
+               Index Cond: (p = 1)
+   ->  Hash  (cost=187.69..187.69 rows=1847 width=12)
+         ->  Bitmap Heap Scan on quad b  (cost=34.60..187.69 rows=1847 width=12)
+               Recheck Cond: (p = 2)
+               ->  Bitmap Index Scan on quad_po  (cost=0.00..34.14 rows=1847 width=0)
+                     Index Cond: (p = 2)
+(11 rows)
+
+EXPLAIN (COSTS ON)
+/*vg:plan 1
+bgp b0 steps(a b) rows(b:77777)
+*/ SELECT * FROM quad a JOIN quad b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Hash Join  (cost=245.38..495.02 rows=77777 width=24)
+   Hash Cond: (a.s = b.s)
+   ->  Bitmap Heap Scan on quad a  (cost=34.60..187.69 rows=1847 width=12)
+         Recheck Cond: (p = 1)
+         ->  Bitmap Index Scan on quad_po  (cost=0.00..34.14 rows=1847 width=0)
+               Index Cond: (p = 1)
+   ->  Hash  (cost=187.69..187.69 rows=1847 width=12)
+         ->  Bitmap Heap Scan on quad b  (cost=34.60..187.69 rows=1847 width=12)
+               Recheck Cond: (p = 2)
+               ->  Bitmap Index Scan on quad_po  (cost=0.00..34.14 rows=1847 width=0)
+                     Index Cond: (p = 2)
+(11 rows)
+
+SELECT vg_planner_last_report();
+          vg_planner_last_report           
+-------------------------------------------
+ bgp b0                                   +
+   b: rows 77777 applied (PostgreSQL 3422)
+(1 row)
+
+-- ...and what is joined around it is scaled by the same correction.
+EXPLAIN (COSTS ON)
+/*vg:plan 1
+bgp b0 steps(a b) rows(b:77777)
+*/ SELECT * FROM quad a JOIN quad b ON b.s = a.s JOIN quad t ON t.s = b.o AND t.p = 5
+   WHERE a.p = 1 AND b.p = 2;
+                                         QUERY PLAN                                         
+--------------------------------------------------------------------------------------------
+ Hash Join  (cost=456.15..878.84 rows=141738 width=36)
+   Hash Cond: (b.s = a.s)
+   ->  Hash Join  (cost=245.37..492.10 rows=3366 width=24)
+         Hash Cond: (t.s = b.o)
+         ->  Bitmap Heap Scan on quad t  (cost=34.59..187.67 rows=1846 width=12)
+               Recheck Cond: (p = 5)
+               ->  Bitmap Index Scan on quad_po  (cost=0.00..34.13 rows=1846 width=0)
+                     Index Cond: (p = 5)
+         ->  Hash  (cost=187.69..187.69 rows=1847 width=12)
+               ->  Bitmap Heap Scan on quad b  (cost=34.60..187.69 rows=1847 width=12)
+                     Recheck Cond: (p = 2)
+                     ->  Bitmap Index Scan on quad_po  (cost=0.00..34.14 rows=1847 width=0)
+                           Index Cond: (p = 2)
+   ->  Hash  (cost=187.69..187.69 rows=1847 width=12)
+         ->  Bitmap Heap Scan on quad a  (cost=34.60..187.69 rows=1847 width=12)
+               Recheck Cond: (p = 1)
+               ->  Bitmap Index Scan on quad_po  (cost=0.00..34.14 rows=1847 width=0)
+                     Index Cond: (p = 1)
+(18 rows)
+
+-- join: the method of the join that adds a step.
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+bgp b0 steps(a b) join(b:hash)
+*/ SELECT * FROM quad a JOIN quad b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
+                   QUERY PLAN                   
+------------------------------------------------
+ Hash Join
+   Hash Cond: (a.s = b.s)
+   ->  Bitmap Heap Scan on quad a
+         Recheck Cond: (p = 1)
+         ->  Bitmap Index Scan on quad_po
+               Index Cond: (p = 1)
+   ->  Hash
+         ->  Bitmap Heap Scan on quad b
+               Recheck Cond: (p = 2)
+               ->  Bitmap Index Scan on quad_po
+                     Index Cond: (p = 2)
+(11 rows)
+
+SELECT vg_planner_last_report();
+ vg_planner_last_report 
+------------------------
+ bgp b0                +
+   b: join hash applied
+(1 row)
+
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+bgp b0 steps(b a) join(a:nl)
+*/ SELECT * FROM quad a JOIN quad b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
+                 QUERY PLAN                  
+---------------------------------------------
+ Nested Loop
+   ->  Bitmap Heap Scan on quad b
+         Recheck Cond: (p = 2)
+         ->  Bitmap Index Scan on quad_po
+               Index Cond: (p = 2)
+   ->  Index Scan using quad_ps on quad a
+         Index Cond: ((p = 1) AND (s = b.s))
+(7 rows)
+
+SELECT vg_planner_last_report();
+ vg_planner_last_report 
+------------------------
+ bgp b0                +
+   a: join nl applied
+(1 row)
+
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+bgp b0 steps(a b) join(b:merge)
+*/ SELECT * FROM quad a JOIN quad b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
+                   QUERY PLAN                   
+------------------------------------------------
+ Merge Join
+   Merge Cond: (a.s = b.s)
+   ->  Sort
+         Sort Key: a.s
+         ->  Bitmap Heap Scan on quad a
+               Recheck Cond: (p = 1)
+               ->  Bitmap Index Scan on quad_po
+                     Index Cond: (p = 1)
+   ->  Sort
+         Sort Key: b.s
+         ->  Bitmap Heap Scan on quad b
+               Recheck Cond: (p = 2)
+               ->  Bitmap Index Scan on quad_po
+                     Index Cond: (p = 2)
+(14 rows)
+
+-- order: the steps join in the advised order; other relations may interleave.
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+bgp b0 steps(c b a) order
+*/ SELECT * FROM (VALUES (5), (6)) v(k)
+   JOIN quad a ON a.o = v.k JOIN quad b ON b.s = a.s JOIN quad c ON c.s = b.s
+   WHERE a.p = 1 AND b.p = 2 AND c.p = 3;
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Hash Join
+   Hash Cond: (b.s = a.s)
+   ->  Hash Join
+         Hash Cond: (c.s = b.s)
+         ->  Bitmap Heap Scan on quad c
+               Recheck Cond: (p = 3)
+               ->  Bitmap Index Scan on quad_po
+                     Index Cond: (p = 3)
+         ->  Hash
+               ->  Bitmap Heap Scan on quad b
+                     Recheck Cond: (p = 2)
+                     ->  Bitmap Index Scan on quad_po
+                           Index Cond: (p = 2)
+   ->  Hash
+         ->  Nested Loop
+               ->  Values Scan on "*VALUES*"
+               ->  Bitmap Heap Scan on quad a
+                     Recheck Cond: ((p = 1) AND (o = "*VALUES*".column1))
+                     ->  Bitmap Index Scan on quad_po
+                           Index Cond: ((p = 1) AND (o = "*VALUES*".column1))
+(20 rows)
+
+SELECT vg_planner_last_report();
+ vg_planner_last_report 
+------------------------
+ bgp b0                +
+   b: order applied    +
+   a: order applied
+(1 row)
+
+-- Advice inside an EXISTS SubPlan is applied there.
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+bgp b0 steps(x y) join(y:hash)
+*/ SELECT count(*) FROM quad a WHERE a.p = 1 AND EXISTS (
+     SELECT 1 FROM quad x JOIN quad y ON y.s = x.s
+     WHERE x.o = a.o AND x.p = 4 AND y.p = 5 OFFSET 0);
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Aggregate
+   ->  Index Only Scan using quad_po on quad a
+         Index Cond: (p = 1)
+         Filter: EXISTS(SubPlan 1)
+         SubPlan 1
+           ->  Hash Join
+                 Hash Cond: (x.s = y.s)
+                 ->  Bitmap Heap Scan on quad x
+                       Recheck Cond: ((p = 4) AND (o = a.o))
+                       ->  Bitmap Index Scan on quad_po
+                             Index Cond: ((p = 4) AND (o = a.o))
+                 ->  Hash
+                       ->  Bitmap Heap Scan on quad y
+                             Recheck Cond: (p = 5)
+                             ->  Bitmap Index Scan on quad_po
+                                   Index Cond: (p = 5)
+(16 rows)
+
+SELECT vg_planner_last_report();
+ vg_planner_last_report 
+------------------------
+ bgp b0                +
+   y: join hash applied
+(1 row)
+
+-- Advice that cannot be followed is reported, not assumed.
+SET enable_hashjoin = off;
+/*vg:plan 1
+bgp b0 steps(a b) join(b:hash)
+*/ SELECT count(*) FROM quad a JOIN quad b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
+ERROR:  vg_planner: advice not applied: b0.b join
+DETAIL:  bgp b0
+  b: join hash NOT APPLIED (plan: nl)
+RESET enable_hashjoin;
+-- The kill switch.
+SET vg_planner.enabled = off;
+/*vg:plan 1
+bgp b0 steps(a zz)
+*/ SELECT count(*) FROM quad a WHERE a.p = 1;
+ count 
+-------
+  1847
+(1 row)
+
+RESET vg_planner.enabled;
+-- Results are the same with and without advice.
+SELECT count(*), sum(a.o + b.o) FROM quad a JOIN quad b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
+ count |   sum   
+-------+---------
+  3400 | 3442365
+(1 row)
+
+/*vg:plan 1
+bgp b0 steps(b a) rows(a:5) join(a:hash)
+*/ SELECT count(*), sum(a.o + b.o) FROM quad a JOIN quad b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
+ count |   sum   
+-------+---------
+  3400 | 3442365
+(1 row)
+
+DROP TABLE quad;
+-- A correction is applied once: a join built on the corrected prefix keeps
+-- PostgreSQL's own step on top of it, never the ratio a second time.
+CREATE TABLE q3 (s int, p int, o int);
+INSERT INTO q3 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+CREATE INDEX q3_ps ON q3 (p, s);
+ANALYZE q3;
+-- PostgreSQL alone: the 3-way join estimate.
+EXPLAIN (COSTS ON)
+SELECT * FROM q3 a JOIN q3 b ON b.s = a.s JOIN q3 c ON c.s = b.s
+ WHERE a.p = 1 AND b.p = 2 AND c.p = 3;
+                                        QUERY PLAN                                        
+------------------------------------------------------------------------------------------
+ Hash Join  (cost=456.15..884.51 rows=6337 width=36)
+   Hash Cond: (a.s = b.s)
+   ->  Hash Join  (cost=245.37..494.95 rows=3420 width=24)
+         Hash Cond: (c.s = a.s)
+         ->  Bitmap Heap Scan on q3 c  (cost=34.59..187.67 rows=1846 width=12)
+               Recheck Cond: (p = 3)
+               ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.13 rows=1846 width=0)
+                     Index Cond: (p = 3)
+         ->  Hash  (cost=187.69..187.69 rows=1847 width=12)
+               ->  Bitmap Heap Scan on q3 a  (cost=34.60..187.69 rows=1847 width=12)
+                     Recheck Cond: (p = 1)
+                     ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.14 rows=1847 width=0)
+                           Index Cond: (p = 1)
+   ->  Hash  (cost=187.69..187.69 rows=1847 width=12)
+         ->  Bitmap Heap Scan on q3 b  (cost=34.60..187.69 rows=1847 width=12)
+               Recheck Cond: (p = 2)
+               ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.14 rows=1847 width=0)
+                     Index Cond: (p = 2)
+(18 rows)
+
+-- Only the 2-step prefix advised: the 3-way estimate moves by exactly the
+-- prefix's ratio (model / PostgreSQL for {a,b}), once.
+EXPLAIN (COSTS ON)
+/*vg:plan 1
+bgp b0 steps(a b) rows(b:340)
+*/ SELECT * FROM q3 a JOIN q3 b ON b.s = a.s JOIN q3 c ON c.s = b.s
+ WHERE a.p = 1 AND b.p = 2 AND c.p = 3;
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ Hash Join  (cost=533.87..709.39 rows=630 width=36)
+   Hash Cond: (c.s = b.s)
+   ->  Bitmap Heap Scan on q3 c  (cost=34.59..187.67 rows=1846 width=12)
+         Recheck Cond: (p = 3)
+         ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.13 rows=1846 width=0)
+               Index Cond: (p = 3)
+   ->  Hash  (cost=495.02..495.02 rows=340 width=24)
+         ->  Hash Join  (cost=245.38..495.02 rows=340 width=24)
+               Hash Cond: (a.s = b.s)
+               ->  Bitmap Heap Scan on q3 a  (cost=34.60..187.69 rows=1847 width=12)
+                     Recheck Cond: (p = 1)
+                     ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.14 rows=1847 width=0)
+                           Index Cond: (p = 1)
+               ->  Hash  (cost=187.69..187.69 rows=1847 width=12)
+                     ->  Bitmap Heap Scan on q3 b  (cost=34.60..187.69 rows=1847 width=12)
+                           Recheck Cond: (p = 2)
+                           ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.14 rows=1847 width=0)
+                                 Index Cond: (p = 2)
+(18 rows)
+
+SELECT vg_planner_last_report();
+         vg_planner_last_report          
+-----------------------------------------
+ bgp b0                                 +
+   b: rows 340 applied (PostgreSQL 3422)
+(1 row)
+
+-- Every prefix advised: the full join comes out at the model's number.
+EXPLAIN (COSTS ON)
+/*vg:plan 1
+bgp b0 steps(a b c) rows(b:340 c:12)
+*/ SELECT * FROM q3 a JOIN q3 b ON b.s = a.s JOIN q3 c ON c.s = b.s
+ WHERE a.p = 1 AND b.p = 2 AND c.p = 3;
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ Hash Join  (cost=533.87..709.39 rows=12 width=36)
+   Hash Cond: (c.s = b.s)
+   ->  Bitmap Heap Scan on q3 c  (cost=34.59..187.67 rows=1846 width=12)
+         Recheck Cond: (p = 3)
+         ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.13 rows=1846 width=0)
+               Index Cond: (p = 3)
+   ->  Hash  (cost=495.02..495.02 rows=340 width=24)
+         ->  Hash Join  (cost=245.38..495.02 rows=340 width=24)
+               Hash Cond: (a.s = b.s)
+               ->  Bitmap Heap Scan on q3 a  (cost=34.60..187.69 rows=1847 width=12)
+                     Recheck Cond: (p = 1)
+                     ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.14 rows=1847 width=0)
+                           Index Cond: (p = 1)
+               ->  Hash  (cost=187.69..187.69 rows=1847 width=12)
+                     ->  Bitmap Heap Scan on q3 b  (cost=34.60..187.69 rows=1847 width=12)
+                           Recheck Cond: (p = 2)
+                           ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.14 rows=1847 width=0)
+                                 Index Cond: (p = 2)
+(18 rows)
+
+-- size: an exact join relation the bgp lines do not cover gets the stated rows,
+-- and what is built on it is sized from them (no ratio applied twice).
+EXPLAIN (COSTS ON)
+/*vg:plan 1
+bgp b0 steps(a b) rows(b:340)
+size s1 25 a b c
+*/ SELECT * FROM q3 a JOIN q3 b ON b.s = a.s JOIN q3 c ON c.s = b.s
+ WHERE a.p = 1 AND b.p = 2 AND c.p = 3;
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ Hash Join  (cost=533.87..709.39 rows=25 width=36)
+   Hash Cond: (c.s = b.s)
+   ->  Bitmap Heap Scan on q3 c  (cost=34.59..187.67 rows=1846 width=12)
+         Recheck Cond: (p = 3)
+         ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.13 rows=1846 width=0)
+               Index Cond: (p = 3)
+   ->  Hash  (cost=495.02..495.02 rows=340 width=24)
+         ->  Hash Join  (cost=245.38..495.02 rows=340 width=24)
+               Hash Cond: (a.s = b.s)
+               ->  Bitmap Heap Scan on q3 a  (cost=34.60..187.69 rows=1847 width=12)
+                     Recheck Cond: (p = 1)
+                     ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.14 rows=1847 width=0)
+                           Index Cond: (p = 1)
+               ->  Hash  (cost=187.69..187.69 rows=1847 width=12)
+                     ->  Bitmap Heap Scan on q3 b  (cost=34.60..187.69 rows=1847 width=12)
+                           Recheck Cond: (p = 2)
+                           ->  Bitmap Index Scan on q3_ps  (cost=0.00..34.14 rows=1847 width=0)
+                                 Index Cond: (p = 2)
+(18 rows)
+
+SELECT vg_planner_last_report();
+         vg_planner_last_report          
+-----------------------------------------
+ bgp b0                                 +
+   b: rows 340 applied (PostgreSQL 3422)+
+ size s1: 25 applied (PostgreSQL 630)
+(1 row)
+
+/*vg:plan 1
+size s1 25 a zz
+*/ SELECT count(*) FROM q3 a WHERE a.p = 1;
+ERROR:  vg_planner: advised alias not in the statement: s1.zz
+DROP TABLE q3;
+-- A size over an OUTER join: the join relation's relids include the outer
+-- join's own index (PG 16+); the size still matches on its base relations.
+CREATE TABLE q4 (s int, p int, o int);
+INSERT INTO q4 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+ANALYZE q4;
+EXPLAIN (COSTS ON)
+/*vg:plan 1
+size s1 77 a b
+*/ SELECT * FROM q4 a LEFT JOIN q4 b ON b.s = a.s AND b.p = 2 WHERE a.p = 1;
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Hash Left Join  (cost=453.09..979.64 rows=77 width=24)
+   Hash Cond: (a.s = b.s)
+   ->  Seq Scan on q4 a  (cost=0.00..430.00 rows=1847 width=12)
+         Filter: (p = 1)
+   ->  Hash  (cost=430.00..430.00 rows=1847 width=12)
+         ->  Seq Scan on q4 b  (cost=0.00..430.00 rows=1847 width=12)
+               Filter: (p = 2)
+(7 rows)
+
+SELECT vg_planner_last_report();
+        vg_planner_last_report         
+---------------------------------------
+ size s1: 77 applied (PostgreSQL 3422)
+(1 row)
+
+DROP TABLE q4;
+-- Corrections travel between join problems: under join_collapse_limit = 1 a
+-- written JOIN tree is planned as nested problems, and a corrected join
+-- relation from one is an input to the next. Its estimate must not be
+-- corrected a second time there.
+CREATE TABLE q5 (s int, p int, o int);
+INSERT INTO q5 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+ANALYZE q5;
+SET join_collapse_limit = 1;
+EXPLAIN (COSTS ON)
+/*vg:plan 1
+bgp b0 steps(a b) rows(b:340)
+*/ SELECT * FROM (q5 a JOIN q5 b ON b.s = a.s AND b.p = 2) JOIN q5 c ON c.s = b.s AND c.p = 3 WHERE a.p = 1;
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Hash Join  (cost=906.16..1450.49 rows=630 width=36)
+   Hash Cond: (b.s = c.s)
+   ->  Hash Join  (cost=453.09..979.64 rows=340 width=24)
+         Hash Cond: (a.s = b.s)
+         ->  Seq Scan on q5 a  (cost=0.00..430.00 rows=1847 width=12)
+               Filter: (p = 1)
+         ->  Hash  (cost=430.00..430.00 rows=1847 width=12)
+               ->  Seq Scan on q5 b  (cost=0.00..430.00 rows=1847 width=12)
+                     Filter: (p = 2)
+   ->  Hash  (cost=430.00..430.00 rows=1846 width=12)
+         ->  Seq Scan on q5 c  (cost=0.00..430.00 rows=1846 width=12)
+               Filter: (p = 3)
+(12 rows)
+
+RESET join_collapse_limit;
+DROP TABLE q5;
+-- A one-alias size: the base relation's scan estimate, which the joins above
+-- are built on.
+CREATE TABLE q6 (s int, p int, o int);
+INSERT INTO q6 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+CREATE INDEX q6_po ON q6 (p, o);
+ANALYZE q6;
+EXPLAIN (COSTS ON) SELECT * FROM q6 a WHERE a.p = 1 AND a.o = 5;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Bitmap Heap Scan on q6 a  (cost=4.31..11.59 rows=2 width=12)
+   Recheck Cond: ((p = 1) AND (o = 5))
+   ->  Bitmap Index Scan on q6_po  (cost=0.00..4.31 rows=2 width=0)
+         Index Cond: ((p = 1) AND (o = 5))
+(4 rows)
+
+EXPLAIN (COSTS ON)
+/*vg:plan 1
+size s1 1159 a
+*/ SELECT * FROM q6 a WHERE a.p = 1 AND a.o = 5;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Bitmap Heap Scan on q6 a  (cost=4.31..4226.42 rows=1159 width=12)
+   Recheck Cond: ((p = 1) AND (o = 5))
+   ->  Bitmap Index Scan on q6_po  (cost=0.00..4.31 rows=2 width=0)
+         Index Cond: ((p = 1) AND (o = 5))
+(4 rows)
+
+SELECT vg_planner_last_report();
+        vg_planner_last_report        
+--------------------------------------
+ size s1: 1159 applied (PostgreSQL 2)
+(1 row)
+
+DROP TABLE q6;
+-- method: the planner's choice of join for an exact join relation.
+CREATE TABLE q7 (s int, p int, o int);
+INSERT INTO q7 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+CREATE INDEX q7_ps ON q7 (p, s);
+ANALYZE q7;
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+method m1 nl a b
+*/ SELECT * FROM q7 a JOIN q7 b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
+                    QUERY PLAN                     
+---------------------------------------------------
+ Nested Loop
+   ->  Bitmap Heap Scan on q7 a
+         Recheck Cond: (p = 1)
+         ->  Bitmap Index Scan on q7_ps
+               Index Cond: (p = 1)
+   ->  Memoize
+         Cache Key: a.s
+         Cache Mode: logical
+         ->  Index Scan using q7_ps on q7 b
+               Index Cond: ((p = 2) AND (s = a.s))
+(10 rows)
+
+SELECT vg_planner_last_report();
+ vg_planner_last_report 
+------------------------
+ method m1: nl applied
+(1 row)
+
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+method m1 hash a b
+*/ SELECT * FROM q7 a LEFT JOIN q7 b ON b.s = a.s AND b.p = 2 WHERE a.p = 1;
+                  QUERY PLAN                  
+----------------------------------------------
+ Hash Left Join
+   Hash Cond: (a.s = b.s)
+   ->  Bitmap Heap Scan on q7 a
+         Recheck Cond: (p = 1)
+         ->  Bitmap Index Scan on q7_ps
+               Index Cond: (p = 1)
+   ->  Hash
+         ->  Bitmap Heap Scan on q7 b
+               Recheck Cond: (p = 2)
+               ->  Bitmap Index Scan on q7_ps
+                     Index Cond: (p = 2)
+(11 rows)
+
+SELECT vg_planner_last_report();
+ vg_planner_last_report  
+-------------------------
+ method m1: hash applied
+(1 row)
+
+DROP TABLE q7;

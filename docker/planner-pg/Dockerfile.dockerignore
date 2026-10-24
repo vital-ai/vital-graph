@@ -1,0 +1,10 @@
+# Build context is the repo root; send only what the planner image uses.
+*
+!pg_extensions/vg_planner/**
+!docker/planner-pg/init-extensions.sql
+pg_extensions/vg_planner/**/*.o
+pg_extensions/vg_planner/**/*.so
+pg_extensions/vg_planner/**/*.bc
+pg_extensions/vg_planner/test/results
+pg_extensions/vg_planner/test/regression.*
+!pg_extensions/vg_planner/run_regress_in_container.sh
