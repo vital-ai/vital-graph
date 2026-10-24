@@ -339,7 +339,14 @@ services:
     # runs as uid 1001 and serves from /bitnami/minio/data, so it is not drop-in.
     image: chainguard/minio:latest
     container_name: vitalgraph-test-minio
-    command: server /data --console-address ":9001"
+    # /data/store, not /data: the image ships an empty /data/.minio.sys in a
+    # layer, and overlayfs refuses to rename a lower-layer directory, so
+    # MinIO's startup cleanup of .minio.sys/tmp logged "Rename across devices
+    # not allowed ... drive may be faulty" on every start. A subdirectory the
+    # image lacks is created in the writable layer and renames fine; objects
+    # still survive a restart and go with a recreate. Not tmpfs: that would
+    # drop them on every stop — issues/301.
+    command: server /data/store --console-address ":9001"
     environment:
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadmin
