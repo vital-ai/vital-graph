@@ -65,6 +65,6 @@ the gen-2 threshold each minute, or one that calls `gc.collect()` itself.
 
 The AWS test environment's VitalGraph task writes into `/ecs/vitalgraph-prod`
 under stream prefix `ecs-test/`. It contributed 1,909 of the 8,373 warnings in
-the window above, including all the `cardiff_kg_test` lines. Any production log
+the window above, including all the test KG space's lines. Any production log
 analysis must filter on `--log-stream-name-prefix ecs/vitalgraph/`. A separate
 log group for the test task definition belongs to the deploy repo.

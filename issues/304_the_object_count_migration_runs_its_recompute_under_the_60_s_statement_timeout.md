@@ -8,7 +8,7 @@
 ## Found
 
 `scripts/migrate_pred_stats_object_count.py --all` on production stopped at the
-first space, cardiff_kg (76.4M quads):
+first space, the main KG space (76.4M quads):
 
 ```
 File ".../sync_stats_tables.py", line 308, in recompute_stats_tables
@@ -29,11 +29,11 @@ The script does two things per space:
 Step 2 is not a recompute of `object_count`. It is the full statistics recompute
 (`rdf_stats`, `rdf_pred_stats`, value stats), aggregating over the whole quad
 table. The script never raises `statement_timeout`, and it passes no `timeout`,
-so the recompute runs at the parameter group's 60 s. On cardiff_kg and
-cardiff_kg_actions (53.8M) that is not enough. The cancel aborts
+so the recompute runs at the parameter group's 60 s. On the main KG space and
+the actions space (53.8M) that is not enough. The cancel aborts
 `recompute_stats_tables`'s transaction, the next statement in it raises
 `InFailedSQLTransactionError`, and the exception leaves `main()`. `--all` goes in
-`space_id` order, so cardiff_kg was first and the other 10 spaces were never
+`space_id` order, so the main KG space was first and the other 10 spaces were never
 reached.
 
 The script's docstring cites "+8.1 s on a 74.2M-quad space, measured on the vg
@@ -53,7 +53,7 @@ anyway, since the defect here is a missing `SET` and not a misplaced one.
 ## State left on production
 
 - Re-run with `--no-recompute`: the column exists on all 11 spaces. It is filled
-  on the small ones and NULL on cardiff_kg, cardiff_kg_actions, lead_prod and
+  on the small ones and NULL on the main KG space, the actions space, lead_prod and
   lead_data.
 - NULL is safe. `generator.py:408` keeps only non-NULL counts in
   `pred_object_counts`, and `bgp_cardinality.py` declines ("a leaf has no
@@ -70,7 +70,7 @@ normal on these spaces. Check before re-running anything: if
 is already 0, maintenance has done it.
 
 The runtime line seen at the same time,
-`index sync cardiff_kg: 19 subject(s) failed … statement timeout, retrying`, is
+`index sync <main KG space>: 19 subject(s) failed … statement timeout, retrying`, is
 a different caller. The index-sync worker hit 60 s on a batch and retried with
 backoff, so nothing was lost there. It is not this issue.
 
@@ -93,7 +93,7 @@ case where a caller holds a transaction). Also correct the docstring's 8.1 s
 figure so it reads as the column's cost, not the recompute's.
 
 Then, if maintenance hasn't already filled the column, run
-`--space cardiff_kg` and `--space cardiff_kg_actions` (and the two lead spaces).
+`--space <main KG space>` and `--space <actions space>` (and the two lead spaces).
 The script skips any space whose column is already fully non-NULL.
 
 ## Reproduced and verified (vg test stack, 2026-10-24)
