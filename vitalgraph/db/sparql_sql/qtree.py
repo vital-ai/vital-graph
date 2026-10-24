@@ -165,17 +165,22 @@ class _Stats:
 DERIVED_KEYS = {"edge": ("edge_uuid", "source_node_uuid"),
                 "frame_slot": ("slot_uuid", "frame_uuid")}
 
-#: PostgreSQL's statistics for derived tables and capped counts of their
-#: constant-filtered leaves, loaded by `qcard.load_derived` before analysis:
-#:   DERIVED_STATS[table] = {"rows": reltuples, "ndv": {column: distinct}}
-#:   DERIVED_COUNTS[(table, filters)] = rows (capped; >= the cap reads as the cap)
+#: PostgreSQL's statistics for the derived tables, loaded by `qcard.load_derived`
+#: before analysis (one catalog read per table, cached until the space's stats are
+#: invalidated):
+#:   DERIVED_STATS[table] = {"rows": reltuples, "ndv": {column: distinct},
+#:                           "mcv": {column: {value uuid: frequency}}}
 DERIVED_STATS: Dict[str, dict] = {}
-DERIVED_COUNTS: Dict[Tuple[str, Tuple[str, ...]], float] = {}
 
-
-def derived_filters(alias: str, filters: List[str]) -> Tuple[str, ...]:
-    """A derived leaf's filters with the alias stripped: its count's cache key."""
-    return tuple(sorted(f.replace(f"{alias}.", "") for f in filters))
+#: A derived column that IS a quad pair's object, so a constant on it is priced
+#: from that pair's stored count (`rdf_stats`), exactly: the derived tables' own
+#: definitions (sync_frame_slot_table, sync_edge_table), not any query's schema.
+#: Measured on wordnet: frame_slot rows per role 285,348 = the (hasKGSlotType,
+#: role) pair, where a capped count saturated at 50,000.
+DERIVED_PAIR_COLUMNS = {
+    ("frame_slot", "role_uuid"): "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType",
+    ("edge", "edge_type_uuid"): "http://vital.ai/ontology/vital-core#vitaltype",
+}
 
 
 def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
@@ -224,6 +229,26 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
     return out
 
 
+def _term_uuid(text: str) -> str:
+    """A URI term's uuid, as the loaders and sync_frame_slot_table derive it."""
+    import uuid as _uuid
+    return str(_uuid.uuid5(_uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), f"{text}\x00U"))
+
+
+def _column_sel(st: dict, col: str, val: str) -> float:
+    """Fraction of a derived table's rows with `col = val`, from PostgreSQL's
+    statistics: the most-common-value frequency, else the rest spread evenly
+    over the other distinct values."""
+    mcv = (st.get("mcv") or {}).get(col) or {}
+    if val in mcv:
+        return mcv[val]
+    nd = (st.get("ndv") or {}).get(col)
+    if not nd:
+        return 1.0
+    rest = max(0.0, 1.0 - sum(mcv.values()))
+    return rest / max(nd - len(mcv), 1.0) if mcv else 1.0 / nd
+
+
 def _derived_leaf(t, cols: List[Tuple[str, str]], filters: List[str], ctx) -> Leaf:
     """An edge or frame_slot row as a leaf: keyed by its identifying column,
     every other variable column an object, priced from PostgreSQL's statistics
@@ -234,15 +259,31 @@ def _derived_leaf(t, cols: List[Tuple[str, str]], filters: List[str], ctx) -> Le
     st = DERIVED_STATS.get(t.table_name) or {}
     rows = st.get("rows")
     ndv = {c: float(n) for c, n in (st.get("ndv") or {}).items()}
-    # constant filters beyond the graph: role, frame type, edge type ...
-    const = [f for f in filters if not re.match(rf"\s*{re.escape(a)}\.context_uuid\s*=", f)
-             and re.match(rf"\s*{re.escape(a)}\.\w+\s*=\s*\S+\s*$", f)]
     scan = Est(rows, "derived" if rows is not None else "unpriced")
-    if const:
-        from .generator import substitute_constants
-        n = DERIVED_COUNTS.get((t.table_name, derived_filters(a, [substitute_constants(f, ctx.aliases) for f in filters])))
-        if n is not None:
-            scan = Est(float(n), "derived_count")
+    # constant columns beyond the graph (role, frame type, edge type): priced from
+    # the stored pair counts where the column is a quad pair's object, else from
+    # PostgreSQL's per-column statistics on the table
+    from .generator import substitute_constants
+    consts = {}
+    for f in filters:
+        m = re.match(rf"\s*{re.escape(a)}\.(\w+)\s*=\s*'([0-9a-f-]{{36}})'::uuid\s*$",
+                     substitute_constants(f, ctx.aliases))
+        if m and m.group(1) != "context_uuid":
+            consts[m.group(1)] = m.group(2)
+    if consts and rows:
+        a_ = ctx.aliases
+        pairs = dict(getattr(a_, "quad_stats", None) or {})
+        pairs.update(getattr(a_, "extra_quad_stats", None) or {})
+        stored, sel = None, 1.0
+        for col, val in consts.items():
+            pred = DERIVED_PAIR_COLUMNS.get((t.kind, col))
+            n = pairs.get((_term_uuid(pred), val)) if pred else None
+            if n is not None:
+                stored = n if stored is None else min(stored, n)
+            else:
+                sel *= _column_sel(st, col, val)
+        est = (float(stored) if stored is not None else rows) * sel
+        scan = Est(est, "derived_count")
     fan = {c: (rows / max(ndv[c], 1.0)) for c in ndv} if rows else {}
     return Leaf(alias=a, kind=t.kind, pred=None,
                 s_var=colvar.get(key) if key else None, o_var=None,

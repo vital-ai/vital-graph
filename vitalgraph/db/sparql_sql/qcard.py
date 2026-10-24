@@ -53,11 +53,10 @@ _cache: Dict[Tuple[str, str], List[float]] = {}
 
 
 def invalidate(space_id: Optional[str] = None) -> None:
-    from .qtree import DERIVED_COUNTS, DERIVED_STATS
+    from .qtree import DERIVED_STATS
     if space_id is None:
         _cache.clear()
         DERIVED_STATS.clear()
-        DERIVED_COUNTS.clear()
         return
     for k in [k for k in _cache if k[0] == space_id]:
         _cache.pop(k, None)
@@ -65,98 +64,54 @@ def invalidate(space_id: Optional[str] = None) -> None:
     pre = f"{space_prefix(space_id)}_"
     for k in [k for k in DERIVED_STATS if k.startswith(pre)]:
         DERIVED_STATS.pop(k, None)
-    for k in [k for k in DERIVED_COUNTS if k[0].startswith(pre)]:
-        DERIVED_COUNTS.pop(k, None)
 
 
 # ---------------------------------------------------------------------------
 # Derived tables (edge, frame_slot): priced BEFORE analysis
 # ---------------------------------------------------------------------------
 
-#: Rows a derived leaf's count reads at most. Counts run through the tables'
-#: covering indexes (frame_slot (context, role, frame)), so a large cap is cheap;
-#: at 50,000 a wordnet role (285,348 rows) saturated, read as exact, and the
-#: planner chose 285k index probes over a hash join (2.4x slower).
-DERIVED_COUNT_CAP = 2_000_000
-
-
-def _derived_needs(plan, aliases, out_tables: set, out_counts: dict) -> None:
-    """Walk a PlanV2 (EXISTS bodies included, each with its own aliases) for
-    derived-table leaves: their tables, and the filters of those with constants."""
-    import re as _re
-    from .generator import substitute_constants
+def _derived_tables(plan, out: set) -> None:
+    """The derived tables (edge, frame_slot) a PlanV2 reads, EXISTS bodies included."""
     from .ir import KIND_BGP
-    from .qtree import DERIVED_KINDS, derived_filters
+    from .qtree import DERIVED_KINDS
     if plan.kind == KIND_BGP:
-        own = {}
-        for owner, sql in plan.tagged_constraints or []:
-            if set(_re.findall(r"\b([a-z][a-z0-9_]*[0-9])\.", sql)) <= {owner}:
-                own.setdefault(owner, []).append(sql)
-        for t in plan.tables:
-            if t.kind not in DERIVED_KINDS:
-                continue
-            out_tables.add(t.table_name)
-            fl = [substitute_constants(f, aliases) for f in own.get(t.alias, [])]
-            if any(not _re.match(rf"\s*{_re.escape(t.alias)}\.context_uuid\s*=", f) for f in fl) \
-                    and "_const" not in " ".join(fl):
-                out_counts[(t.table_name, derived_filters(t.alias, fl))] = (t.alias, fl)
+        out.update(t.table_name for t in plan.tables if t.kind in DERIVED_KINDS)
     for c in plan.children or []:
-        _derived_needs(c, aliases, out_tables, out_counts)
+        _derived_tables(c, out)
     for e in getattr(plan, "filter_exprs", None) or []:
         if getattr(e, "prepared_plan", None) is not None:
-            _derived_needs(e.prepared_plan, e.prepared_aliases, out_tables, out_counts)
+            _derived_tables(e.prepared_plan, out)
 
 
 async def load_derived(plan, ctx, conn) -> Dict[str, int]:
-    """PostgreSQL's statistics (rows, distinct values per column) for the derived
-    tables the plan reads, and a capped count for each derived leaf with
-    constant filters (a frame_slot row's role and frame type). Into
-    qtree.DERIVED_STATS / DERIVED_COUNTS, cached per table until the space's
-    statistics are invalidated. At most two round trips, none when cached."""
-    from .qtree import DERIVED_COUNTS, DERIVED_STATS
-    tables, counts = set(), {}
-    _derived_needs(plan, ctx.aliases, tables, counts)
+    """PostgreSQL's statistics for the derived tables the plan reads: rows,
+    distinct values and most-common values per column, into qtree.DERIVED_STATS.
+    One catalog read for the tables not yet cached; none when cached. A derived
+    leaf's constants are then priced from these and the stored pair counts
+    (qtree._derived_leaf), with no count query."""
+    from .qtree import DERIVED_STATS
+    tables: set = set()
+    _derived_tables(plan, tables)
     new_t = sorted(t for t in tables if t not in DERIVED_STATS)
-    new_c = {k: v for k, v in counts.items() if k not in DERIVED_COUNTS}
     if new_t:
         rows = await conn.fetch(
             "SELECT c.relname, CASE WHEN c.reltuples >= 0 THEN c.reltuples ELSE "
             "  (SELECT coalesce(sum(greatest(k.reltuples, 0)), 0) FROM pg_inherits i "
             "   JOIN pg_class k ON k.oid = i.inhrelid WHERE i.inhparent = c.oid) END AS rows, "
-            "  s.attname, s.n_distinct "
+            "  s.attname, s.n_distinct, s.most_common_vals::text AS mcv, s.most_common_freqs AS mcf "
             "FROM pg_class c LEFT JOIN pg_stats s ON s.tablename = c.relname AND s.schemaname = 'public' "
             "WHERE c.relname = ANY($1::text[]) AND c.relnamespace = 'public'::regnamespace", new_t)
         for r in rows:
-            d = DERIVED_STATS.setdefault(r["relname"], {"rows": float(r["rows"]), "ndv": {}})
-            if r["attname"] is not None and r["n_distinct"] is not None:
+            d = DERIVED_STATS.setdefault(r["relname"], {"rows": float(r["rows"]), "ndv": {}, "mcv": {}})
+            if r["attname"] is None:
+                continue
+            if r["n_distinct"] is not None:
                 nd = float(r["n_distinct"])
                 d["ndv"][r["attname"]] = (-nd * d["rows"]) if nd < 0 else nd
-    if new_c:
-        items = list(new_c.items())
-        sql = " UNION ALL ".join(
-            f"(SELECT {i} AS q, (SELECT count(*) FROM (SELECT 1 FROM {tbl} AS {alias} WHERE "
-            f"{' AND '.join(fl)} LIMIT {DERIVED_COUNT_CAP}) z) AS n)"
-            for i, ((tbl, _k), (alias, fl)) in enumerate(items))
-        got = {r["q"]: r["n"] for r in await _fetch_bounded(conn, sql)}
-        for i, ((tbl, k), _v) in enumerate(items):
-            n = float(got.get(i, 0))
-            if n >= DERIVED_COUNT_CAP:     # a LOWER bound: at least the cap, at most the table
-                n = max(n, float((DERIVED_STATS.get(tbl) or {}).get("rows") or n))
-            DERIVED_COUNTS[(tbl, k)] = n
-    return {"tables": len(new_t), "counts": len(new_c)}
-
-
-async def _fetch_bounded(conn, sql: str):
-    async with conn.transaction():
-        prev = await conn.fetchval("SHOW statement_timeout")
-        await conn.execute(f"SET statement_timeout = '{TIMEOUT_MS}ms'")
-        try:
-            return await conn.fetch(sql)
-        finally:
-            try:
-                await conn.execute(f"SET statement_timeout = '{prev}'")
-            except Exception:
-                logger.debug("could not restore statement_timeout to %s", prev)
+            if r["mcv"] and r["mcf"]:
+                vals = r["mcv"].strip("{}").split(",")
+                d["mcv"][r["attname"]] = {v.strip('"'): float(f) for v, f in zip(vals, r["mcf"])}
+    return {"tables": len(new_t)}
 
 
 @dataclass
