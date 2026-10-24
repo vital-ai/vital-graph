@@ -224,18 +224,103 @@ async def test_the_repair_selects_EXACTLY_the_absent_slots(pg_conn, test_space):
         f"must select the absent slots and nothing else: {fix}, absent={absent}")
 
 
-async def test_a_slot_with_no_frame_slot_row_is_reported_unattributed(
-        pg_conn, test_space):
-    """BOTH mirrors short: this cannot repair it, and must say so.
+async def _repair_delta(pg_conn, sp, load):
+    """`unattributed` / `orphaned` added by *load*, as deltas.
 
-    The fixture writes no `frame_slot` rows at all, so every absent slot is
-    unattributed. Silently returning 0 rows here would look like "nothing to
-    do" on a space that genuinely needs a full resync.
+    Both counts are over every absent slot in the space, and the space is
+    shared by this module, so earlier fixtures' slots are in them too. Neither
+    kind can be repaired, so a repair call before the load is a stable
+    baseline.
     """
-    n = await _load(pg_conn, test_space, "unattrib", with_b=False)
+    before = await _repair(pg_conn, sp)
+    n = await load()
+    after = await _repair(pg_conn, sp)
+    return n, after, {k: after[k] - before[k]
+                      for k in ("unattributed", "orphaned")}
+
+
+def _edge_quads(tag, i, edge, src, dst, ctx):
+    """An edge OBJECT in the quads, as the write path stores one."""
+    from vitalgraph.db.sparql_sql.sync_entity_slot_sort import CORE, _u as _uu
+    eu = _uu(f"urn:sfs:{tag}:edge:{edge}:{i}")
+    return [(eu, _uu(f"{CORE}hasEdgeSource"), src, ctx),
+            (eu, _uu(f"{CORE}hasEdgeDestination"), dst, ctx)]
+
+
+async def test_a_slot_no_entity_owns_is_orphaned_not_unattributed(
+        pg_conn, test_space):
+    """No edge anywhere — not in the edge table, not in the quads — so no
+    entity owns the slot and its absence is CORRECT.
+
+    This used to be reported `unattributed`, and the maintenance job logged it
+    at ERROR every cycle and named a resync as the remedy, which would derive
+    nothing (`issues/277`: 93 such slots across five local spaces, all
+    orphans).
+    """
+    n, fix, d = await _repair_delta(
+        pg_conn, test_space,
+        lambda: _load(pg_conn, test_space, "orphan", with_b=False))
+    assert d == {"unattributed": 0, "orphaned": n}, fix
+
+
+async def test_a_short_edge_table_is_unattributed(pg_conn, test_space):
+    """The real fault. The QUADS hold slot <- frame <- entity edges and the
+    edge table holds none of them, so the climb reaches nothing — and must
+    say so rather than calling the slot an orphan: a resync is the remedy."""
+    tag = "short"
+    ctx = _u(_G)
+
+    async def load():
+        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import _u as _uu
+        n = await _load(pg_conn, test_space, tag, with_b=False)
+        quads = []
+        for i in range(n):
+            e = _uu(f"urn:sfs:{tag}:e:{i}")
+            frame = _uu(f"urn:sfs:{tag}:fr:{i}")
+            sl = _uu(f"urn:sfs:{tag}:sl:{i}:{_B}")
+            quads += _edge_quads(tag, i, "slot", frame, sl, ctx)
+            quads += _edge_quads(tag, i, "frame", e, frame, ctx)
+        await pg_conn.executemany(
+            f"INSERT INTO {space_prefix(test_space)}_rdf_quad (subject_uuid,"
+            f" predicate_uuid, object_uuid, context_uuid)"
+            f" VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", quads)
+        return n
+
+    n, fix, d = await _repair_delta(pg_conn, test_space, load)
+    assert d == {"unattributed": n, "orphaned": 0}, fix
+
+
+async def test_a_slot_under_a_NESTED_frame_is_repaired(pg_conn, test_space):
+    """entity -> frame -> child frame -> slot. The repair used to climb ONE
+    frame, so this slot was never repaired — the open item `issues/277` left.
+    Asserted on the TABLE, not on the returned counts: the point is the row."""
+    from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (
+        _u as _uu, _SLOT_EDGE, _ENTITY_FRAME_EDGE, _CHILD_FRAME_EDGE)
+    tag = "nested"
+    n = await _load(pg_conn, test_space, tag, with_b=False)
+    ctx = _uu(_G)
+    edges, slots = [], []
+    for i in range(n):
+        e = _uu(f"urn:sfs:{tag}:e:{i}")
+        frame = _uu(f"urn:sfs:{tag}:fr:{i}")
+        child = _uu(f"urn:sfs:{tag}:child:{i}")
+        sl = _uu(f"urn:sfs:{tag}:sl:{i}:{_B}")
+        slots.append(sl)
+        edges += [
+            (uuid.uuid4(), child, sl, ctx, _SLOT_EDGE),
+            (uuid.uuid4(), frame, child, ctx, _CHILD_FRAME_EDGE),
+            (uuid.uuid4(), e, frame, ctx, _ENTITY_FRAME_EDGE),
+        ]
+    await pg_conn.executemany(
+        f"INSERT INTO {space_prefix(test_space)}_edge (edge_uuid, source_node_uuid,"
+        f" dest_node_uuid, context_uuid, edge_type_uuid) "
+        f"VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING", edges)
+
     fix = await _repair(pg_conn, test_space)
-    assert fix["unattributed"] >= n
-    assert fix["rows"] == 0, "nothing to derive without an entity to seed on"
+    got = await pg_conn.fetchval(
+        f"SELECT count(*) FROM {space_prefix(test_space)}_entity_slot_sort "
+        f" WHERE slot_uuid = ANY($1::uuid[])", slots)
+    assert got == n, f"every nested slot must now have its row: {fix}"
 
 
 async def test_an_attributable_slot_is_repaired(pg_conn, test_space):
@@ -269,12 +354,3 @@ async def test_an_attributable_slot_is_repaired(pg_conn, test_space):
     assert fix["entities"] >= n, (
         f"the absent slots must resolve to their entities up the edge table: "
         f"{fix}")
-
-
-async def test_a_slot_with_no_edge_path_is_unattributed(pg_conn, test_space):
-    """The honest failure. No edges means the two hops reach no entity, and
-    guessing would be worse than saying so: `resync_all_auxiliary_tables` is
-    the remedy and the log has to name it."""
-    n = await _load(pg_conn, test_space, "noedge", with_b=False)
-    fix = await _repair(pg_conn, test_space)
-    assert fix["unattributed"] >= n

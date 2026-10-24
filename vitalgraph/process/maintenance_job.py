@@ -2863,21 +2863,31 @@ class MaintenanceJob:
                                         space_id, fix["slots"],
                                         fix["entities"], fix["rows"])
                                 if fix["unattributed"]:
-                                    # Absent, carrying a sortable value, and NOT
-                                    # reached by the repair's two edge hops
-                                    # (slot -> frame -> entity): under a nested
-                                    # frame, or the edge table is short. The
-                                    # message used to say "no frame_slot row —
-                                    # both mirrors are short", which is not what
-                                    # was measured (`issues/277`).
+                                    # Absent, carrying a sortable value, and on
+                                    # a path where the QUADS hold an edge the
+                                    # edge table lacks: the edge table is short,
+                                    # and only a resync rebuilds it.
                                     logger.error(
                                         "entity_slot_sort: %s has %d absent "
-                                        "slots with a value that the repair "
-                                        "cannot reach through one frame (a "
-                                        "nested frame, or a short edge table); "
+                                        "slots with a value whose path holds "
+                                        "an edge the edge table lacks (the "
+                                        "edge table is short); "
                                         "resync_all_auxiliary_tables rebuilds "
-                                        "them. See issues/194, 277.",
+                                        "it. See issues/194, 277.",
                                         space_id, fix["unattributed"])
+                                if fix["orphaned"]:
+                                    # NOT A FAULT. No entity owns these and the
+                                    # edge table is complete along their path,
+                                    # so they are correctly absent. This used
+                                    # to be the ERROR above, every cycle, on
+                                    # five local spaces where all 93 such
+                                    # slots were orphans (`issues/277`); the
+                                    # edge check reports them as UNREACHABLE
+                                    # OBJECTS already.
+                                    logger.debug(
+                                        "entity_slot_sort: %s has %d absent "
+                                        "slots no entity owns — correctly "
+                                        "absent.", space_id, fix["orphaned"])
                             else:
                                 logger.debug(
                                     "entity_slot_sort: %s short by %d, all "

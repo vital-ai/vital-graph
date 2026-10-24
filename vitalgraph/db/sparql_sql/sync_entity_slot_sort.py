@@ -621,21 +621,29 @@ async def backfill_entity_slot_sort_missing_slots(
          `LIMIT` stops it early. Only worth calling when
          `entity_slot_sort_row_shortfall` has already reported a REAL gap: with
          nothing missing this scans every slot-type quad to find none.
-      2. Their entities, by climbing the EDGE table two hops. `frame_slot`
-         stores `(slot_uuid, entity_uuid)` directly and was used first, until a
+      2. Their entities, by climbing the EDGE table: slot -> frame, through
+         any parent frames to `MAX_FRAME_DEPTH`, -> entity. That is the walk
+         the derivation makes, run upward. `frame_slot` stores
+         `(slot_uuid, entity_uuid)` directly and was used first, until a
          production check found that column NULL for every row on all three
-         live spaces — see the note at the query. A slot under a NESTED frame is
-         not reached by these two hops and is reported `unattributed` rather
-         than guessed at.
+         live spaces — see the note at the query.
       3. Re-derive those entities. `_ON_CONFLICT` makes it idempotent, so rows
          that already exist are simply rewritten.
 
-    Returns `{slots, entities, rows, unattributed}`.
+    Returns `{slots, entities, rows, unattributed, orphaned}`. A slot the climb
+    reaches no entity from is one of two things, and only one is a fault:
 
-    `unattributed` is slots whose entity these two hops do not reach — a short
-    edge table, or a slot nested deeper than one frame. Reported rather than
-    ignored: this cannot repair them, and `resync_all_auxiliary_tables` is the
-    remedy.
+      `unattributed`  the QUADS hold an edge on its path that the edge table
+                      lacks. The edge table is short; this cannot repair it,
+                      and `resync_all_auxiliary_tables` is the remedy.
+      `orphaned`      the edge table is complete along its path and no entity
+                      owns it. Its absence is CORRECT — the derivation walks
+                      down from entities and never reaches it. The edge
+                      integrity check reports these as UNREACHABLE OBJECTS.
+
+    Counting the second as the first is what made the maintenance job log an
+    ERROR every cycle on five local spaces, for 93 slots that were all orphans
+    (2026-10-24, `issues/277`).
     """
     n = int(batch_size or ESS_BACKFILL_BATCH)
     t = f"{space_prefix(space_id)}_entity_slot_sort"
@@ -657,7 +665,9 @@ async def backfill_entity_slot_sort_missing_slots(
         _SLOT_TYPE, _SLOT_VALUE_PREDS, timeout=timeout)
     slots = [r["slot_uuid"] for r in rows]
     if not slots:
-        return {"slots": 0, "entities": 0, "rows": 0, "unattributed": 0}
+        return {"slots": 0, "entities": 0, "rows": 0, "unattributed": 0,
+                "orphaned": 0}
+    t_edge = f"{space_prefix(space_id)}_edge"
 
     # RESOLVED THROUGH THE EDGE TABLE, not `frame_slot.entity_uuid`.
     #
@@ -668,35 +678,83 @@ async def backfill_entity_slot_sort_missing_slots(
     # `unattributed`, which is silent and total failure on exactly the spaces
     # that matter. Checked against production before this shipped.
     #
-    # The edge table carries the same path in two hops and is the source the
-    # derivation itself walks, so it cannot be less populated than the rows
-    # being rebuilt: slot <- Edge_hasKGSlot <- frame <- Edge_hasEntityKGFrame
-    # <- entity. Bounded by the batch, so both hops are index probes.
-    ents = await conn.fetch(
-        f"SELECT DISTINCT ef.source_node_uuid AS entity_uuid "
-        f"  FROM {space_prefix(space_id)}_edge se "
-        f"  JOIN {space_prefix(space_id)}_edge ef "
-        f"    ON ef.dest_node_uuid = se.source_node_uuid "
-        f"   AND ef.context_uuid = se.context_uuid "
-        f"   AND ef.edge_type_uuid = $2 "
-        f" WHERE se.dest_node_uuid = ANY($1) "
-        f"   AND se.edge_type_uuid = $3",
-        slots, _ENTITY_FRAME_EDGE, _SLOT_EDGE, timeout=timeout)
-    seeds = [r["entity_uuid"] for r in ents]
-    attributed = await conn.fetchval(
-        f"SELECT count(DISTINCT se.dest_node_uuid) "
-        f"  FROM {space_prefix(space_id)}_edge se "
-        f"  JOIN {space_prefix(space_id)}_edge ef "
-        f"    ON ef.dest_node_uuid = se.source_node_uuid "
-        f"   AND ef.context_uuid = se.context_uuid "
-        f"   AND ef.edge_type_uuid = $2 "
-        f" WHERE se.dest_node_uuid = ANY($1) "
-        f"   AND se.edge_type_uuid = $3",
-        slots, _ENTITY_FRAME_EDGE, _SLOT_EDGE, timeout=timeout)
-    unattributed = len(slots) - int(attributed or 0)
+    # The edge table carries the same path and is the source the derivation
+    # itself walks, so it cannot be less populated than the rows being
+    # rebuilt: slot <- Edge_hasKGSlot <- frame (<- Edge_hasKGFrame <- frame)*
+    # <- Edge_hasEntityKGFrame <- entity. The frame hops are bounded the way
+    # `_select_rows` bounds them — its level-1 frame is depth 1 and it descends
+    # while `depth < MAX_FRAME_DEPTH` — so this climbs to exactly the frames
+    # the derivation can come down through. Bounded by the batch, so every hop
+    # is an `idx_{space}_edge_dst_src` probe.
+    #
+    # It used to stop after ONE frame, so a valued slot under a child frame
+    # was never repaired — the open item `issues/277` left.
+    ents = await conn.fetch(f"""
+        WITH RECURSIVE up AS (
+            SELECT se.dest_node_uuid AS slot_uuid, se.source_node_uuid AS node,
+                   se.context_uuid, 1 AS d
+              FROM {t_edge} se
+             WHERE se.dest_node_uuid = ANY($1) AND se.edge_type_uuid = $3
+            UNION
+            SELECT u.slot_uuid, ce.source_node_uuid, u.context_uuid, u.d + 1
+              FROM up u
+              JOIN {t_edge} ce
+                ON ce.dest_node_uuid = u.node
+               AND ce.context_uuid = u.context_uuid
+               AND ce.edge_type_uuid = $4
+             WHERE u.d < {MAX_FRAME_DEPTH}
+        )
+        SELECT DISTINCT u.slot_uuid, ef.source_node_uuid AS entity_uuid
+          FROM up u
+          JOIN {t_edge} ef
+            ON ef.dest_node_uuid = u.node
+           AND ef.context_uuid = u.context_uuid
+           AND ef.edge_type_uuid = $2
+    """, slots, _ENTITY_FRAME_EDGE, _SLOT_EDGE, _CHILD_FRAME_EDGE,
+        timeout=timeout)
+    seeds = list({r["entity_uuid"] for r in ents})
+    reached = {r["slot_uuid"] for r in ents}
+    unreached = [s for s in slots if s not in reached]
+
+    # ORPHANED OR SHORT? Climb the same edges from each unreached slot, with no
+    # type filter, and ask the QUADS whether any node on the way is the
+    # destination of an edge the edge table does not hold. If none is, the
+    # edge table is complete along the whole path and the slot has no owner:
+    # its absence is correct. An edge of an unrelated type missing also counts
+    # as short — it is, and the remedy is the same.
+    unattributed = 0
+    if unreached:
+        unattributed = int(await conn.fetchval(f"""
+            WITH RECURSIVE up AS (
+                SELECT s AS slot_uuid, s AS node, 0 AS d
+                  FROM unnest($1::uuid[]) s
+                UNION
+                SELECT u.slot_uuid, e.source_node_uuid, u.d + 1
+                  FROM up u
+                  JOIN {t_edge} e ON e.dest_node_uuid = u.node
+                 WHERE u.d < {MAX_FRAME_DEPTH}
+            )
+            SELECT count(DISTINCT u.slot_uuid)
+              FROM up u
+             WHERE EXISTS (
+                   SELECT 1
+                     FROM {space_prefix(space_id)}_rdf_quad dq
+                     JOIN {space_prefix(space_id)}_rdf_quad sq
+                       ON sq.subject_uuid = dq.subject_uuid
+                      AND sq.context_uuid = dq.context_uuid
+                      AND sq.predicate_uuid = $3
+                    WHERE dq.predicate_uuid = $2
+                      AND dq.object_uuid = u.node
+                      AND NOT EXISTS (
+                          SELECT 1 FROM {t_edge} x
+                           WHERE x.edge_uuid = dq.subject_uuid
+                             AND x.context_uuid = dq.context_uuid))
+        """, unreached, _u(f"{CORE}hasEdgeDestination"),
+            _u(f"{CORE}hasEdgeSource"), timeout=timeout) or 0)
+    orphaned = len(unreached) - unattributed
     if not seeds:
         return {"slots": len(slots), "entities": 0, "rows": 0,
-                "unattributed": unattributed}
+                "unattributed": unattributed, "orphaned": orphaned}
 
     args = await _type_args(space_id)
     result = await conn.execute(
@@ -706,10 +764,10 @@ async def backfill_entity_slot_sort_missing_slots(
     written = int(result.split()[-1]) if result else 0
     logger.info(
         "backfill_entity_slot_sort_missing_slots(%s): %d absent slots -> "
-        "%d entities -> %d rows (%d unattributed)",
-        space_id, len(slots), len(seeds), written, unattributed)
+        "%d entities -> %d rows (%d unattributed, %d orphaned)",
+        space_id, len(slots), len(seeds), written, unattributed, orphaned)
     return {"slots": len(slots), "entities": len(seeds), "rows": written,
-            "unattributed": unattributed}
+            "unattributed": unattributed, "orphaned": orphaned}
 
 
 async def entity_slot_sort_row_shortfall(conn, space_id: str,
