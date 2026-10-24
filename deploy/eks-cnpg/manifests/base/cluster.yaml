@@ -1,0 +1,64 @@
+# The VitalGraph database as a CloudNativePG Cluster: a primary and a synchronous
+# standby in different zones, PostgreSQL 18.4, the vg_planner plugin and the
+# extensions production uses, mounted as image volumes.
+#
+# Sizing (resources, storage, the rendered parameters) and everything
+# environment-specific (storage class, images in ECR, backups, the load balancer)
+# live in the overlays: overlays/eks (production profile), overlays/local-kind
+# (a local cluster for builds and drills). See deploy/eks-cnpg/README.md.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: vitalgraph-pg
+spec:
+  instances: 2
+  # PostgreSQL 18.4 exactly: vg_planner is built for this minor
+  # (deploy/eks-cnpg/images/vg-planner). Overlays pin it by digest.
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.4-minimal-trixie
+
+  # Rolling updates restart the standby first, then SWITCH OVER (not restart the
+  # primary in place), as RDS Multi-AZ does for a modification.
+  primaryUpdateStrategy: unsupervised
+  primaryUpdateMethod: switchover
+
+  # One pod per zone: the RDS Multi-AZ placement.
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: topology.kubernetes.io/zone
+    podAntiAffinityType: required
+
+  postgresql:
+    # Synchronous commit to one standby (RDS Multi-AZ). `preferred`: with the
+    # standby gone the primary keeps accepting writes, as RDS does while it
+    # replaces a failed standby; `required` would stop writes instead.
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: preferred
+
+    extensions:
+      - name: vg_planner
+        image:
+          reference: vg-planner-ext:0.2.0-18.4-trixie
+      - name: pgvector
+        image:
+          reference: ghcr.io/cloudnative-pg/pgvector:0.8.7-18-trixie
+      - name: postgis
+        image:
+          reference: ghcr.io/cloudnative-pg/postgis-extension:3.6.4-202610221437-18-trixie
+        ld_library_path:
+          - system
+
+  bootstrap:
+    initdb:
+      database: sparql_sql_graph
+      owner: vitalgraph_user
+      # Role and database settings, extensions: rendered from the canonical file
+      # (render_config.py --format sql) into the ConfigMap below.
+      postInitApplicationSQLRefs:
+        configMapRefs:
+          - name: vitalgraph-pg-bootstrap
+            key: bootstrap.sql
+
+  storage:
+    size: 10Gi

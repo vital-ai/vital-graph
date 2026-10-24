@@ -1,0 +1,18 @@
+# Base backups and the WAL archive in S3 (Barman Cloud plugin; needs cert-manager and
+# the plugin installed). Credentials from the pod's IAM role, none stored.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: vitalgraph-pg-s3
+spec:
+  retentionPolicy: "30d"          # REPLACE with production RDS's backup retention (planning_rds/01 §10 q2)
+  configuration:
+    destinationPath: s3://REPLACE_ME-vitalgraph-pg-backups/
+    s3Credentials:
+      inheritFromIAMRole: true
+    wal:
+      compression: lz4
+      maxParallel: 4
+    data:
+      compression: lz4
+      jobs: 4

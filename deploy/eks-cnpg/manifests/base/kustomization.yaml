@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: vitalgraph-db
+resources:
+  - namespace.yaml
+  - cluster.yaml
+configMapGenerator:
+  # Rendered by deploy/postgres/render_config.py --format sql (render_all.sh); never edit.
+  - name: vitalgraph-pg-bootstrap
+    files:
+      - bootstrap.sql
+generatorOptions:
+  disableNameSuffixHash: true

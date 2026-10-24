@@ -1,0 +1,55 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: vitalgraph-pg
+spec:
+  imageName: REPLACE_ME.dkr.ecr.us-east-1.amazonaws.com/cnpg/postgresql:18.4-minimal-trixie@sha256:REPLACE_ME
+  postgresql:
+    extensions:
+      - name: vg_planner
+        image:
+          reference: REPLACE_ME.dkr.ecr.us-east-1.amazonaws.com/vitalgraph/vg-planner-ext:0.2.0-18.4-trixie@sha256:REPLACE_ME
+      - name: pgvector
+        image:
+          reference: REPLACE_ME.dkr.ecr.us-east-1.amazonaws.com/cnpg/pgvector:0.8.7-18-trixie@sha256:REPLACE_ME
+      - name: postgis
+        image:
+          reference: REPLACE_ME.dkr.ecr.us-east-1.amazonaws.com/cnpg/postgis-extension:3.6.4-18-trixie@sha256:REPLACE_ME
+        ld_library_path:
+          - system
+  # The dedicated database nodes (nodepool.yaml): nothing else is scheduled there.
+  affinity:
+    nodeSelector:
+      vitalgraph.ai/role: database
+    tolerations:
+      - key: vitalgraph.ai/database
+        operator: Exists
+        effect: NoSchedule
+  # Backups and WAL to S3 through the Barman Cloud plugin (objectstore.yaml).
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: vitalgraph-pg-s3
+  # The pods' service account assumes the backup role (EKS Pod Identity or IRSA).
+  serviceAccountTemplate:
+    metadata:
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::REPLACE_ME:role/vitalgraph-pg-backup
+  # The app (ECS, outside the cluster) reaches the PRIMARY through an internal NLB.
+  managed:
+    services:
+      additional:
+        - selectorType: rw
+          serviceTemplate:
+            metadata:
+              name: vitalgraph-pg-rw-nlb
+              annotations:
+                service.beta.kubernetes.io/aws-load-balancer-type: external
+                service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+                service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+                service.beta.kubernetes.io/aws-load-balancer-subnets: REPLACE_ME
+            spec:
+              type: LoadBalancer
+  # Huge pages as on RDS (huge_pages = on) need them reserved on the node; until
+  # the node pool reserves them the canonical 'try' applies.

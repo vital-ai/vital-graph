@@ -1,0 +1,84 @@
+# The canonical PostgreSQL configuration for a self-managed VitalGraph database:
+# ONE source for every deployment profile (EKS + CloudNativePG; EC2 + Patroni).
+# Rendered by render_config.py; never edit a rendered copy.
+#
+# Mirrors the production RDS parameter group (vitalgraph-pg18, read 2026-10-17,
+# planning_rds/01 §2) so a self-managed install is first EQUIVALENT to RDS, with
+# the planner plugin loaded and unused (VG_PLANNER_EXTENSION=off).
+#
+# Values are fixed strings, or expressions in the node's size, the way RDS
+# writes its formulas:
+#     mem_mb   memory available to PostgreSQL (the pod's memory limit / the instance's RAM)
+#     vcpu     CPUs
+# e.g. RDS {DBInstanceClassMemory/32768} (8 kB pages) = 1/4 of RAM = "mem_mb // 4".
+# An expression may use + - * // min max round, numbers, and those two names.
+
+parameters:
+  # --- memory: the RDS formulas ---
+  shared_buffers:            "{mem_mb // 4}MB"            # RDS: DBInstanceClassMemory/32768 (1/4)
+  effective_cache_size:      "{mem_mb * 3 // 4}MB"        # RDS: *3/32768 (3/4)
+  work_mem:                  "32MB"
+  hash_mem_multiplier:       "4"
+  maintenance_work_mem:      "{min(2048, max(64, mem_mb // 32))}MB"   # 2 GB at 64 GB
+  autovacuum_work_mem:       "{min(512, max(32, mem_mb // 128))}MB"   # 512 MB at 64 GB
+  huge_pages:                "try"                        # RDS: on. 'on' needs huge pages reserved on the node (profile overlay)
+
+  # --- connections and workers ---
+  max_connections:           "{min(5000, mem_mb * 1048576 // 9531392)}"  # RDS: LEAST(DBInstanceClassMemory/9531392, 5000). Parity first; size to the pools later
+  max_worker_processes:      "{max(vcpu * 2, 8)}"         # RDS: GREATEST(vCPU*2, 8)
+  max_parallel_workers:      "{max(vcpu // 2, 8)}"        # RDS: GREATEST(vCPU/2, 8)
+  max_parallel_workers_per_gather: "2"
+  max_parallel_maintenance_workers: "{min(4, max(1, vcpu // 2))}"
+  autovacuum_max_workers:    "4"
+  io_workers:                "3"
+
+  # --- I/O, planner costs ---
+  random_page_cost:          "1.1"
+  effective_io_concurrency:  "200"
+  maintenance_io_concurrency: "64"
+
+  # --- WAL and checkpoints ---
+  max_wal_size:              "16GB"
+  checkpoint_timeout:        "15min"
+  checkpoint_completion_target: "0.9"
+  wal_compression:           "lz4"
+
+  # --- statistics and observability ---
+  pg_stat_statements.track:  "top"
+  track_io_timing:           "on"
+  log_min_duration_statement: "5s"
+  log_lock_waits:            "on"
+  log_autovacuum_min_duration: "10s"
+
+  # --- the planner plugin's own settings (defaults stated, not changed) ---
+  vg_planner.enabled:        "on"       # a statement without /*vg:plan*/ advice is planned exactly as core plans it
+  vg_planner.on_mismatch:    "warning"  # the app sets this per statement (planner_ext.on_mismatch)
+
+# Libraries loaded at server start, in order. vg_planner last: its planner_hook
+# chains to the previous one.
+shared_preload_libraries:
+  - pg_stat_statements
+  - pg_prewarm
+  - vg_planner
+
+# Set per ROLE / DATABASE by the bootstrap SQL, not instance-wide. On RDS
+# statement_timeout = 60 s was instance-wide and cancelled maintenance VACUUMs on
+# the big quad table (issues/136).
+role_settings:
+  vitalgraph_user:
+    statement_timeout: "60s"
+database_settings:
+  lock_timeout: "10s"
+
+# Extensions created in the application database (CREATE EXTENSION), with the
+# versions production RDS 18.4 has where they are known. VERIFY before an install
+# (planning_rds/01 §10 question 3): pgvector and PostGIS versions decide on-disk
+# index formats.
+extensions:
+  - vector
+  - postgis
+  - pg_trgm
+  - pgcrypto
+  - pg_prewarm
+  - pg_stat_statements
+  - vg_planner

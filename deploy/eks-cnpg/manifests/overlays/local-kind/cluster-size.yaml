@@ -1,0 +1,47 @@
+# SIZE: mem_mb=2048 vcpu=2 (render_all.sh reads this line)
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: vitalgraph-pg
+spec:
+  resources:
+    requests: {cpu: "500m", memory: "2Gi"}
+    limits:   {cpu: "2",    memory: "2Gi"}
+  storage:
+    size: 5Gi
+  postgresql:
+    # BEGIN rendered by deploy/postgres/render_config.py
+    parameters:
+      shared_buffers: "512MB"
+      effective_cache_size: "1536MB"
+      work_mem: "32MB"
+      hash_mem_multiplier: "4"
+      maintenance_work_mem: "64MB"
+      autovacuum_work_mem: "32MB"
+      huge_pages: "try"
+      max_connections: "225"
+      max_worker_processes: "8"
+      max_parallel_workers: "8"
+      max_parallel_workers_per_gather: "2"
+      max_parallel_maintenance_workers: "1"
+      autovacuum_max_workers: "4"
+      io_workers: "3"
+      random_page_cost: "1.1"
+      effective_io_concurrency: "200"
+      maintenance_io_concurrency: "64"
+      max_wal_size: "16GB"
+      checkpoint_timeout: "15min"
+      checkpoint_completion_target: "0.9"
+      wal_compression: "lz4"
+      pg_stat_statements.track: "top"
+      track_io_timing: "on"
+      log_min_duration_statement: "5s"
+      log_lock_waits: "on"
+      log_autovacuum_min_duration: "10s"
+      vg_planner.enabled: "on"
+      vg_planner.on_mismatch: "warning"
+    shared_preload_libraries:
+      - pg_stat_statements
+      - pg_prewarm
+      - vg_planner
+    # END rendered by deploy/postgres/render_config.py

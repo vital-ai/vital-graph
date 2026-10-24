@@ -1,0 +1,14 @@
+# A local Kubernetes for profile K: one control plane and two workers in two
+# "zones", so the Cluster's one-pod-per-zone rule (the RDS Multi-AZ placement) is
+# exercised. Kubernetes >= 1.35 has ImageVolume on by default (kind 0.33: 1.37).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: vg-cnpg
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-a
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-b

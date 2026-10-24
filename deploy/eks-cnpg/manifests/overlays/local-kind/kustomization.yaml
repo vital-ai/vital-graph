@@ -1,0 +1,9 @@
+# A local kind cluster (deploy/eks-cnpg/local): the same Cluster, small. For
+# image builds, the extension mount, failover/switchover and restore drills.
+# Not a performance environment.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - path: cluster-size.yaml

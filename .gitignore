@@ -278,6 +278,11 @@ archive/frontend-old/
 # volume-recovery procedure the deploy runbook points at, so it needs to
 # reach other clones rather than living on one machine.
 !docker-compose.test.persist.yml
+# Hold no secrets: Kubernetes manifests, the kind config and the canonical
+# PostgreSQL configuration. AWS values are REPLACE_ME placeholders and
+# credentials come from the operator and Secrets Manager, never these files.
+!deploy/eks-cnpg/**/*.yaml
+!deploy/postgres/*.yaml
 # Holds no secrets: the Python version, conda's native Postgres libraries, and
 # `-e .[all]` — every Python dependency comes from pyproject.toml. Ignored only
 # by the blanket rule above, which left the dev-env definition on one machine

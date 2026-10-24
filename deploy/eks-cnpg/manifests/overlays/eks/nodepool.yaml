@@ -1,0 +1,37 @@
+# EKS Auto Mode node pool for the database: Graviton memory-optimized 2xlarge (the
+# db.r6g.2xlarge equivalent), on-demand, tainted so only PostgreSQL lands there.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: vitalgraph-database
+spec:
+  template:
+    metadata:
+      labels:
+        vitalgraph.ai/role: database
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      taints:
+        - key: vitalgraph.ai/database
+          effect: NoSchedule
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["arm64"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: eks.amazonaws.com/instance-family
+          operator: In
+          values: ["r7g", "r8g"]
+        - key: eks.amazonaws.com/instance-size
+          operator: In
+          values: ["2xlarge"]
+  # A database node is never consolidated away under a running primary; node
+  # replacement for patching goes through the operator's switchover.
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 1h

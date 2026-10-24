@@ -1,0 +1,14 @@
+# A daily base backup from the standby (keeps the read load off the primary).
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: vitalgraph-pg-daily
+spec:
+  schedule: "0 0 3 * * *"
+  backupOwnerReference: self
+  target: prefer-standby
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+  cluster:
+    name: vitalgraph-pg

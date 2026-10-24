@@ -1,0 +1,16 @@
+# gp3 with the IOPS and throughput production RDS has at 440 GiB. On EC2 (unlike RDS
+# at >= 400 GiB) gp3 starts at 3,000 IOPS / 125 MiB/s whatever the size, so both are
+# set explicitly; the extra IOPS and throughput are billed.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: vitalgraph-gp3
+provisioner: ebs.csi.eks.amazonaws.com     # EKS Auto Mode's EBS driver
+parameters:
+  type: gp3
+  iops: "12000"
+  throughput: "500"
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain

@@ -1,0 +1,52 @@
+# SIZE: mem_mb=57344 vcpu=7 (render_all.sh reads this line)
+# The POD's limits, not the node's: an r7g/r8g.2xlarge (8 vCPU, 64 GiB) leaves ~60 GiB
+# allocatable; 56 GiB / 7 CPU for PostgreSQL, the rest for the kubelet and system pods.
+# The formulas then give shared_buffers 14 GB, effective_cache_size 42 GB (RDS on
+# db.r6g.2xlarge: 15.5 / 46 GB, from DBInstanceClassMemory, also below RAM).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: vitalgraph-pg
+spec:
+  resources:
+    requests: {cpu: "7", memory: "56Gi"}
+    limits:   {cpu: "7", memory: "56Gi"}
+  storage:
+    size: 440Gi
+    storageClass: vitalgraph-gp3
+  postgresql:
+    # BEGIN rendered by deploy/postgres/render_config.py
+    parameters:
+      shared_buffers: "14336MB"
+      effective_cache_size: "43008MB"
+      work_mem: "32MB"
+      hash_mem_multiplier: "4"
+      maintenance_work_mem: "1792MB"
+      autovacuum_work_mem: "448MB"
+      huge_pages: "try"
+      max_connections: "5000"
+      max_worker_processes: "14"
+      max_parallel_workers: "8"
+      max_parallel_workers_per_gather: "2"
+      max_parallel_maintenance_workers: "3"
+      autovacuum_max_workers: "4"
+      io_workers: "3"
+      random_page_cost: "1.1"
+      effective_io_concurrency: "200"
+      maintenance_io_concurrency: "64"
+      max_wal_size: "16GB"
+      checkpoint_timeout: "15min"
+      checkpoint_completion_target: "0.9"
+      wal_compression: "lz4"
+      pg_stat_statements.track: "top"
+      track_io_timing: "on"
+      log_min_duration_statement: "5s"
+      log_lock_waits: "on"
+      log_autovacuum_min_duration: "10s"
+      vg_planner.enabled: "on"
+      vg_planner.on_mismatch: "warning"
+    shared_preload_libraries:
+      - pg_stat_statements
+      - pg_prewarm
+      - vg_planner
+    # END rendered by deploy/postgres/render_config.py
