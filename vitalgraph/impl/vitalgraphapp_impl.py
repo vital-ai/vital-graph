@@ -754,7 +754,13 @@ class VitalGraphAppImpl:
                                     self.logger.debug(f"Cache invalidation: cleared datatype cache for {space_id}")
                                 elif cache_type == "stats" and space_id:
                                     invalidate_stats_cache(space_id)
-                                    self.logger.debug(f"Cache invalidation: cleared stats cache for {space_id}")
+                                    # INFO, not debug: every stats recompute
+                                    # sends this (`issues/300`), and this line
+                                    # is how an operator sees a `stats_rebuild`
+                                    # actually reached the serving process.
+                                    self.logger.info(
+                                        "Cache invalidation: cleared STATS cache for %s",
+                                        space_id)
                                 elif cache_type == "term" and space_id:
                                     # A bulk import TRUNCATES and reloads the term
                                     # table, so every cached (text,type,lang,dt) ->

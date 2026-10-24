@@ -395,11 +395,6 @@ async def _load_quad_stats(
                               for r in pred_rows if r["object_count"]}
 
         quad_rows = await db.execute_query(
-            # Cap the stats load: at 1B quads rdf_stats can have 50-200M rows;
-            # loading all of them transfers GBs and can take minutes. The join
-            # reorder heuristic only needs the most selective (lowest row_count)
-            # pairs, so take the top 10K by ascending row_count. Uses
-            # idx_{space}_rdf_stats_rc. (100x mitigation #4.)
             # NO `ORDER BY row_count ASC LIMIT n`, and no upper bound.
             #
             # That form starved the tail. Measured on production against the
@@ -1100,10 +1095,10 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                                    conn_params=None) -> None:
     """Fetch row counts for the plan's leaf pairs that the preload lacks.
 
-    `_load_quad_stats` caps itself at the 10,000 least-common pairs, which is
-    right for join reordering and wrong for a selectivity gate: the anchor's
-    pair is common, so it is missing, and the gate cannot tell "common" from
-    "unknown". This asks for exactly the handful of pairs this query needs.
+    `_load_quad_stats` loads only what `rdf_stats` stores, and that table keeps
+    each predicate's largest pairs up to `STATS_KEEP_DEFAULT` rows
+    (`recompute_stats_tables`), so a pair a selectivity gate asks about can be
+    absent. This asks for exactly the handful of pairs this query needs.
     """
     from .semijoin import needed_pairs
     aliases.extra_quad_stats = {}
@@ -1234,8 +1229,8 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         # the life of the process, so a verdict computed once and cached would
         # itself go stale — which is the failure this exists to prevent. The
         # pre-filter is one indexed read of `rdf_pred_stats` (a few dozen rows,
-        # maintained incrementally on every write); a shape probe runs only for
-        # a predicate whose count has actually moved.
+        # rewritten by each `recompute_stats_tables`, NOT on every write); a
+        # shape probe runs only for a predicate whose count has actually moved.
         #
         # It mutates the cached dict in place. Two queries racing here compute
         # the same verdict from the same rows, so the only cost of the race is

@@ -9,7 +9,9 @@ transaction.  The resync function can be called standalone.
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 import uuid
 from collections import Counter
 from typing import Dict, List, Tuple
@@ -381,8 +383,41 @@ async def recompute_stats_tables(conn, space_id: str,
                 timeout=timeout)
         pred_count = int(res.split()[-1]) if res else 0
 
+        # EVERY SERVING PROCESS DROPS ITS CACHED COPY (`issues/300`). The
+        # generator holds these two tables in `_stats_cache` for the life of
+        # the process, and most callers of this function never invalidated it:
+        # the hourly maintenance recompute and `StatsRebuildOp` -- the repair
+        # for a corrupt table (`issues/139`) -- rewrote the tables and the
+        # server kept planning on the counts it loaded at its first query.
+        #
+        # HERE, NOT AT EACH CALL SITE, so a new caller cannot leave it out.
+        #
+        # `pg_notify` ON THIS CONNECTION, INSIDE THIS TRANSACTION, not the
+        # signal manager. A NOTIFY is delivered at COMMIT and dropped on
+        # rollback, so listeners hear it exactly when the new counts become
+        # visible -- including when a caller holds an outer transaction, where
+        # this block is only a savepoint. And it needs no signal manager, which
+        # the admin CLI's stats rebuild runs without: that path is a separate
+        # process, and this is the only thing that reaches the servers from it.
+        # Every server, this one included, invalidates on hearing it
+        # (`vitalgraphapp_impl.py`, `CHANNEL_CACHE_INVALIDATE`).
+        from vitalgraph.signal.signal_manager import CHANNEL_CACHE_INVALIDATE
+        await conn.execute(
+            "SELECT pg_notify($1, $2)", CHANNEL_CACHE_INVALIDATE,
+            json.dumps({"cache_type": "stats", "space_id": space_id,
+                        "timestamp": str(time.time())}),
+            timeout=timeout)
+
     await conn.execute(f"ANALYZE {t_stats}", timeout=timeout)
     await conn.execute(f"ANALYZE {t_pred}", timeout=timeout)
+
+    # AND THIS PROCESS, NOW. The NOTIFY reaches it too, but asynchronously, and
+    # a process with no listener (a script, a test) never hears it. When a
+    # caller holds an outer transaction this runs before that commits, so a
+    # query in between can re-cache the old counts -- the NOTIFY at commit is
+    # what clears those.
+    from .generator import invalidate_stats_cache
+    invalidate_stats_cache(space_id)
 
     logger.info("recompute_stats_tables(%s): %d pred_stats, %d quad_stats "
                 "(cap %d, no upper row_count bound)",

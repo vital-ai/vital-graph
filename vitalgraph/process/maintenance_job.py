@@ -2004,9 +2004,11 @@ class MaintenanceJob:
         write path. Measured: 1.3 s on 2.5M quads, 9.3 s on 19.6M.
 
         DETECTION IS FREE AND USES WHAT IS ALREADY STORED. `pred_rows` is the
-        predicate's row count as of the build; `rdf_pred_stats` is maintained on
-        every write. Their ratio is the drift, and both tables are tiny, so this
-        is one small indexed join per space with no scan of anything.
+        predicate's row count as of the build; `rdf_pred_stats` holds the count
+        as of the last `recompute_stats_tables` -- NOT maintained on every
+        write, so drift is only visible here once a recompute has run. Their
+        ratio is the drift, and both tables are tiny, so this is one small
+        indexed join per space with no scan of anything.
 
         The threshold is deliberately far above the read path's. `DRIFT_EPSILON`
         (2%) decides whether a shape probe is worth a query; this decides
