@@ -90,6 +90,18 @@ class GenerateResult:
     # only way a test can assert the decision without re-deriving it, and a test
     # that re-derives the thing under test asserts nothing (issues/090).
     traversal_decision: Optional[Any] = None
+    # The `/*vg:plan ... */` advice comment for the vg_planner extension, or
+    # None. Set only when generation ran with the planner switch active
+    # (`planner_ext`); the executor prepends it to the statement.
+    plan_advice: Optional[str] = None
+    # "qtree" when the SQL is the planner's own plan (`planner_ext.plan_with_qtree`):
+    # its written JOIN nesting is the plan, so the executor always keeps it
+    # (`join_collapse_limit = 1`). None for the generator's SQL.
+    plan_source: Optional[str] = None
+    # (space_id, write count, quad table oid) when the planner's SQL relies on a
+    # stored pattern verdict (`pattern_verdict`): the executor must run it in a
+    # snapshot where the space is still exactly that, or plan again without.
+    verdict_guard: Optional[tuple] = None
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +314,8 @@ def invalidate_stats_cache(space_id: str) -> None:
     for k in [k for k in _stats_cache if k[0] == space_id]:
         _stats_cache.pop(k, None)
     _value_stats_cache.pop(space_id, None)
+    from .qcard import invalidate as _invalidate_samples
+    _invalidate_samples(space_id)
     try:
         from .sync_value_stats import invalidate_freshness_cache
         invalidate_freshness_cache(space_id)
@@ -1607,6 +1621,8 @@ async def generate_sql(
     graph_lock_uri: Optional[str] = None,
     default_graph: Optional[str] = None,
     multi_vector_config: Optional[Dict[str, Any]] = None,
+    planner_ext: bool = False,
+    planner_verdicts: bool = True,
 ) -> GenerateResult:
     """Generate SQL, collecting every pass that declined along the way.
 
@@ -1614,13 +1630,20 @@ async def generate_sql(
     function's exits, including the failure ones — a query that raised at
     stage 3 is exactly when it is worth knowing which rewrite refused at
     stage 2.
+
+    `planner_ext`: generate for the vg_planner extension (`planner_ext`).
+    False, the default, is today's generation exactly.
+    `planner_verdicts=False`: with `planner_ext`, use no stored pattern verdict.
     """
     from . import declines
-    with declines.collecting() as log:
+    from . import planner_ext as _pext
+    with declines.collecting() as log, _pext.statement(planner_ext, verdicts=planner_verdicts):
         result = await _generate_sql(
             compile_result, space_id, conn_params=conn_params, conn=conn,
             graph_lock_uri=graph_lock_uri, default_graph=default_graph,
             multi_vector_config=multi_vector_config)
+        if planner_ext and result is not None and result.ok:
+            result.plan_advice = _pext.render()
     if result is not None and result.declines is None:
         result.declines = log
     if log and logger.isEnabledFor(logging.DEBUG):
@@ -2529,6 +2552,20 @@ async def _generate_sql(
         ctx.trace.log_step(0, "final", "generator",
                            f"var_map: {var_map}")
 
+        # The planner's own plan, where it supports the query (`planner_ext`,
+        # switch on AND the `qtree` feature only; otherwise a no-op and the SQL
+        # above is today's, byte for byte).
+        plan_source = None
+        verdict_guard = None
+        if not provably_empty:
+            from . import planner_ext as _pext
+            _q = await _pext.plan_with_qtree(plan, ctx, var_map, space_id=space_id,
+                                             conn=conn, conn_params=conn_params)
+            if _q is not None:
+                sql_str = prepend_ctes(substitute_constants(_q.sql, aliases), aliases, term_table)
+                plan_source = "qtree"
+                verdict_guard = getattr(_q, "verdict_guard", None)
+
         # One structured line per query: which rewrites fired, which declined
         # and why. Always on — a diagnostic nobody enables is indistinguishable
         # from not having one, which is what `issues/178` ran into.
@@ -2544,9 +2581,11 @@ async def _generate_sql(
             trace_json=ctx.trace.to_json(),
             vector_requests=ctx.vector_requests,
             fuzzy_requests=ctx.fuzzy_requests,
-            needs_ordered_scan=ctx.needs_ordered_scan,
-            fixed_join_order=ctx.fixed_join_order,
+            needs_ordered_scan=ctx.needs_ordered_scan and plan_source is None,
+            fixed_join_order=ctx.fixed_join_order or plan_source == "qtree",
             traversal_decision=getattr(aliases, "traversal_decision", None),
+            plan_source=plan_source,
+            verdict_guard=verdict_guard,
         )
 
     except UnindexableTextSearch as e:

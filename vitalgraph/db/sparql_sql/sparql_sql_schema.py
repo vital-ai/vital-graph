@@ -2143,6 +2143,9 @@ class SparqlSQLSchema:
             f"DROP TABLE IF EXISTS {t['search_mapping']} CASCADE",
             f"DROP TABLE IF EXISTS {t['index_sync_queue']} CASCADE",
             f"DROP FUNCTION IF EXISTS {space_prefix(space_id)}_isq_capture() CASCADE",
+            # the write log (`write_log`), where a script installed it
+            f"DROP TABLE IF EXISTS {space_prefix(space_id)}_write_log CASCADE",
+            f"DROP FUNCTION IF EXISTS {space_prefix(space_id)}_wlog_capture() CASCADE",
         ]
 
     def drop_space_indexes_sql(self, space_id: str) -> List[str]:

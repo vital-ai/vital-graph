@@ -24,7 +24,7 @@ ROOT = Path(vitalgraph.__file__).parent
 
 # Helpers whose docstring makes the caller own the transaction. Each one's call
 # sites are checked in turn.
-CALLER_HOLDS_THE_TRANSACTION = {"_apply_read_fence"}
+CALLER_HOLDS_THE_TRANSACTION = {"_apply_read_fence", "_apply_join_order", "_apply_planner_advice"}
 
 
 def _set_local_calls(tree):

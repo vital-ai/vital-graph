@@ -1,0 +1,322 @@
+"""The cardinality oracle (planning_planner/09, ranked item 1): index-based
+join sampling, after Leis et al. (CIDR 2017) and WanderJoin.
+
+Stored statistics price what they can price exactly: a single-leaf unit's
+(predicate, object) pin, a VALUES set. Everything they cannot is SAMPLED here,
+through the same SQL the renderer writes, so a sample means exactly what the
+plan will compute:
+
+    a unit with two or more leaves    rows(u): sampled anchor subjects, each
+                                      completed through the unit's other leaves
+    a pair of units with an edge      rows(u ⋈ v): the same sampled rows of u,
+                                      joined into v on every connecting variable
+    a probe into v through an edge    the PHYSICAL fan-out: rows the probed
+                                      leaf's index range returns per probe,
+                                      before v's other leaves narrow it
+
+Nothing here knows a predicate name or a schema: a unit is whatever star the
+query has, and an edge whatever variable two units share (principle 1).
+
+Every number is tagged with where it came from (`Est.rule`: `sample`,
+`sample_exact` when the sample was the whole input, `sample_zero` for an empty
+sample). An empty sample is NOT read as independence (the "fleeing to
+ignorance" of Leis et al.): it is a pseudo-count of 0.5 over the sample.
+
+One round trip per query: every question not already cached is one branch of a
+single UNION ALL statement, under a statement timeout. A failure or timeout
+keeps the stored-statistics estimates and is recorded in plan_decisions.
+
+Cached per (space, question SQL) and dropped with the space's statistics
+(`generator.invalidate_stats_cache`).
+"""
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+from .qtree import Est
+
+logger = logging.getLogger(__name__)
+
+SAMPLE_N = 256          # anchor subjects sampled per unit
+SCAN_CAP = 20_000       # anchor rows read to draw the sample from
+FAN_CAP = 5_000         # rows counted per sampled row and probe
+TIMEOUT_MS = 2_000      # the whole batch
+ONE_TIMEOUT_MS = 500    # each question, when the batch failed and they are retried apart
+HIT_BUDGET = 20_000     # rows a join-size question may complete (sample size x fan-out)
+MIN_N = 8               # never sample fewer source subjects than this
+
+#: (space_id, question SQL) -> the question's numbers.
+_cache: Dict[Tuple[str, str], List[float]] = {}
+
+
+def invalidate(space_id: Optional[str] = None) -> None:
+    if space_id is None:
+        _cache.clear()
+        return
+    for k in [k for k in _cache if k[0] == space_id]:
+        _cache.pop(k, None)
+
+
+@dataclass
+class _Question:
+    region: object
+    unit: int
+    target: Optional[int]           # the unit joined into, or None (unit size only)
+    fans: List[Tuple[object, int]]  # (edge, index into the result array)
+    sql: str
+    n: int = SAMPLE_N               # source subjects sampled
+
+
+# ---------------------------------------------------------------------------
+# The questions, as SQL
+# ---------------------------------------------------------------------------
+
+def _unit_sql(reg, i: int):
+    """The unit rendered alone, as the renderer writes it: (from-sql, the
+    columns of its variables, its pending conditions)."""
+    from . import qplan
+    r = qplan._R(qplan._Pos(reg.plans, reg.values))
+    node = qplan._base(reg, i)
+    sql, _present, pend = qplan._render_node(node, reg, r)
+    return sql, r, pend, r.pos
+
+
+def _question(reg, s: int, t: Optional[int], hits: bool = True) -> Optional[_Question]:
+    """Sample unit s's anchor subjects; complete each through s; join into t
+    (`hits`), and count the index range of each probe into t (the fan-out)."""
+    u = reg.units[s]
+    if not u.subject.startswith("?") or u.anchor is None or u.anchor.s_var is None:
+        return None
+    var = u.subject[1:]
+    s_sql, s_r, s_pend, pos = _unit_sql(reg, s)
+    a = u.anchor
+    a_col = next((f"{al}.{c}" for al, c in pos.positions.get(var, []) if al == a.alias), None)
+    s_col = s_r.bound.get(var)
+    if a_col is None or s_col is None:
+        return None
+    a_where = " AND ".join(pos.filters.get(a.alias, []) or ["TRUE"])
+    n = _sample_size(reg, s, t) if (t is not None and hits) else SAMPLE_N
+    smp = (f"SELECT x0 FROM (SELECT DISTINCT {a_col} AS x0 FROM {pos.table[a.alias]} AS {a.alias} "
+           f"WHERE {a_where} LIMIT {SCAN_CAP}) a ORDER BY x0 LIMIT {n}")
+    cols = [f"{s_col} AS x0"]
+    joins, fans, out = [], [], ["(SELECT count(*) FROM smp)", "count(su.x0)"]
+    if t is not None:
+        t_sql, t_r, t_pend, _ = _unit_sql(reg, t)
+        conn = [e for e in reg.edges if {e.u, e.v} == {s, t}]
+        vars_ = sorted({e.var for e in conn})
+        eqs = []
+        for k, v in enumerate(vars_):
+            if v not in s_r.bound or v not in t_r.bound:
+                return None
+            cols.append(f"{s_r.bound[v]} AS y{k}")
+            eqs.append(f"{t_r.bound[v]} = su.y{k}")
+        if hits:
+            joins.append(f"CROSS JOIN LATERAL (SELECT count(*) AS n FROM (SELECT 1 FROM {t_sql} WHERE "
+                         + " AND ".join(t_pend + eqs) + f" LIMIT {FAN_CAP}) z) h")
+            out.append("coalesce(sum(h.n), 0)")
+        else:
+            out.append("-1")
+        # the physical fan-out of each probe into t by object (a probe into
+        # t's subject reads one subject's leaves: 1, nothing to learn)
+        for e in conn:
+            first = e.leaf_u if e.u == t else (e.leaf_v if e.kind == "shared" else None)
+            if first is None:
+                continue
+            col = next((c for al, c in pos.positions.get(e.var, []) if al == first.alias), None)
+            if col is None:
+                continue
+            k = vars_.index(e.var)
+            fa = first.alias
+            fw = " AND ".join(pos.filters.get(fa, []) + [f"{fa}.{col} = su.y{k}"])
+            joins.append(f"CROSS JOIN LATERAL (SELECT count(*) AS n FROM (SELECT 1 FROM "
+                         f"{pos.table[fa]} AS {fa} WHERE {fw} LIMIT {FAN_CAP}) z) f{len(fans)}")
+            fans.append((e, len(out)))
+            out.append(f"coalesce(sum(f{len(fans) - 1}.n), 0)")
+    su = (f"SELECT {', '.join(cols)} FROM {s_sql} WHERE "
+          + " AND ".join(s_pend + [f"{a_col} = smp.x0"]) + f" LIMIT {FAN_CAP}")
+    sql = (f"WITH smp AS ({smp}) SELECT ARRAY[{', '.join(out)}]::float8[] AS v "
+           f"FROM smp LEFT JOIN LATERAL ({su}) su ON TRUE " + " ".join(joins))
+    from .generator import substitute_constants
+    sql = substitute_constants(sql, reg.aliases)
+    if "_const" in sql:              # an unresolved constant: matches nothing, nothing to learn
+        return None
+    return _Question(region=reg, unit=s, target=t, fans=fans, sql=sql, n=n)
+
+
+def _sample_size(reg, s: int, t: int) -> int:
+    """Source subjects to sample for a join-size question from s into t, so that
+    completing t stays within HIT_BUDGET rows. Per sampled row, the probe into t
+    reads its fan-out (stored-statistics estimate) and completes t's other
+    leaves for each. Two slot stars joined on a shared `?d` probe each other by
+    object through the whole decision graph (~888 members), and 256 samples of
+    that timed out the batch, leaving the plan on stored statistics."""
+    from . import qplan
+    fan = 1.0
+    for e in reg.edges:
+        if {e.u, e.v} == {s, t}:
+            f = qplan._probe_fan(e, t)
+            if f:
+                fan = max(fan, f)
+    per_row = fan * max(1, len(reg.units[t].leaves))
+    return int(max(MIN_N, min(SAMPLE_N, HIT_BUDGET / per_row)))
+
+
+def _hits_side(reg, i: int, j: int) -> int:
+    """Which unit of a pair to sample the join size from. Completing the other
+    unit per sampled row costs one probe per row it reaches, so: from the unit
+    holding a link into the other's subject (one row per probe), else from the
+    smaller unit. The other direction measures only its fan-out, which is an
+    index count (a decision graph's ~1,088 members, completed through a slot
+    star per member, made one question cost 10 s)."""
+    for e in reg.edges:
+        if e.kind == "link" and {e.u, e.v} == {i, j}:
+            return e.u
+    ri, rj = (reg.units[i].rows.rows or 0.0), (reg.units[j].rows.rows or 0.0)
+    return i if ri <= rj else j
+
+
+def _questions(reg) -> List[_Question]:
+    out = []
+    paired = set()
+    for e in reg.edges:
+        if e.u >= len(reg.units) or e.v >= len(reg.units):
+            continue
+        key = (min(e.u, e.v), max(e.u, e.v))
+        if key in paired:
+            continue
+        paired.add(key)
+        hs = _hits_side(reg, *key)
+        for s, t in (key, key[::-1]):
+            q = _question(reg, s, t, hits=(s == hs))
+            if q:
+                out.append(q)
+    asked = {q.unit for q in out}
+    for i, u in enumerate(reg.units):
+        if i not in asked and len(u.leaves) >= 2:
+            q = _question(reg, i, None)
+            if q:
+                out.append(q)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Running them
+# ---------------------------------------------------------------------------
+
+async def _run(sqls: List[str], conn, conn_params) -> List[Optional[List[float]]]:
+    """All questions in one statement; if that fails (a timeout, typically), each
+    on its own under a shorter timeout, so one slow question costs only its own
+    answer. A question that fails alone answers None."""
+    try:
+        return await _run_batch(sqls, conn, TIMEOUT_MS)
+    except Exception as exc:
+        logger.info("qcard: batch of %d failed (%s); asking each alone", len(sqls), type(exc).__name__)
+    out: List[Optional[List[float]]] = []
+    for s in sqls:
+        try:
+            out.append((await _run_batch([s], conn, ONE_TIMEOUT_MS))[0])
+        except Exception:
+            out.append(None)
+    return out
+
+
+async def _run_batch(sqls: List[str], conn, timeout_ms: int) -> List[List[float]]:
+    from . import db_provider as db
+    batch = " UNION ALL ".join(f"(SELECT {i} AS q, v FROM ({s}) b{i})" for i, s in enumerate(sqls))
+
+    async def go(c):
+        # A savepoint when the caller has a transaction open, so a timeout here
+        # cannot abort it; and SET, not SET LOCAL, restored after, because SET
+        # LOCAL outlives a savepoint's RELEASE (see `db_provider.bounded_lock_wait`).
+        async with c.transaction():
+            prev = await c.fetchval("SHOW statement_timeout")
+            await c.execute(f"SET statement_timeout = '{int(timeout_ms)}ms'")
+            try:
+                return await db.execute_query(batch, conn=c)
+            finally:
+                try:
+                    await c.execute(f"SET statement_timeout = '{prev}'")
+                except Exception:  # aborted: the savepoint's rollback reverts the SET
+                    logger.debug("could not restore statement_timeout to %s", prev)
+
+    if conn is not None:
+        rows = await go(conn)
+    else:
+        async with db.get_pool().acquire() as c:
+            rows = await go(c)
+    got = {r["q"]: list(r["v"]) for r in rows}
+    return [got[i] for i in range(len(sqls))]
+
+
+def _regions(q) -> list:
+    out = []
+
+    def walk(r):
+        out.append(r)
+        for o in r.optionals:
+            walk(o)
+        for a in r.antis:
+            walk(a.region)
+    walk(q.region)
+    return out
+
+
+async def annotate(q, space_id: str, conn=None, conn_params=None, rec=None) -> Dict[str, float]:
+    """Replace the stored-statistics estimates the sample can improve, in place:
+    unit rows, pair join sizes (`Region.pair_rows`), probe fan-outs (`Edge.fan`)."""
+    t0 = time.perf_counter()
+    qs = [x for r in _regions(q) for x in _questions(r)]
+    todo = [x for x in qs if (space_id, x.sql) not in _cache]
+    if todo:
+        vals = await _run([x.sql for x in todo], conn, conn_params)
+        for x, v in zip(todo, vals):
+            _cache[(space_id, x.sql)] = v
+    failed = 0
+    # the largest sample first: a unit's rows are set by the first answer for it
+    for x in sorted(qs, key=lambda x: -x.n):
+        v = _cache[(space_id, x.sql)]
+        if v is None:                # failed alone: this question keeps the stored estimates
+            failed += 1
+            continue
+        _apply(x, v)
+    for r in _regions(q):
+        _pairs(r)
+    return {"questions": len(qs), "sampled": len(todo), "failed": failed,
+            "ms": round((time.perf_counter() - t0) * 1000, 1)}
+
+
+def _apply(x: _Question, v: List[float]) -> None:
+    reg, u = x.region, x.region.units[x.unit]
+    n_anchor, s_rows = v[0], v[1]
+    anchor = u.anchor.scan.rows or n_anchor
+    exact = n_anchor < x.n
+    scale = (1.0 if exact else anchor / max(n_anchor, 1.0))
+    if len(u.leaves) >= 2 and not u.rows.rule.startswith("sample"):
+        if s_rows > 0:
+            u.rows = Est(s_rows * scale, "sample_exact" if exact else "sample")
+        elif n_anchor > 0:
+            u.rows = Est(0.0 if exact else 0.5 * scale, "sample_exact" if exact else "sample_zero")
+    if x.target is None:
+        return
+    hits = v[2]
+    if s_rows > 0 and hits >= 0:
+        if hits > 0:
+            j, rule = hits * scale, ("sample_exact" if exact else "sample")
+        else:
+            j, rule = (0.0, "sample_exact") if exact else (0.5 * scale, "sample_zero")
+        reg.pair_samples.setdefault((min(x.unit, x.target), max(x.unit, x.target)), []).append(
+            (j, rule, hits))
+    if s_rows > 0:
+        for e, k in x.fans:
+            e.fan[x.target] = v[k] / s_rows
+
+
+def _pairs(reg) -> None:
+    """One join size per unit pair: an exact sample first, else the sample
+    with more hits (more observations behind it)."""
+    for key, cands in reg.pair_samples.items():
+        best = max(cands, key=lambda c: (c[1] == "sample_exact", c[2]))
+        reg.pair_rows[key] = Est(best[0], best[1])

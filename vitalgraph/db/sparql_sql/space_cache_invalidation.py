@@ -78,6 +78,14 @@ def _ownership_cache(space_id: str) -> int:
     return len(stale)
 
 
+def _qcard_samples(space_id: str) -> int:
+    """`qcard._cache` is keyed by (space_id, question SQL), not by space alone."""
+    from vitalgraph.db.sparql_sql import qcard
+    n = sum(1 for k in qcard._cache if k[0] == space_id)
+    qcard.invalidate(space_id)
+    return n
+
+
 def _pop(module_path: str, attr: str) -> Callable[[str], int]:
     """An invalidator for a plain `{space_id: …}` module-level dict.
 
@@ -135,6 +143,12 @@ CACHE_INVALIDATORS: List[Tuple[str, Callable[[str], int]]] = [
      _pop("vitalgraph.vectorization.index_sync_trigger", "_CACHE")),
     ("maintenance_job._recompute_slot",
      _pop("vitalgraph.process.maintenance_job", "_recompute_slot")),
+    # The planner's caches (planning_planner/09). A "no verdict table" carried
+    # to a re-created id would withhold verdicts for a minute; sampled join
+    # sizes carried to it would describe the old data.
+    ("pattern_verdict._MISSING",
+     _pop("vitalgraph.db.sparql_sql.pattern_verdict", "_MISSING")),
+    ("qcard._cache", _qcard_samples),
     # issues/263: a residue's cycle count and its "already tried at this drift"
     # mark describe one space's table; carried to a renamed id they would delay
     # or suppress its repair.

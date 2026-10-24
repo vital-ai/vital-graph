@@ -2045,6 +2045,7 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
     from .collect import collect
     from .emit import emit
     from .ir import AliasGenerator
+    from .planner_ext import exists_alias_prefix
     from .var_scope import compute_scope
 
     gp = expr.graph_pattern
@@ -2061,7 +2062,7 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
         inner_aliases = expr.prepared_aliases
         _share_planning_stats(ctx.aliases, inner_aliases)
     else:
-        inner_aliases = AliasGenerator(alias_prefix="ex_")
+        inner_aliases = AliasGenerator(alias_prefix=exists_alias_prefix())
         inner_plan = collect(gp, ctx.space_id, inner_aliases,
                              graph_uri=ctx.graph_lock_uri)
 

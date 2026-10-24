@@ -790,6 +790,13 @@ class MaintenanceJob:
             if agree_result:
                 summary["type_agreement"] = agree_result
 
+            # --- Pattern verdicts: decide the implications the planner asked about ---
+            # Only spaces with the write log; a full check each, never on the
+            # query path (`pattern_verdict`).
+            verdict_result = await self._run_pattern_verdict_refresh(list(stats.keys()))
+            if verdict_result:
+                summary["pattern_verdicts"] = verdict_result
+
             # --- Stats: ONE recompute, replacing integrity + prune + rebuild ---
             stats_result = await self._run_stats_recompute(list(stats.keys()))
             if stats_result:
@@ -1838,6 +1845,33 @@ class MaintenanceJob:
             return None
         return {"scanned": scanned,
                 "skipped": len(results) - len(scanned)}
+
+    async def _run_pattern_verdict_refresh(self, space_ids: List[str]) -> Optional[Dict]:
+        """Decide pending and out-of-date pattern verdicts (`pattern_verdict`).
+
+        A verdict says a query pattern is implied by others, so the planner may
+        drop it. It is a full check for a counterexample, which is why it runs
+        here and not on the query path, under the maintenance budget. It is
+        valid only while the space's write log is unchanged, so on a space
+        taking writes it goes out of date and is checked again next cycle.
+        A space without the write log or the table is skipped for a catalog read.
+        """
+        if not self._pool:
+            return None
+        from vitalgraph.db.sparql_sql.pattern_verdict import refresh
+        out: Dict[str, List[Dict]] = {}
+        for sid in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    async with maintenance_timeouts(conn):
+                        got = await refresh(conn, sid)
+                if got:
+                    out[sid] = got
+            except Exception as exc:
+                # One space must not stop the rest; its verdicts stay out of
+                # date, which reads as "keep the pattern".
+                logger.warning("Pattern verdict refresh failed for %s: %s", sid, exc)
+        return out or None
 
     async def _run_stats_recompute(self, space_ids: List[str],
                                    force: bool = False) -> Optional[Dict]:

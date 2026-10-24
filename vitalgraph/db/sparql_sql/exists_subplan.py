@@ -36,6 +36,7 @@ import logging
 from typing import Any, List, Optional
 
 from .ir import PlanV2, AliasGenerator
+from .planner_ext import exists_alias_prefix
 from .space_names import space_prefix
 
 logger = logging.getLogger(__name__)
@@ -128,8 +129,10 @@ async def prepare_exists_subplans(plan: PlanV2, space_id: str, *,
             # The "ex_" prefix is what keeps inner column names from colliding
             # with outer ones, which is what makes an unbound inner variable
             # resolve to the enclosing row instead of shadowing it. Preserved
-            # exactly as the emit path had it.
-            inner_aliases = AliasGenerator(alias_prefix="ex_")
+            # exactly as the emit path had it. With the planner switch on each
+            # body's prefix is also unique ("ex1_", ...), so advice can name
+            # its relations (`planner_ext.exists_alias_prefix`).
+            inner_aliases = AliasGenerator(alias_prefix=exists_alias_prefix())
             # graph_uri is NOT optional: the emit-time path passes
             # ctx.graph_lock_uri, and omitting it here would let the body match
             # quads in every graph while the outer query is locked to one —

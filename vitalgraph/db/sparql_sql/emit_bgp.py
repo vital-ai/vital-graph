@@ -163,7 +163,8 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
         # probes, 279 ms -> 4,055 ms. Pricing the groups as units in the model's
         # own C_out chose the groups on every dashboard BGP where both applied
         # (`group_cost_probe.py`), so the rule is the precedence itself.
-        regrouped = _slot_group_ctes(
+        from . import planner_ext
+        regrouped = None if planner_ext.retired("slot_group_cte") else _slot_group_ctes(
             plan, ctx, quad_tables, tagged, inner_cols, leaf_card)
         if regrouped is not None and model_order:
             # The order is displaced, but the statement-wide pin it would have
@@ -216,6 +217,12 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
         else:
             inner_parts.append(f"FROM {first_t.table_name} AS {first_t.alias}")
             other_first_conds = first_conds  # nothing was split off
+        # The vg_planner extension's advice for this BGP: its written order
+        # and the model's row estimates. Only with the switch on, and only
+        # for plain relations (a text anchor's subquery and slot-group CTE
+        # columns are not relations the extension can size).
+        if regrouped is None and not text_conds:
+            _record_plan_advice(plan, ctx, quad_tables, leaf_card, ordered)
 
         for qt in ordered[1:]:
             conds = on_map.get(qt.alias)
@@ -236,6 +243,36 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
             inner_parts.append("WHERE " + " AND ".join(plan.constraints))
 
     return cte_sql + "\n".join(inner_parts)
+
+
+def _record_plan_advice(plan: PlanV2, ctx: EmitContext, quad_tables, leaf_card,
+                        ordered) -> None:
+    """Record the BGP's written order and the model's prefix estimates for the
+    vg_planner extension (`planner_ext`). A no-op with the switch off. Never
+    fails the query: a BGP without advice is planned as today."""
+    from . import planner_ext
+    if not planner_ext.active() or len(ordered) < 2:
+        return
+    from .bgp_cardinality import PRICED_KINDS, estimate_order, leaves_from
+    if any(t.kind not in PRICED_KINDS for t in quad_tables):
+        return
+    consts = getattr(ctx.aliases, "constants", None) or {}
+    resolved = getattr(ctx.aliases, "resolved_constants", None) or {}
+
+    def uuid_of(term):
+        col = consts.get(_widen_term(term))
+        return resolved.get(col) if col else None
+
+    try:
+        order = [t.alias for t in ordered]
+        leaves = leaves_from(plan, ctx.aliases, quad_tables, leaf_card, uuid_of)
+        if any(a not in leaves for a in order):
+            return
+        bound = sorted(set(getattr(ctx, "correlated_scope", None) or ())
+                       & set(plan.var_slots))
+        planner_ext.record_bgp(order, estimate_order(plan, leaves, order, bound))
+    except Exception as exc:
+        logger.warning("planner advice not recorded for a BGP: %s", exc)
 
 
 def _model_join_order(plan: PlanV2, ctx: EmitContext, quad_tables, leaf_card):

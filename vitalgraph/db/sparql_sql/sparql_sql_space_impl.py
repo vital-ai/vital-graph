@@ -112,10 +112,26 @@ async def _apply_join_order(conn, gen) -> None:
     re-plans the order from its own estimates, which are what the model
     corrects: a probe estimated at ~10 rows that returns ~1,000, a pair
     estimated at 1 that holds 1,159. Postgres still chooses the join METHODS.
-    SET LOCAL: scoped to this statement's transaction.
+    SET LOCAL: the CALLER holds the transaction it is scoped to.
     """
     if getattr(gen, "fixed_join_order", False):
+        from . import planner_ext
+        if (getattr(gen, "plan_advice", None) and planner_ext.RETIRED["jcl_pin"]
+                and getattr(gen, "plan_source", None) != "qtree"):
+            return          # the advice carries the order (planner_ext.RETIRED)
+        # A qtree plan's written JOIN nesting IS the plan: always kept.
         await conn.execute("SET LOCAL join_collapse_limit = 1")
+
+
+async def _apply_planner_advice(conn, gen) -> None:
+    """With advice in the statement (`planner_ext`), say what the extension
+    does with an item it cannot apply: fail under `require`, warn otherwise.
+    SET LOCAL, like the other read-path settings: the CALLER holds the
+    transaction. No advice: nothing."""
+    if getattr(gen, "plan_advice", None):
+        from . import planner_ext
+        await conn.execute(
+            f"SET LOCAL vg_planner.on_mismatch = '{planner_ext.on_mismatch()}'")
 
 
 async def _apply_read_fence(conn) -> None:
@@ -2505,10 +2521,26 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 t_acquired = _time.monotonic()
                 _marks["acquire"] = t_acquired
                 _stage = "generate"
+                # The planner-extension switch (`planner_ext`): off by default,
+                # and then this is False and generation is today's, exactly.
+                from . import planner_ext as _pext
+                _ext = (await _pext.detect(conn, self._db._pool)
+                        if _pext.MODE != "off" else False)
                 gen = await generate_sql(
                     cr, space_id, conn=conn,
                     multi_vector_config=kwargs.get('multi_vector_config'),
+                    planner_ext=_ext,
                 )
+                # A plan that relies on a stored pattern verdict must run in a
+                # snapshot where the space is unchanged since the verdict
+                # (`pattern_verdict`), which takes a REPEATABLE READ
+                # transaction of our own. Inside a caller's transaction there
+                # is none to be had: plan again without verdicts.
+                if gen.ok and getattr(gen, 'verdict_guard', None) and conn.is_in_transaction():
+                    gen = await generate_sql(
+                        cr, space_id, conn=conn,
+                        multi_vector_config=kwargs.get('multi_vector_config'),
+                        planner_ext=_ext, planner_verdicts=False)
                 if not gen.ok:
                     # Only `cr.ok` was checked, so a REFUSED generation fell
                     # through with sql=None and the caller received an ordinary
@@ -2520,68 +2552,106 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     logger.warning("SPARQL generation failed: %s", gen.error)
                     return {'results': {'bindings': []}, 'success': False,
                             'error': gen.error}
-                sql = gen.sql
                 var_map = gen.var_map or {}
                 t_gen = _time.monotonic()
                 _marks["generate"] = t_gen
                 _stage = "resolve"
 
-                # Resolve vector placeholders (vg:vectorSimilarity)
-                if gen.vector_requests:
-                    from .vg_resolve import resolve_vector_requests
-                    sql = await resolve_vector_requests(
-                        sql, gen.vector_requests, space_id, conn)
+                async def _prepare(gen):
+                    sql = gen.sql
+                    # Resolve vector placeholders (vg:vectorSimilarity)
+                    if gen.vector_requests:
+                        from .vg_resolve import resolve_vector_requests
+                        sql = await resolve_vector_requests(
+                            sql, gen.vector_requests, space_id, conn)
 
-                # Resolve fuzzy placeholders (vg:fuzzyMatch)
-                if gen.fuzzy_requests:
-                    from .vg_resolve import resolve_fuzzy_requests
-                    sql = await resolve_fuzzy_requests(
-                        sql, gen.fuzzy_requests, space_id, conn)
+                    # Resolve fuzzy placeholders (vg:fuzzyMatch)
+                    if gen.fuzzy_requests:
+                        from .vg_resolve import resolve_fuzzy_requests
+                        sql = await resolve_fuzzy_requests(
+                            sql, gen.fuzzy_requests, space_id, conn)
 
-                if 'ORDER BY' in query.upper() and 'MIN' in query.upper():
-                    logger.info("DEBUG multi-value sort SQL:\n%s", sql)
+                    if 'ORDER BY' in query.upper() and 'MIN' in query.upper():
+                        logger.info("DEBUG multi-value sort SQL:\n%s", sql)
 
-                # ASK only needs to know whether any row matches. The generator
-                # does not specialise on query_type, so without this the query
-                # materialises every matching row to answer a yes/no question.
-                # SPARQL forbids solution modifiers on ASK, so there is no
-                # LIMIT/OFFSET/ORDER BY in the inner SQL to disturb.
-                if cr.meta.query_type == 'ASK':
-                    sql = f"SELECT EXISTS (SELECT 1 FROM ({sql}) _ask_sub) AS _ask_result"
+                    # ASK only needs to know whether any row matches. The generator
+                    # does not specialise on query_type, so without this the query
+                    # materialises every matching row to answer a yes/no question.
+                    # SPARQL forbids solution modifiers on ASK, so there is no
+                    # LIMIT/OFFSET/ORDER BY in the inner SQL to disturb.
+                    if cr.meta.query_type == 'ASK':
+                        sql = f"SELECT EXISTS (SELECT 1 FROM ({sql}) _ask_sub) AS _ask_result"
+                    # The advice comment must LEAD the statement: the extension reads
+                    # it from the start of the query text.
+                    if getattr(gen, 'plan_advice', None):
+                        sql = gen.plan_advice + "\n" + sql
+                    return sql
+
+                async def _execute(gen, sql):
+                    if gen.needs_ordered_scan:
+                        # This plan is O(page) only while PostgreSQL drives it from
+                        # an ordered scan that stops at the LIMIT. Its cost model
+                        # prorates that scan's total by the LIMIT assuming matching
+                        # rows are spread uniformly, which for a 96%-selective
+                        # criterion is wrong by nearly the whole scan — so above a
+                        # data-dependent row count it switches to a blocking Sort
+                        # and probes every candidate. Measured 48s for a 100-row
+                        # page against 2ms for 50, and 51-130s for a capped count.
+                        #
+                        # enable_sort is a discouragement, not a prohibition: if a
+                        # sort is genuinely the only way to plan the query, the
+                        # planner still uses one. So this cannot make the statement
+                        # unplannable — it only removes the cheap-looking blocking
+                        # alternative. SET LOCAL keeps it to this transaction.
+                        #
+                        # A GUC rather than pg_hint_plan because the hint that
+                        # would fix the cause — Rows(), correcting the estimate —
+                        # does not apply here: the EXISTS runs as a SubPlan filter,
+                        # with no join relation to correct. See issues/047.
+                        async with conn.transaction():
+                            await _apply_read_fence(conn)
+                            await conn.execute("SET LOCAL enable_sort = off")
+                            await _apply_join_order(conn, gen)
+                            await _apply_planner_advice(conn, gen)
+                            rows = await conn.fetch(sql)
+                    else:
+                        # Same transaction wrapper purely so `SET LOCAL` scopes to
+                        # this statement and cannot leak onto the pooled connection.
+                        async with conn.transaction():
+                            await _apply_read_fence(conn)
+                            await _apply_join_order(conn, gen)
+                            await _apply_planner_advice(conn, gen)
+                            rows = await conn.fetch(sql)
+                    return rows
+
+                sql = await _prepare(gen)
                 _stage = "execute"
-
-                if gen.needs_ordered_scan:
-                    # This plan is O(page) only while PostgreSQL drives it from
-                    # an ordered scan that stops at the LIMIT. Its cost model
-                    # prorates that scan's total by the LIMIT assuming matching
-                    # rows are spread uniformly, which for a 96%-selective
-                    # criterion is wrong by nearly the whole scan — so above a
-                    # data-dependent row count it switches to a blocking Sort
-                    # and probes every candidate. Measured 48s for a 100-row
-                    # page against 2ms for 50, and 51-130s for a capped count.
-                    #
-                    # enable_sort is a discouragement, not a prohibition: if a
-                    # sort is genuinely the only way to plan the query, the
-                    # planner still uses one. So this cannot make the statement
-                    # unplannable — it only removes the cheap-looking blocking
-                    # alternative. SET LOCAL keeps it to this transaction.
-                    #
-                    # A GUC rather than pg_hint_plan because the hint that
-                    # would fix the cause — Rows(), correcting the estimate —
-                    # does not apply here: the EXISTS runs as a SubPlan filter,
-                    # with no join relation to correct. See issues/047.
-                    async with conn.transaction():
-                        await _apply_read_fence(conn)
-                        await conn.execute("SET LOCAL enable_sort = off")
-                        await _apply_join_order(conn, gen)
-                        rows = await conn.fetch(sql)
-                else:
-                    # Same transaction wrapper purely so `SET LOCAL` scopes to
-                    # this statement and cannot leak onto the pooled connection.
-                    async with conn.transaction():
-                        await _apply_read_fence(conn)
-                        await _apply_join_order(conn, gen)
-                        rows = await conn.fetch(sql)
+                rows = None
+                if getattr(gen, 'verdict_guard', None):
+                    # The guard and the query in ONE snapshot: a write that
+                    # lands between them is either visible to both or to
+                    # neither. Read only, so it can never fail to serialise.
+                    from .pattern_verdict import guard_holds
+                    async with conn.transaction(isolation='repeatable_read', readonly=True):
+                        if await guard_holds(conn, gen.verdict_guard[0], gen.verdict_guard[1:]):
+                            await _apply_read_fence(conn)
+                            await _apply_join_order(conn, gen)
+                            await _apply_planner_advice(conn, gen)
+                            rows = await conn.fetch(sql)
+                    if rows is None:
+                        # The space changed since the verdict: plan again without it.
+                        logger.info("pattern verdict out of date for %s; planning without", space_id)
+                        gen = await generate_sql(
+                            cr, space_id, conn=conn,
+                            multi_vector_config=kwargs.get('multi_vector_config'),
+                            planner_ext=_ext, planner_verdicts=False)
+                        if not gen.ok:
+                            return {'results': {'bindings': []}, 'success': False,
+                                    'error': gen.error}
+                        var_map = gen.var_map or {}
+                        sql = await _prepare(gen)
+                if rows is None:
+                    rows = await _execute(gen, sql)
                 t_exec = _time.monotonic()
                 _marks["execute"] = t_exec
                 _stage = "convert"
