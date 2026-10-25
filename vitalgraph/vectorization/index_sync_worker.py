@@ -28,6 +28,7 @@ connection. `VG_INDEX_SYNC_CONSUMERS` overrides it.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import socket
@@ -65,31 +66,56 @@ WHERE context_uuid = $1 AND subject_uuid = ANY($2::uuid[])
 # changes no slot quad, so the trigger queues only the edge. This adds the geo
 # slots such an edge reaches, so their attribution is re-derived. Only GEO
 # slots: re-syncing every slot would re-embed them for nothing.
-_GEO_SLOTS_OF_EDGES_SQL = """
+#
+# THE TYPES ARE LITERALS, NOT PARAMETERS (`issues/309`). asyncpg prepares this
+# once per connection, and PostgreSQL may switch a prepared statement to a
+# GENERIC plan after five runs. With the six type URIs passed as `$3`-`$8`, the
+# generic plan priced each type lookup at ~11 rows by default selectivity,
+# nested loops through every `Edge_hasKGSlot` of the graph (3,984,555 on the
+# largest production space), and lost the early exit on the geo-slot side:
+# 26,954 calls at a mean 4.4 s and ~3.7M buffers, 926 more cancelled at 60 s,
+# 0 rows every time. Custom-planned, the same batch took 3.3 ms. Only the graph
+# and the subjects vary per call.
+#
+# `geo` guards the whole statement: uncorrelated, it is one InitPlan evaluated
+# first, and a graph with no geo slot (most of them) skips everything else
+# whatever plan was chosen.
+_GEO_SLOTS_OF_EDGES_TEMPLATE = """
 WITH e AS (
   SELECT q.subject_uuid AS edge, q.object_uuid AS etype FROM {quad} q
   WHERE q.context_uuid = $1 AND q.subject_uuid = ANY($2::uuid[])
-    AND q.predicate_uuid = $3 AND q.object_uuid = ANY(ARRAY[$4, $5]::uuid[])
+    AND q.predicate_uuid = '{vt}'::uuid AND q.object_uuid IN ('{se}'::uuid, '{fe}'::uuid)
 ), d AS (
   SELECT e.etype, q.object_uuid AS dest FROM e
   JOIN {quad} q ON q.subject_uuid = e.edge AND q.context_uuid = $1
-               AND q.predicate_uuid = $7
+               AND q.predicate_uuid = '{dst}'::uuid
 ), slots AS (
-  SELECT dest AS slot FROM d WHERE etype = $4
+  SELECT dest AS slot FROM d WHERE etype = '{se}'::uuid
   UNION
   SELECT qd.object_uuid FROM d
-  JOIN {quad} qs ON qs.context_uuid = $1 AND qs.predicate_uuid = $6
+  JOIN {quad} qs ON qs.context_uuid = $1 AND qs.predicate_uuid = '{src}'::uuid
                 AND qs.object_uuid = d.dest
   JOIN {quad} qt ON qt.subject_uuid = qs.subject_uuid AND qt.context_uuid = $1
-                AND qt.predicate_uuid = $3 AND qt.object_uuid = $4
+                AND qt.predicate_uuid = '{vt}'::uuid AND qt.object_uuid = '{se}'::uuid
   JOIN {quad} qd ON qd.subject_uuid = qs.subject_uuid AND qd.context_uuid = $1
-                AND qd.predicate_uuid = $7
-  WHERE d.etype = $5
+                AND qd.predicate_uuid = '{dst}'::uuid
+  WHERE d.etype = '{fe}'::uuid
 )
 SELECT DISTINCT s.slot FROM slots s
 JOIN {quad} g ON g.subject_uuid = s.slot AND g.context_uuid = $1
-             AND g.predicate_uuid = $3 AND g.object_uuid = $8
+             AND g.predicate_uuid = '{vt}'::uuid AND g.object_uuid = '{geo}'::uuid
+WHERE EXISTS (SELECT 1 FROM {quad} x WHERE x.context_uuid = $1
+                AND x.predicate_uuid = '{vt}'::uuid AND x.object_uuid = '{geo}'::uuid)
 """
+
+
+@functools.lru_cache(maxsize=None)
+def _geo_slots_of_edges_sql(quad: str) -> str:
+    """The geo-slot lookup for one quad table, its types filled in as literals.
+    Only `$1` (graph) and `$2` (subjects) remain parameters."""
+    return _GEO_SLOTS_OF_EDGES_TEMPLATE.format(
+        quad=quad, vt=_uuid(_VITALTYPE), se=_uuid(_SLOT_EDGE), fe=_uuid(_FRAME_EDGE),
+        src=_uuid(_EDGE_SRC), dst=_uuid(_EDGE_DST), geo=_uuid(_GEO_SLOT))
 
 
 async def resolve(conn, space_id: str, context_uuid: uuid.UUID,
@@ -106,10 +132,12 @@ async def resolve(conn, space_id: str, context_uuid: uuid.UUID,
     absent = [s for s in subject_uuids if s not in present]
     upsert = list(present)
     if present:
-        extra = {r["slot"] for r in await conn.fetch(
-            _GEO_SLOTS_OF_EDGES_SQL.format(quad=quad), context_uuid, upsert,
-            _uuid(_VITALTYPE), _uuid(_SLOT_EDGE), _uuid(_FRAME_EDGE),
-            _uuid(_EDGE_SRC), _uuid(_EDGE_DST), _uuid(_GEO_SLOT))}
+        # Custom-planned every call as well (`issues/309`): planning it costs
+        # well under a millisecond, and a generic plan is what made it slow.
+        async with conn.transaction():
+            await conn.execute("SET LOCAL plan_cache_mode = force_custom_plan")
+            extra = {r["slot"] for r in await conn.fetch(
+                _geo_slots_of_edges_sql(quad), context_uuid, upsert)}
         upsert += [s for s in extra if s not in present]
     return upsert, absent
 

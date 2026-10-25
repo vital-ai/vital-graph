@@ -1,6 +1,6 @@
 # 309 — Index sync on the largest space keeps hitting production's 60 s statement timeout
 
-## Status: OPEN — root cause found and reproduced 2026-10-25 (a generic cached plan); fix proposed, not started.
+## Status: FIXED 2026-10-25, not yet released (verified read-only against production). Open for: the post-deploy check (`pg_stat_statements` for the lookup, the worker's timeout warnings).
 
 **Related:** `issues/291` (the index-sync queue and its trigger), `issues/294`
 (the consumer deadlock, fixed: 17 `DeadlockDetectedError` in the 29 h before
@@ -142,3 +142,38 @@ holds 5.3M edges) with `PREPARE` + `force_generic_plan`; after deploy,
 Follow-up audit: other asyncpg-prepared statements on the quad tables that
 pass constants as parameters (the worker, `auto_sync`, maintenance) share the
 risk.
+
+## Fix as built (2026-10-25)
+
+`index_sync_worker`:
+
+- `_GEO_SLOTS_OF_EDGES_TEMPLATE` / `_geo_slots_of_edges_sql(quad)`: the six
+  types are literal uuids, built once per quad table (`lru_cache`), so only
+  `$1` (graph) and `$2` (subjects) are parameters.
+- A top-level `WHERE EXISTS (geo slot of type KGGeoLocationSlot in $1)`:
+  uncorrelated, one InitPlan evaluated first, so a graph without geo slots
+  skips the statement whatever plan it gets.
+- `resolve()` runs it in a transaction with `SET LOCAL plan_cache_mode =
+  force_custom_plan`.
+
+**Verified, read-only against production**, with the 50-subject batch that
+timed out there, SQL `PREPARE` + `EXPLAIN (ANALYZE, BUFFERS) EXECUTE`:
+
+| | old SQL | new SQL |
+|---|---|---|
+| custom plan | 3.3 ms | 5.5 ms, 8 buffers |
+| generic plan | **> 90 s (timeout)** | **2.1 ms, 5 buffers** |
+
+No production space has any geo slots (checked every space), so there the
+guard ends every call. A space with geo slots runs the full lookup with the
+types known to the planner. Its correctness is pinned by
+`test_an_edge_change_reaches_the_geo_slot_it_points_at`; its speed at scale
+could not be measured, because no space here or on production has geo slots.
+
+Tests: `tests/unit/test_index_sync_geo_lookup.py` (literals, parameters, the
+guard); `test_index_sync_trigger.py` and `test_index_sync_queue.py`, 22
+passed; the vectorization / index-sync integration set, 27 passed.
+
+After deploy: `pg_stat_statements` for the lookup (mean was 4,373 ms over
+26,954 calls) and the worker's `QueryCanceledError` warnings (about 900 per
+29 h) should both drop to near zero.
