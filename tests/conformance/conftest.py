@@ -222,3 +222,29 @@ def _route_through_planner():
         return await real_exec(sql, params, conn_params, conn, **kw)
 
     dbp.execute_query = execute
+
+    # ... and on a space that has STATISTICS, as a real one does. The harness loads
+    # each test's data with neither rdf_stats nor ANALYZE, so every pattern without
+    # a constant object was unpriced and declined (~170 queries): a coverage figure
+    # about the harness, not the planner. Recomputed when a test loads new data.
+    from vitalgraph_sparql_sql_dev.dawg_test_impl import dawg_sql_v2_executor as X
+    from vitalgraph_sparql_sql_dev.dawg_test_impl import dawg_test_runner as TR
+    real_run = X.execute_query_via_v2_pipeline
+    seen = {"key": object()}
+
+    async def run(sparql, *a, **kw):
+        conn, space = kw.get("conn"), kw.get("space_id", "dawg_test")
+        key = getattr(TR.run_single_test_sql_v2, "_cache_key", None)
+        if conn is not None and key != seen["key"]:
+            from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
+            from vitalgraph.db.sparql_sql.space_names import space_prefix
+            from vitalgraph.db.sparql_sql.generator import invalidate_stats_cache
+            from vitalgraph.db.sparql_sql import qcard
+            await recompute_stats_tables(conn, space)
+            await conn.execute(f"ANALYZE {space_prefix(space)}_rdf_quad")
+            invalidate_stats_cache(space)
+            qcard.invalidate(space)
+            seen["key"] = key
+        return await real_run(sparql, *a, **kw)
+
+    X.execute_query_via_v2_pipeline = run

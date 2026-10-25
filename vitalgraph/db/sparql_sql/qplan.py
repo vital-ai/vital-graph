@@ -80,6 +80,12 @@ class Region:
     # (a high-rated slot's edge always belongs to the MQL frame: 11-20x low on the
     # KGQuery edge chains); a prefix sampled as a whole does not.
     path_rows: Dict[int, Est] = field(default_factory=dict)
+    # FILTER expressions over the region's own rows (a comparison, IN, a string or
+    # date function, ...), evaluated on VALUE columns (`_filter_level`, render).
+    filters: List[Any] = field(default_factory=list)
+    # `?v != <iri>`: a term-identity test, rendered on the uuid column (var, uuid or
+    # None for an IRI the term table does not hold, which every bound ?v differs from)
+    iri_ne: List[Tuple[str, Optional[str]]] = field(default_factory=list)
 
 
 @dataclass
@@ -283,7 +289,8 @@ def _is_having(p, q) -> bool:
 
 
 def _region(p, ctx, aliases, outer_vars: Set[str], exclude: frozenset = frozenset()) -> Region:
-    parts = {"leaves": [], "values": {}, "plans": [], "optionals": [], "antis": [], "exclude": exclude, "ctx": ctx}
+    parts = {"leaves": [], "values": {}, "plans": [], "optionals": [], "antis": [], "exclude": exclude, "ctx": ctx,
+             "filters": [], "iri_ne": []}
     _collect(p, ctx, aliases, parts, outer_vars)
     r = _build_region(parts, ctx, aliases)
     return r
@@ -351,8 +358,39 @@ def _collect(p, ctx, aliases, parts, outer_vars):
                 shim = _Shim(e.prepared_aliases)
                 br = _region(body, shim, e.prepared_aliases, outer_vars)
                 parts["antis"].append(Anti(region=br, correlated=[], filters=filters))
+            elif type(e).__name__ == "ExprExists":
+                raise Unsupported("FILTER EXISTS (planning_planner/13, C2)")
             else:
-                raise Unsupported(f"FILTER {type(e).__name__}")
+                # A FILTER reads only its own group: a variable bound only OUTSIDE it is
+                # unbound inside (an error, so false), and joining first would bind it.
+                from .var_scope import compute_scope
+                visible = compute_scope(p.children[0]).all_visible
+                if _expr_vars(e) - set(visible):
+                    raise Unsupported("a FILTER reads a variable its group does not bind")
+                if _expr_has_exists(e):
+                    raise Unsupported("FILTER with EXISTS inside an expression (C2)")
+                for c in _conjuncts(e):
+                    ne = _iri_exclusion(c, aliases)
+                    if ne is not None:
+                        # `?p != <iri>`: on the uuid, no term row needed (the entity-graph
+                        # fetch joined a term row for every ?p to compare text: 52 -> 64 ms)
+                        parts["iri_ne"].append(ne)
+                        continue
+                    r = _iri_restriction(c, aliases)
+                    if r is None:
+                        parts["filters"].append(c)
+                        continue
+                    # `?v IN (<iri>, ...)`, `?v = <iri>`, sameTerm: for IRIs, equality is
+                    # term identity, so this IS a VALUES restriction, priced from the stored
+                    # pairs and pushed into the patterns holding ?v. As a FILTER after the
+                    # joins it read every quad first: `?s ?p ?o FILTER(?s IN (...))` 1.2 ms
+                    # today, 1,792 ms planned.
+                    v, uuids = r
+                    if v in parts["values"]:
+                        uuids = [u for u in uuids if u in set(parts["values"][v])]
+                    if not uuids:
+                        raise Unsupported("a FILTER restricts to terms absent from the term table (the generator's empty path)")
+                    parts["values"][v] = uuids
     elif p.kind == KIND_PROJECT:
         # a grouped sub-SELECT joined into the pattern: one leaf, its own plan
         parts["leaves"].append(_subq_leaf(p, parts["ctx"], parts["exclude"]))
@@ -386,6 +424,10 @@ def _build_region(parts, ctx, aliases) -> Region:
     for l in leaves:
         if l.kind == "quad" and ((l.o_const and l.o_uuid is None) or (l.pred and l.pred_uuid is None)):
             raise Unsupported("a pattern constant absent from the term table (the generator's empty path)")
+        if l.kind == "quad" and l.pred is None and l.s_fan is None:
+            # a variable predicate the totals could not price (a space with no
+            # statistics yet): its rows per subject are unknown, never guessed
+            raise Unsupported("a variable-predicate pattern on a space without statistics")
     values = parts["values"]
     # VALUES pins: a leaf whose object is the VALUES variable is restricted to
     # those terms, priced exactly from rdf_stats where the pairs are stored.
@@ -394,8 +436,15 @@ def _build_region(parts, ctx, aliases) -> Region:
     extra = getattr(a, "extra_quad_stats", None) or {}
     for var, uuids in values.items():
         holders = [l for l in leaves if any(v == var for _c, v in l.o_vars)]
-        if not holders:
+        subject_holders = [l for l in leaves if l.s_var == var]
+        if not holders and not subject_holders:
             raise Unsupported(f"VALUES ?{var} binds no pattern")
+        for l in subject_holders:
+            # restricted on its SUBJECT: those subjects' rows of the pattern
+            per = l.s_fan or 1.0
+            rows = len(uuids) * per
+            if l.scan.rows is None or rows < l.scan.rows:
+                l.scan = Est(rows, "values")
         for l in holders:
             if not l.pred_uuid:
                 continue
@@ -440,7 +489,147 @@ def _build_region(parts, ctx, aliases) -> Region:
                         if vi == vj and vi not in subj:
                             edges.append(Edge(i, j, vi, "shared", li, lj, col_u=ci, col_v=cj))
     return Region(units=units, edges=edges, values=values, plans=parts["plans"],
-                  aliases=aliases, optionals=parts["optionals"], antis=parts["antis"])
+                  aliases=aliases, optionals=parts["optionals"], antis=parts["antis"],
+                  filters=parts.get("filters", []), iri_ne=parts.get("iri_ne", []))
+
+
+def _conjuncts(e) -> List[Any]:
+    """`a && b && c` as [a, b, c]."""
+    if type(e).__name__ == "ExprFunction" and e.name in ("and", "logical-and") and len(e.args) == 2:
+        return _conjuncts(e.args[0]) + _conjuncts(e.args[1])
+    return [e]
+
+
+def _iri_exclusion(e, aliases):
+    """(?v, uuid or None) for `?v != <iri>` / `<iri> != ?v`, or None. For an IRI,
+    != is the negation of term identity, so it is a uuid comparison; an unbound
+    ?v is false either way (SPARQL: an error; SQL: NULL <> x is NULL)."""
+    if type(e).__name__ != "ExprFunction" or e.name != "ne" or len(e.args or []) != 2:
+        return None
+    a, b = e.args
+    if type(a).__name__ != "ExprVar":
+        a, b = b, a
+    if type(a).__name__ != "ExprVar" or type(b).__name__ != "ExprValue" \
+            or type(getattr(b, "node", None)).__name__ != "URINode":
+        return None
+    # The term's uuid is deterministic (uuid5 of the IRI), whether or not the term
+    # table holds it; an IRI it does not hold is matched by no row, so `v <> uuid` is
+    # true for every bound ?v, as SPARQL says. (A FILTER's IRIs are not registered as
+    # constants: the generator compares them as text.)
+    from .bgp_cardinality import _iri_uuid
+    return a.var, _iri_uuid(b.node.value)
+
+
+def _iri_restriction(e, aliases) -> Optional[Tuple[str, List[str]]]:
+    """(?v, term uuids) for `?v IN (<iri>, ...)`, `?v = <iri>` / `<iri> = ?v` or
+    `sameTerm(?v, <iri>)` where every constant is an IRI, or None. IRIs only: a
+    literal `=` compares VALUES ("1"^^xsd:int = "1.0"^^xsd:decimal), not terms.
+    An IRI the term table does not hold matches nothing and is dropped."""
+    if type(e).__name__ != "ExprFunction" or e.name not in ("in", "eq", "sameterm"):
+        return None
+    args = list(e.args or [])
+    if len(args) < 2:
+        return None
+    if e.name != "in" and type(args[0]).__name__ != "ExprVar":
+        args = [args[1], args[0]]
+    if type(args[0]).__name__ != "ExprVar":
+        return None
+    consts = args[1:]
+    if not all(type(c).__name__ == "ExprValue" and type(getattr(c, "node", None)).__name__ == "URINode"
+               for c in consts):
+        return None
+    # deterministic uuids (uuid5 of the IRI): an IRI the term table does not hold
+    # matches nothing, which is what SPARQL says of it
+    from .bgp_cardinality import _iri_uuid
+    return args[0].var, [_iri_uuid(c.node.value) for c in consts]
+
+
+def _filter_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: List[str],
+                  distinct: bool, term_table: str) -> str:
+    """The region's rows with its FILTERs applied, as a level of keys.
+
+    VALUE COLUMNS (planning_planner/13, C1.2): the planner carries term uuids only,
+    and a FILTER needs values. Each variable a FILTER reads gets its term row's
+    columns under the generator's own companion names (text, type, lang, datatype,
+    number, boolean, date; `TypeRegistry.term_table_columns`), and the expression
+    is translated by the GENERATOR's translator over them (`expr_to_sql`, with a
+    registry naming those columns). One translator: the planner and the generator
+    cannot disagree on a SPARQL function, its type errors or its collations.
+
+    A FILTER is applied over the whole region (its group, its OPTIONALs included,
+    as SPARQL scopes it); PostgreSQL pushes a condition down to the scan it reads."""
+    from .emit_bgp import (_BOOLEAN_DT, _DATETIME_DATATYPES, _NUMERIC_DATATYPES,
+                           _NUMERIC_DT_SQL_LIST)
+    from .emit_expressions import ebv_sql
+    from .sql_type_generation import ColumnInfo, TypeRegistry
+    fvars = sorted(set().union(*(_expr_vars(e) for e in reg.filters)))
+    for v in fvars:
+        if v not in r.bound:
+            raise Unsupported(f"a FILTER reads ?{v}, which the plan does not bind")
+    # The core joins first, as their own level, fenced (OFFSET 0): the term rows for
+    # the value columns are joined to ITS rows. Flattened into one join problem, the
+    # FILTER's condition on a term column made the term join inner, and PostgreSQL
+    # started from a scan of the whole term table: `?s ?p ?o FILTER(?s IN (...) &&
+    # ?p != ...)` read 365,745 terms and probed the quads 1,097,236 times (2.1 s,
+    # today's SQL 1 ms). The advice still applies inside the fence (its own join problem).
+    bind_vars = sorted(set(need) | set(fvars))
+    core_level = ("SELECT " + ", ".join(f"{r.bound[v]} AS b_{v}" for v in bind_vars) + "\nFROM " + core
+                  + ("\nWHERE " + " AND ".join(where) if where else "") + "\nOFFSET 0")
+    cols = [f"cq.b_{v} AS k_{v}" for v in need]
+    joins = []
+    types = TypeRegistry(aliases=ctx.aliases)
+    for i, v in enumerate(fvars):
+        sn, t = f"fv{i}", f"tf{i}"
+        joins.append(f"LEFT JOIN {term_table} AS {t} ON {t}.term_uuid = cq.b_{v}")
+        tc = TypeRegistry.term_table_columns(
+            sn, t, "FSUB", _NUMERIC_DT_SQL_LIST, dt_case_sql=ctx.dt_case_expr(t),
+            numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
+            boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
+            datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))
+        cols += [c.replace(f"FSUB.{sn}__uuid", f"cq.b_{v}") for c in tc]
+        types.register(ColumnInfo.simple_output(v, sn, from_triple=True))
+    fctx = ctx.child(types=types)
+    before = len(getattr(fctx, "_unresolved_vars", None) or [])
+    conds = []
+    # As `emit_filter` does: a FILTER takes its expression's EFFECTIVE BOOLEAN VALUE
+    # (`ebv_sql`; `FILTER(?w)` is not a boolean column), within the scope of the
+    # variables its group binds.
+    with fctx.expression_scope(set(fvars)):
+        for e in reg.filters:
+            s = ebv_sql(e, fctx)
+            if not s:
+                raise Unsupported(f"a FILTER expression the translator does not support: {type(e).__name__}")
+            conds.append(f"({s})")
+    if len(getattr(fctx, "_unresolved_vars", None) or []) > before:
+        raise Unsupported("a FILTER reads a variable the value columns do not provide")
+    inner = ("SELECT " + ", ".join(cols) + f"\nFROM ({core_level}) AS cq"
+             + ("\n" + "\n".join(joins) if joins else ""))
+    return ("SELECT " + ("DISTINCT " if distinct else "") + ", ".join(f"k_{v}" for v in need)
+            + f"\nFROM ({inner}) AS fl\nWHERE " + " AND ".join(conds))
+
+
+def _expr_vars(e) -> Set[str]:
+    """The variables an expression reads (an EXISTS body's own are its own)."""
+    out: Set[str] = set()
+
+    def walk(x):
+        t = type(x).__name__
+        if t == "ExprVar":
+            out.add(x.var)
+        elif t == "ExprExists":
+            return
+        for a in getattr(x, "args", None) or []:
+            walk(a)
+        if getattr(x, "expr", None) is not None and t != "ExprVar":
+            walk(x.expr)
+    walk(e)
+    return out
+
+
+def _expr_has_exists(e) -> bool:
+    if type(e).__name__ == "ExprExists":
+        return True
+    return any(_expr_has_exists(a) for a in (getattr(e, "args", None) or []))
 
 
 def region_vars(r: Region) -> Set[str]:
@@ -1233,6 +1422,8 @@ def _render_subq(leaf: Leaf, ctx, term_table: str) -> _SubSql:
     from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
     q = leaf.sub
     reg = q.region
+    if reg.filters or reg.iri_ne:
+        raise Unsupported("a FILTER inside a sub-SELECT (C3)")
     pos = _Pos(reg.plans, reg.values)
     tree = search(reg)
     r = _R(pos)
@@ -1290,6 +1481,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     for o in list(reg.optionals) + [a.region for a in reg.antis]:
         if any(l.kind == "subq" for u in o.units for l in u.leaves):
             raise Unsupported("a sub-SELECT inside an OPTIONAL or NOT EXISTS")
+        if o.filters or o.iri_ne:
+            raise Unsupported("a FILTER inside an OPTIONAL or NOT EXISTS body (C2)")
     tree = main_tree or search(reg)
     base_sizes = _base_sizes(reg)
     r = _R(pos)
@@ -1469,8 +1662,15 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         if v not in r.bound:
             raise Unsupported(f"?{v} is not bound by the plan")
     keys = [f"{r.bound[v]} AS k_{v}" for v in sorted(need)]
-    inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + ", ".join(keys) + "\nFROM " + core
-             + ("\nWHERE " + " AND ".join(where) if where else ""))
+    for v, u in reg.iri_ne:
+        if v not in r.bound:
+            raise Unsupported(f"a FILTER reads ?{v}, which the plan does not bind")
+        where.append(f"{r.bound[v]} <> '{u}'::uuid" if u else f"{r.bound[v]} IS NOT NULL")
+    if reg.filters:
+        inner = _filter_level(reg, ctx, r, core, where, sorted(need), q.sub_distinct, pos.term_table)
+    else:
+        inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + ", ".join(keys) + "\nFROM " + core
+                 + ("\nWHERE " + " AND ".join(where) if where else ""))
     level = inner
     out_keys = sorted(need)
     if q.group_vars is not None:
@@ -1633,6 +1833,8 @@ def _late_optional_ok(q: Query, reg: Region, r: "_R") -> bool:
     from .planner_ext import FEATURES as _F
     if not _F.get("late_optional") or not reg.optionals or q.limit is None or not q.order:
         return False
+    if reg.filters or reg.iri_ne:
+        return False                    # a FILTER may read an OPTIONAL's variables
     if q.group_vars is not None or q.sub_project is not None or q.having:
         return False
     if any(v in q.extend or v not in r.bound for v, _d in q.order):

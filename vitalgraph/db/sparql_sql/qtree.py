@@ -240,6 +240,12 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
             # price: from the quad table's own totals (qcard.load_derived).
             vl = _anchorless_leaf(t, a, p_term, p_uuid, o_term, s_term, var_at, st)
             if vl is not None:
+                n_s = _subject_in_count(a, filters_by.get(a, []), ctx)
+                if n_s and vl.s_fan:
+                    # `?s ?p ?o` restricted to a list of subjects: those subjects' rows.
+                    # Priced as the whole table, the graph fetch of three entities
+                    # (7,446,550 estimated, 20 actual) had PostgreSQL hash the term table.
+                    vl.scan = Est(min(vl.scan.rows, n_s * vl.s_fan), "in")
                 out.append(vl)
                 continue
         rule = ("range" if a in range_aliases else "fts" if a in fts
@@ -248,6 +254,9 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
         in_est = _in_list_rows(a, p_uuid, filters_by.get(a, []), ctx, st)
         if in_est is not None:
             scan = in_est
+        n_s = _subject_in_count(a, filters_by.get(a, []), ctx)
+        if n_s and (scan.rows is None or n_s < scan.rows):
+            scan = Est(float(n_s), "in")    # one value per listed subject
         out.append(Leaf(
             alias=a, kind=t.kind,
             pred=str(p_term[0]) if p_term else None,
@@ -259,7 +268,12 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
             pred_uuid=p_uuid,
             probe_fan=st.size_biased_fan(p_uuid),
             o_uuid=st.uuid_of(o_term) if o_term else None,
-            o_vars=[("object_uuid", var_at[(a, "object_uuid")])] if (a, "object_uuid") in var_at else []))
+            # the predicate's variable too, whichever path prices the leaf: dropped, a
+            # FILTER-ed `?s ?p ?o` on a space with no statistics yet returned its
+            # triples WITHOUT their predicates (an entity read back with no properties)
+            o_vars=([("object_uuid", var_at[(a, "object_uuid")])] if (a, "object_uuid") in var_at else [])
+                   + ([("predicate_uuid", var_at[(a, "predicate_uuid")])]
+                      if p_term is None and (a, "predicate_uuid") in var_at else [])))
     return out
 
 
@@ -277,10 +291,15 @@ def _anchorless_leaf(t, a, p_term, p_uuid, o_term, s_term, var_at, st: "_Stats")
 
     Once they declined outright: ~170 of the W3C suite's queries, ~78 of the API
     suite's (`planning_planner/13`, C1.1)."""
-    q = DERIVED_STATS.get(t.table_name)
-    if not q or not q.get("rows"):
+    # Total quads: our own statistics first (rdf_stats' per-predicate rows, maintained
+    # with the data), PostgreSQL's reltuples second (it lags until ANALYZE, and is
+    # -1 or 0 for a table never analyzed: the W3C harness reloads one per test).
+    q = DERIVED_STATS.get(t.table_name) or {}
+    total = float(sum(st.pred_rows.values())) if st.pred_rows else 0.0
+    if total <= 0:
+        total = float(q.get("rows") or 0.0)
+    if total <= 0:
         return None
-    total = float(q["rows"])
     nd = q.get("ndv", {})
     n_s = nd.get("subject_uuid") or total
     n_o = nd.get("object_uuid") or total
@@ -321,6 +340,24 @@ def _anchorless_leaf(t, a, p_term, p_uuid, o_term, s_term, var_at, st: "_Stats")
         scan=Est(rows, "anchorless"), pred_rows=pred_rows, pred_objects=pred_objects,
         pred_uuid=p_uuid, probe_fan=probe_fan, o_uuid=o_uuid, o_vars=o_vars,
         s_fan=s_fan, pred_ndv=n_p)
+
+
+def _subject_in_count(alias: str, filters: List[str], ctx) -> Optional[int]:
+    """How many subjects a leaf is restricted to by `alias.subject_uuid IN (...)`,
+    the generator's pushed-down `FILTER(?s IN (<iri>, ...))`, or None."""
+    from .generator import substitute_constants
+    for f in filters:
+        m = re.match(rf"\s*{re.escape(alias)}\.subject_uuid\s+IN\s*\((.*)\)\s*$",
+                     substitute_constants(f, ctx.aliases), re.S)
+        if m:
+            # a LIST of uuid literals only: `subject_uuid IN (SELECT ...)` is a sub-select,
+            # and counting the one constant inside it priced a 100,000-row entity pin at 1
+            # (the rating_990 count went 44 -> 347 ms)
+            items = [x.strip() for x in m.group(1).split(",")]
+            if items and all(re.fullmatch(r"'[0-9a-f-]{36}'::uuid", x) for x in items):
+                return len(items)
+            return None
+    return None
 
 
 def _in_list_rows(alias: str, p_uuid: Optional[str], filters: List[str], ctx, st: "_Stats") -> Optional[Est]:
