@@ -198,7 +198,7 @@ def _question(reg, s: int, t: Optional[int], hits: bool = True) -> Optional[_Que
     u = reg.units[s]
     if not u.subject.startswith("?") or u.anchor is None or u.anchor.s_var is None:
         return None
-    if t is not None and any(l.kind == "subq" for l in reg.units[t].leaves):
+    if t is not None and any(l.kind in ("subq", "vtable") for l in reg.units[t].leaves):
         return None              # a sub-SELECT: no table to join a sample into (its own region is sampled)
     var = u.subject[1:]
     s_sql, s_r, s_pend, pos = _unit_sql(reg, s)
@@ -372,7 +372,7 @@ async def walk_hit_rate(q, space_id: str, conn=None, conn_params=None) -> Option
     from .generator import substitute_constants
     reg = q.region
     drv = qplan.topk_driver(q, reg)
-    if drv is None or reg.antis or any(l.kind == "subq" for u in reg.units for l in u.leaves):
+    if drv is None or reg.antis or any(l.kind in ("subq", "vtable") for u in reg.units for l in u.leaves):
         return None
     var, d = drv
     a = reg.units[d].anchor
@@ -500,7 +500,7 @@ async def annotate_paths(q, space_id: str, conn=None, conn_params=None) -> Dict[
     t0 = time.perf_counter()
     asked = failed = 0
     for reg in _regions(q):
-        if len(reg.units) < 3 or any(l.kind == "subq" for u in reg.units for l in u.leaves):
+        if len(reg.units) < 3 or any(l.kind in ("subq", "vtable") for u in reg.units for l in u.leaves):
             continue
         for _round in range(PATH_ROUNDS):
             tree = qplan.search(reg)

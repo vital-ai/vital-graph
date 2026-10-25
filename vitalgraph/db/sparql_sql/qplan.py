@@ -310,7 +310,7 @@ def _is_having(p, q) -> bool:
 
 def _region(p, ctx, aliases, outer_vars: Set[str], exclude: frozenset = frozenset()) -> Region:
     parts = {"leaves": [], "values": {}, "plans": [], "optionals": [], "antis": [], "exclude": exclude, "ctx": ctx,
-             "filters": [], "iri_ne": [], "binds": []}
+             "filters": [], "iri_ne": [], "binds": [], "opt_left": []}
     _collect(p, ctx, aliases, parts, outer_vars)
     r = _build_region(parts, ctx, aliases)
     return r
@@ -341,10 +341,22 @@ def _collect(p, ctx, aliases, parts, outer_vars):
     elif p.kind == KIND_JOIN:
         for c in p.children:
             _collect(c, ctx, aliases, parts, outer_vars)
+    elif p.kind == KIND_TABLE and not p.values_vars and len(p.values_rows or []) == 1:
+        pass                    # `{}`: one row binding nothing, the join's identity
+    elif p.kind == KIND_TABLE and len(p.values_vars or []) > 1 and len(p.values_rows or []) == 1:
+        # one row: a pin per variable. As a table PostgreSQL folds it into constants
+        # and the joins the advice names are gone.
+        leaf = _vtable_leaf(p, aliases, parts)
+        vars_, rows = leaf.sub
+        for i, v in enumerate(vars_):
+            u = rows[0][i]
+            if v in parts["values"]:
+                raise Unsupported(f"two VALUES pins on ?{v}")
+            parts["values"][v] = [u]
+    elif p.kind == KIND_TABLE and len(p.values_vars or []) != 1:
+        parts["leaves"].append(_vtable_leaf(p, aliases, parts))
     elif p.kind == KIND_TABLE:
         vars_ = p.values_vars or []
-        if len(vars_) != 1:
-            raise Unsupported("VALUES with other than one variable")
         v = vars_[0]
         uuids = []
         for row in p.values_rows or []:
@@ -360,12 +372,16 @@ def _collect(p, ctx, aliases, parts, outer_vars):
                 uuids.append(u)
         if not uuids:
             raise Unsupported("VALUES matches no stored term (today's provably-empty path handles it)")
+        if v in parts["values"]:
+            raise Unsupported(f"two VALUES pins on ?{v}")
         parts["values"][v] = uuids
     elif p.kind == KIND_LEFT_JOIN:
         if p.left_join_exprs:
             raise Unsupported("OPTIONAL with a FILTER inside")
         _collect(p.children[0], ctx, aliases, parts, outer_vars)
+        from .var_scope import compute_scope
         parts["optionals"].append(_region(p.children[1], ctx, aliases, outer_vars))
+        parts["opt_left"].append(set(compute_scope(p.children[0]).all_visible))
     elif p.kind == KIND_FILTER:
         _collect(p.children[0], ctx, aliases, parts, outer_vars)
         for e in p.filter_exprs or []:
@@ -430,6 +446,53 @@ def _collect(p, ctx, aliases, parts, outer_vars):
         raise Unsupported(f"{p.kind} inside the pattern")
 
 
+def _vtable_leaf(p, aliases, parts, vars_=None, rows=None) -> Leaf:
+    """VALUES with several variables (or one no pattern holds) as a leaf of its own:
+    an inline table of term uuids, keys only, one column `k_<v>` per variable, its
+    rows the VALUES rows and each column's distinct values exact. Never probed into
+    (no index). A row with a term the term table does not hold matches nothing in
+    an inner join and is dropped; none left is the generator's empty path. UNDEF
+    (compatible with anything) is not modelled yet."""
+    vars_ = vars_ if vars_ is not None else list(p.values_vars or [])
+    if not vars_:
+        raise Unsupported("VALUES with no variable")
+    cols = getattr(aliases, "constants", None) or {}
+    resolved = getattr(aliases, "resolved_constants", None) or {}
+    out = []
+    for row in (rows if rows is not None else (p.values_rows or [])):
+        vals = []
+        for v in vars_:
+            node = row.get(v) if isinstance(row, dict) else row[vars_.index(v)]
+            if node is None:
+                raise Unsupported("VALUES with UNDEF")
+            if isinstance(node, str):
+                vals.append(node)
+                continue
+            col = cols.get(_term_key(node))
+            vals.append(resolved.get(col) if col else None)
+        if all(u is not None for u in vals):
+            out.append(vals)
+    if not out:
+        raise Unsupported("VALUES matches no stored term (today's provably-empty path handles it)")
+    alias = "vt_" + "_".join(re.sub(r"\W", "", v) for v in vars_)[:30]
+    taken = {l.alias for l in parts["leaves"]}
+    while alias in taken:
+        alias += "x"
+    leaf = Leaf(alias=alias, kind="vtable", pred=None, s_var=None, o_var=None, s_const=None,
+                o_const=None, scan=Est(float(len(out)), "values"), pred_rows=None, pred_objects=None,
+                o_vars=[(f"k_{v}", v) for v in vars_],
+                col_ndv={f"k_{v}": float(len({r_[i] for r_ in out})) for i, v in enumerate(vars_)})
+    leaf.sub = (vars_, out)
+    leaf.sub_cost = 0.01 * len(out)
+    return leaf
+
+
+def _vtable_sql(leaf: Leaf) -> str:
+    vars_, rows = leaf.sub
+    body = ", ".join("(" + ", ".join(f"'{u}'::uuid" for u in r_) + ")" for r_ in rows)
+    return f"(SELECT * FROM (VALUES {body}) AS v({', '.join(f'k_{v}' for v in vars_)}))"
+
+
 def _leaf_identity(l: Leaf):
     """What makes two quad leaves the same triple pattern, or None (a leaf with
     filters of its own, or a derived table, is never merged)."""
@@ -466,11 +529,16 @@ def _build_region(parts, ctx, aliases) -> Region:
     a = aliases
     quad_stats = getattr(a, "quad_stats", None) or {}
     extra = getattr(a, "extra_quad_stats", None) or {}
-    for var, uuids in values.items():
+    for var, uuids in list(values.items()):
         holders = [l for l in leaves if any(v == var for _c, v in l.o_vars)]
         subject_holders = [l for l in leaves if l.s_var == var]
+        if not holders and not subject_holders and len(uuids) == 1:
+            raise Unsupported("a one-row VALUES binding no pattern (PostgreSQL folds it to a constant)")
         if not holders and not subject_holders:
-            raise Unsupported(f"VALUES ?{var} binds no pattern")
+            # no pattern holds it: the VALUES is a table of its own (a cross product)
+            leaves.append(_vtable_leaf(None, aliases, parts, [var], [[u] for u in uuids]))
+            del values[var]
+            continue
         for l in subject_holders:
             # restricted on its SUBJECT: those subjects' rows of the pattern
             per = l.s_fan or 1.0
@@ -520,6 +588,18 @@ def _build_region(parts, ctx, aliases) -> Region:
                     for cj, vj in lj.o_vars:
                         if vi == vj and vi not in subj:
                             edges.append(Edge(i, j, vi, "shared", li, lj, col_u=ci, col_v=cj))
+    # Every OPTIONAL is attached after the region's joins. Join(LeftJoin(A, B), C) =
+    # LeftJoin(Join(A, C), B) only when B shares no variable with C (or with another
+    # OPTIONAL) that A does not bind: `?x :n "paul" {?y :n "george" OPTIONAL {?x :e ?z}}`
+    # left-joins ?x inside the group, where ?x is free (the W3C "Join scope" test).
+    required = {v for l in leaves for v in [l.s_var] + [ov for _c, ov in l.o_vars] if v} | set(values)
+    for k, (o, left) in enumerate(zip(parts["optionals"], parts["opt_left"])):
+        others = set(required)
+        for k2, o2 in enumerate(parts["optionals"]):
+            if k2 != k:
+                others |= _region_all_vars(o2)
+        if (_region_all_vars(o) & others) - left:
+            raise Unsupported("an OPTIONAL shares a variable its own group does not bind")
     binds = parts.get("binds", [])
     if binds:
         # a BIND's variable joining a pattern would join a computed value to stored
@@ -691,6 +771,14 @@ def _expr_has_exists(e) -> bool:
     if type(e).__name__ == "ExprExists":
         return True
     return any(_expr_has_exists(a) for a in (getattr(e, "args", None) or []))
+
+
+def _region_all_vars(r: Region) -> Set[str]:
+    """A region's pattern variables, its OPTIONALs' included."""
+    out = region_vars(r)
+    for o in r.optionals:
+        out |= _region_all_vars(o)
+    return out
 
 
 def region_vars(r: Region) -> Set[str]:
@@ -1069,7 +1157,7 @@ def _unit_build(u: Unit) -> Tuple[float, List[Tuple[Leaf, str]]]:
 def _base(r: Region, i: int) -> Node:
     u = r.units[i]
     rr = u.rows.rows or 0.0
-    if u.anchor is not None and u.anchor.kind == "subq":
+    if u.anchor is not None and u.anchor.kind in ("subq", "vtable"):
         return Node("scan", frozenset([i]), u.anchor.sub_cost, rr, _unit_ndv(u, r.values, r.bound), unit=i)
     cost, _plan = _unit_build(u)
     return Node("scan", frozenset([i]), cost, rr, _unit_ndv(u, r.values, r.bound), unit=i)
@@ -1097,8 +1185,47 @@ def search(r: Region) -> Node:
         best[S] = _join_options(r, a, b, edges, a.units | b.units, best.get(S), card)
     full = (1 << n) - 1
     if full not in best:
-        raise Unsupported("the units are not connected")
+        comps = _components(n, adj)
+        if len(comps) < 2 or any(c not in best for c in comps):
+            raise Unsupported("the units are not connected")
+        return _cross_all([best[c] for c in comps], card)
     return best[full]
+
+
+def _components(n: int, adj: List[int]) -> List[int]:
+    """The connected groups of units, as masks."""
+    seen, out = 0, []
+    for i in range(n):
+        if seen >> i & 1:
+            continue
+        m, todo = 1 << i, [i]
+        while todo:
+            x = todo.pop()
+            for j in _bits(adj[x] & ~m):
+                m |= 1 << j
+                todo.append(j)
+        seen |= m
+        out.append(m)
+    return out
+
+
+def _cross(a: Node, b: Node, card: "_Card") -> Node:
+    """Patterns that share no variable: a cross product (SPARQL's join of
+    compatible mappings with nothing in common is every pair), each side planned on
+    its own. Rows: the product (the size function's, no selectivity between them);
+    cost: both sides plus the rows produced."""
+    S = a.units | b.units
+    rows = card(_mask(S))
+    out = rows if COST_MODEL == "cout" else rows * W["join_out_row"]
+    return Node("cross", S, a.cost + b.cost + out, rows, {}, left=a, right=b)
+
+
+def _cross_all(nodes: List[Node], card: "_Card") -> Node:
+    nodes = sorted(nodes, key=lambda x: x.rows)
+    node = nodes[0]
+    for other in nodes[1:]:
+        node = _cross(node, other, card)
+    return node
 
 
 def _greedy(r: Region, adj, by_pair) -> Node:
@@ -1116,7 +1243,12 @@ def _greedy(r: Region, adj, by_pair) -> Node:
             if best_node is None or nd.cost < best_node.cost:
                 best_pair, best_node = (x, y), nd
         if best_pair is None:
-            raise Unsupported("the units are not connected")
+            # nothing left shares a variable: cross the smallest two
+            x, y = sorted(parts, key=lambda k: parts[k].rows)[:2]
+            nd = _cross(parts[x], parts[y], card)
+            del parts[x], parts[y]
+            parts[x | y] = nd
+            continue
         x, y = best_pair
         del parts[x], parts[y]
         parts[x | y] = best_node
@@ -1128,6 +1260,8 @@ def describe(node: Node, r: Region) -> str:
         return r.units[node.unit].subject
     if node.kind == "hash":
         return f"({describe(node.left, r)} ⋈ {describe(node.right, r)})"
+    if node.kind == "cross":
+        return f"({describe(node.left, r)} × {describe(node.right, r)})"
     return f"({describe(node.left, r)} →{node.edge.var} {r.units[node.unit].subject})"
 
 
@@ -1377,6 +1511,12 @@ def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[st
         return f"({sql})", present, pend
     lsql, lp, lpend = _render_node(node.left, reg, r)
     rsql, rp, rpend = _render_node(node.right, reg, r)
+    if node.kind == "cross":
+        # no join condition, so no hash or merge: a size, and no method item (an
+        # advised hash would match no join PostgreSQL can build)
+        present = lp | rp
+        r.sizes.append((node.rows, sorted(present)))
+        return f"({lsql}\n JOIN {rsql} ON " + " AND ".join(rpend or ["TRUE"]) + ")", present, lpend
     conds = []
     for var, poss in r.pos.positions.items():
         canon = r.bound.get(var)
@@ -1539,9 +1679,13 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
                 for c, v in l.o_vars:
                     pos.positions.setdefault(v, []).append((l.alias, c))
                 poses += s.poses
+            elif l.kind == "vtable":
+                pos.table[l.alias] = _vtable_sql(l)
+                for c, v in l.o_vars:
+                    pos.positions.setdefault(v, []).append((l.alias, c))
     for o in list(reg.optionals) + [a.region for a in reg.antis]:
-        if any(l.kind == "subq" for u in o.units for l in u.leaves):
-            raise Unsupported("a sub-SELECT inside an OPTIONAL or NOT EXISTS")
+        if any(l.kind in ("subq", "vtable") for u in o.units for l in u.leaves):
+            raise Unsupported("a sub-SELECT or VALUES table inside an OPTIONAL or NOT EXISTS")
         if o.filters or o.iri_ne or o.binds:
             raise Unsupported("a FILTER or BIND inside an OPTIONAL or NOT EXISTS body (C2)")
     tree = main_tree or search(reg)
@@ -2136,8 +2280,8 @@ def _strip_pseudo(node: Node, n: int) -> Node:
     if node.kind == "probe":
         return Node("probe", node.units - {n}, node.cost, node.rows, node.ndv,
                     left=_strip_pseudo(node.left, n), unit=node.unit, edge=node.edge)
-    if node.kind == "hash":
-        return Node("hash", node.units - {n}, node.cost, node.rows, node.ndv,
+    if node.kind in ("hash", "cross"):
+        return Node(node.kind, node.units - {n}, node.cost, node.rows, node.ndv,
                     left=_strip_pseudo(node.left, n), right=_strip_pseudo(node.right, n))
     return node
 
