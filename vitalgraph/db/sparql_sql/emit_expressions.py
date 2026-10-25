@@ -2076,6 +2076,10 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
         graph_lock_uri=ctx.graph_lock_uri,
         base_uri=ctx.base_uri,
         trace_enabled=False,
+        # The space's datatype ids: without them every typed column of a body term
+        # row (`__num`, `__bool`, `__dt`) is `datatype_id IN (NULL)`, NULL, and a
+        # numeric, boolean or date FILTER in the body never holds (issues/311).
+        datatype_cache=ctx.datatype_cache,
     )
     # Propagate the query-wide variable set so an unresolvable reference inside
     # the subquery still produces the _var_to_sql diagnostic instead of a
