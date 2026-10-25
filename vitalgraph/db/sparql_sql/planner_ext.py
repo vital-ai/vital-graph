@@ -64,7 +64,13 @@ for _name in filter(None, (os.getenv("VG_PLANNER_RETIRE") or "").replace(" ", ""
 #: set. `qtree`: plan supported queries from the annotated query tree
 #: (`qtree` / `qplan`; the first prototypes are in `archive/planner_prototypes`) and replace the emitted SQL with the
 #: planner's. EXPERIMENTS: `VG_PLANNER_FEATURES=qtree`.
-FEATURES: Dict[str, bool] = {"qtree": False, "bgp_rows": False, "oracle": False, "implied": False}
+FEATURES: Dict[str, bool] = {"qtree": False, "bgp_rows": False, "oracle": False, "implied": False,
+                              "unit_hash": False}
+# `unit_hash`: let a unit's leaves be hash-joined instead of probed per row
+# (qplan._unit_build). OFF: measured mixed at production scale (lead 100k:
+# l2_page 2.9 -> 2.4 s, l5_pair_by_frame 0.69 -> 1.25 s), because PostgreSQL's
+# PARALLEL execution of the rendered plan (non-partial inner sides rebuilt per
+# worker, merge joins) decides it and the cost model has no notion of it.
 # `implied`: with `qtree` and `oracle`, also search each query WITHOUT the
 # patterns a stored verdict says are implied (`pattern_verdict`), and take that
 # plan only when it is clearly cheaper on sampled estimates (IMPLIED_MARGIN).

@@ -481,6 +481,11 @@ W = {
     "hash_probe_row": 0.072, # a probe-side row looked up in the hash table
     "hash_inner_row": 0.149, # an inner (build-side) row passing the join
     "join_out_row": 0.35,    # a row produced by a join
+    # a row of a BULK scan of one predicate's range (covering index, read in order),
+    # as when a unit's leaf is scanned on its own for a hash build: measured on lead
+    # 100k, 1.1M-4.1M-row ranges, single worker, 0.126-0.128 us/row (2026-10-24).
+    # The probe-fitted idx_row (1.09, heap fetch included) priced it 8x too high.
+    "scan_row": 0.127,
 }
 
 
@@ -608,10 +613,56 @@ def _join_options(r: Region, a: Node, b: Node, edges: List[Edge], S: frozenset,
     return cand
 
 
+def _unit_build(u: Unit) -> Tuple[float, List[Tuple[Leaf, str]]]:
+    """How to build a unit, and its cost: the anchor scanned, then each other
+    leaf either PROBED per row by subject (the original chain) or SCANNED on its
+    own predicate and HASH-joined on the subject, whichever the cost model
+    prices lower. All-probe is the old `_scan_cost` exactly.
+
+    Why: a unit is one star, but not one access path. lead 100k's MQLv2 slot
+    unit has 100,000 rows; probing its value leaf per row is ~200,000 index
+    descents, where today's SQL hash-joins the two leaves' scans, 1.3x faster
+    at production scale. A leaf with no price of its own (no scan estimate) can
+    only be probed; so can one whose scan is the whole predicate of a huge
+    relation (hasKGGraphURI: 7.4M rows), by cost."""
+    rows = u.rows.rows or 0.0
+    from .planner_ext import FEATURES as _F
+    if not _F.get("unit_hash"):
+        return _scan_cost(rows, len(u.leaves)), [(l, "probe") for l in u.probes]
+    a = u.anchor
+    first = a.scan.rows if (a is not None and a.scan.rows is not None) else rows
+    cost = _scan_cost(first, 1)
+    plan: List[Tuple[Leaf, str]] = []
+    cur = first
+    for l in u.probes:
+        probe = (cur if COST_MODEL == "cout" else
+                 cur * (W["idx_lookup"] + W["idx_row"]))
+        lrows = l.scan.rows
+        hash_ = None
+        if lrows is not None and lrows > 0:
+            out = min(cur, lrows)
+            if COST_MODEL == "cout":
+                hash_ = lrows + cur + out
+            else:
+                build, prob = (lrows, cur) if lrows <= cur else (cur, lrows)
+                hash_ = (W["idx_lookup"] + lrows * W["scan_row"] + W["hash_build"]
+                         + build * (W["hash_build_row"] + W["hash_inner_row"])
+                         + prob * W["hash_probe_row"] + out * W["join_out_row"])
+        if hash_ is not None and hash_ < probe:
+            cost += hash_
+            plan.append((l, "hash"))
+        else:
+            cost += probe
+            plan.append((l, "probe"))
+        cur = rows                                  # after the anchor's partners: the unit's rows
+    return cost, plan
+
+
 def _base(r: Region, i: int) -> Node:
     u = r.units[i]
     rr = u.rows.rows or 0.0
-    return Node("scan", frozenset([i]), _scan_cost(rr, len(u.leaves)), rr, _unit_ndv(u, r.values, r.bound), unit=i)
+    cost, _plan = _unit_build(u)
+    return Node("scan", frozenset([i]), cost, rr, _unit_ndv(u, r.values, r.bound), unit=i)
 
 
 def search(r: Region) -> Node:
@@ -796,11 +847,23 @@ def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[st
     if node.kind == "scan":
         u = reg.units[node.unit]
         present: Set[str] = set()
-        sql, pend = _chain(r, [u.anchor] + list(u.probes), present, None, [])
+        # the unit's build (`_unit_build`): hash-joined leaves first after the
+        # anchor, each with a method item for its join and a size for its own
+        # scan; probed leaves after, left to PostgreSQL as before
+        _c, build = _unit_build(u)
+        hashed = [l for l, how in build if how == "hash"]
+        order = [u.anchor] + hashed + [l for l, how in build if how == "probe"]
+        sql, pend = _chain(r, order[:1], present, None, [])
+        for l in hashed:
+            sql, pend = _chain(r, [l], present, sql, pend)
+            if not l.constant:                      # constant leaves are sized by _base_sizes
+                r.sizes.append((l.scan.rows, [l.alias]))
+            r.methods.append(("hash", sorted(present)))
+        sql, pend = _chain(r, order[1 + len(hashed):], present, sql, pend) if len(order) > 1 + len(hashed) else (sql, pend)
         # (base scans are sized for every constant leaf in render(): see
         #  _base_sizes; not only the anchor)
         if len(u.leaves) > 1:
-            steps = [u.anchor.alias] + [p.alias for p in u.probes]
+            steps = [l.alias for l in order]
             rr = f"{u.rows.rows:.0f}"
             r.units_advice.append(f"steps({' '.join(steps)}) rows({' '.join(f'{s}:{rr}' for s in steps[1:])})")
             sql = f"({sql})" if pend == [] else sql

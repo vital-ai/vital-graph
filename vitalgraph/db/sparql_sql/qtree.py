@@ -214,12 +214,16 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
         p_uuid = st.uuid_of(p_term) if p_term else None
         rule = ("range" if a in range_aliases else "fts" if a in fts
                 else "pair" if o_term else "pred")
+        scan = Est(card.get(a), rule if a in card else "unpriced")
+        in_est = _in_list_rows(a, p_uuid, filters_by.get(a, []), ctx, st)
+        if in_est is not None:
+            scan = in_est
         out.append(Leaf(
             alias=a, kind=t.kind,
             pred=str(p_term[0]) if p_term else None,
             s_var=var_at.get((a, "subject_uuid")), o_var=var_at.get((a, "object_uuid")),
             s_const=str(s_term[0]) if s_term else None, o_const=str(o_term[0]) if o_term else None,
-            scan=Est(card.get(a), rule if a in card else "unpriced"),
+            scan=scan,
             pred_rows=st.pred_rows.get(p_uuid) if p_uuid else None,
             pred_objects=st.pred_objects.get(p_uuid) if p_uuid else None,
             pred_uuid=p_uuid,
@@ -227,6 +231,38 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
             o_uuid=st.uuid_of(o_term) if o_term else None,
             o_vars=[("object_uuid", var_at[(a, "object_uuid")])] if (a, "object_uuid") in var_at else []))
     return out
+
+
+def _in_list_rows(alias: str, p_uuid: Optional[str], filters: List[str], ctx, st: "_Stats") -> Optional[Est]:
+    """A quad leaf restricted to a list of objects (`object_uuid IN (...)`, the
+    generator's pushed-down VALUES) priced as the sum of its pairs' stored
+    counts; a pair absent from rdf_stats is bounded by the predicate's smallest
+    stored pair, as VALUES pins are (qplan._build_region). The generator's own
+    leaf estimate is the whole predicate: lead 100k's `?state IN ("CA" "TX")`
+    read 1,150,000 rows where rdf_stats says 9,227 + 7,259 = 16,486, the actual
+    count, so the unit anchored on a 100,000-row pin instead."""
+    if not p_uuid:
+        return None
+    from .generator import substitute_constants
+    for f in filters:
+        m = re.match(rf"\s*{re.escape(alias)}\.object_uuid\s+IN\s*\((.*)\)\s*$",
+                     substitute_constants(f, ctx.aliases), re.S)
+        if not m:
+            continue
+        objs = re.findall(r"'([0-9a-f-]{36})'::uuid", m.group(1))
+        if not objs or len(objs) != m.group(1).count("::uuid"):
+            return None
+        a_ = ctx.aliases
+        extra = getattr(a_, "extra_quad_stats", None) or {}
+        counts = [st.quad_stats.get((p_uuid, o), extra.get((p_uuid, o))) for o in objs]
+        if all(n is not None for n in counts):
+            return Est(float(sum(counts)), "in")
+        stored = [n for (pp, _o), n in st.quad_stats.items() if pp == p_uuid]
+        if not stored:
+            return None
+        low = min(stored)
+        return Est(float(sum(n if n is not None else low for n in counts)), "values_bound")
+    return None
 
 
 def _term_uuid(text: str) -> str:
