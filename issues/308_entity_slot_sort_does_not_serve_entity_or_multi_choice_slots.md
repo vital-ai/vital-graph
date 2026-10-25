@@ -25,7 +25,7 @@ Counted on the local dev database, 2026-10-25 (read-only):
 
 | space | `KGEntitySlot` |
 |---|---|
-| cardiff_kg, cardiff_kg_new, cardiff_uw, cardiff_kg_actions | **0** |
+| the main KG space, the new KG space, the production UW space, the KG actions space | **0** |
 | wordnet_frames | 570,696 |
 | sp_graph_synth_100k / 10k | 946,548 / 91,286 |
 | graph_viz_a/b/c/f, space_kgquery_test, space_multi_org_crud_test, kgquery_perf | 10-93 |
@@ -71,9 +71,9 @@ before building it:
 
 ## 2. `KGMultiChoiceSlot`: the likelier candidate, handled as `hasKGActionTypeList` is
 
-`cardiff_uw`, same date:
+the production UW space, same date:
 
-- **3,267** `KGMultiChoiceSlot` instances (cardiff_kg: 21; cardiff_kg_new: 10).
+- **3,267** `KGMultiChoiceSlot` instances (the main KG space: 21; the new KG space: 10).
 - `hasMultiChoiceSlotValues` is declared `vital-core:hasMultipleValues true` (range
   `xsd:string`). Values per slot: 1 → 658, 2 → 83, **3 → 1,179**, 4 → 130, **5 → 1,169**,
   6 → 28, 8 → 8, 10 → 2, 11 → 10.
@@ -126,7 +126,7 @@ Applied to `entity_slot_sort`:
 | incremental maintenance | a value insert or delete on a slot re-derives that slot's row. Check every write path the table already maintains (096) |
 
 **Checked 2026-10-25 (read-only):** no slot of the ten classes the table stores today has more
-than one value, on cardiff_uw, cardiff_kg, cardiff_kg_new or sp_lead_synth_100k. So today's
+than one value, on the production UW space, the main KG space, the new KG space or sp_lead_synth_100k. So today's
 one-value-per-slot rows are complete in this data, and the subset risk above is latent. A
 SPARQL write that adds a second `hasTextSlotValue` would make it real, so `value_all` fixes a
 latent fast-filter subset for every slot class, not only multi-choice.
