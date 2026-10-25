@@ -60,13 +60,20 @@ for _name in filter(None, (os.getenv("VG_PLANNER_RETIRE") or "").replace(" ", ""
     RETIRED[_name] = True
 
 
-#: Planner features beyond the advice, off until measured across the dashboard
-#: set. `qtree`: plan supported queries from the annotated query tree
-#: (`qtree` / `qplan`; the first prototypes are in `archive/planner_prototypes`) and replace the emitted SQL with the
-#: planner's. EXPERIMENTS: `VG_PLANNER_FEATURES=qtree`.
+#: Planner features beyond the advice. `qtree`: plan supported queries from the
+#: annotated query tree (`qtree` / `qplan`; the first prototypes are in
+#: `archive/planner_prototypes`) and replace the emitted SQL with the planner's.
+#: `VG_PLANNER_FEATURES=qtree,oracle,...` switches features on; `-name` switches
+#: one off (for an A/B run of a default-on feature).
+#:
+#: THE STANDARD SET: `late_optional`, `path_sample` and `unit_methods` are ON by
+#: default (2026-10-25: each measured never slower than without it on the full
+#: corpus, results identical, the API suite passing with all three). They act only
+#: inside the qtree planner (and `path_sample` only with `oracle`), so with `qtree`
+#: off they change nothing.
 FEATURES: Dict[str, bool] = {"qtree": False, "bgp_rows": False, "oracle": False, "implied": False,
-                              "unit_hash": False, "late_optional": False, "path_sample": False,
-                              "unit_methods": False}
+                              "unit_hash": False, "late_optional": True, "path_sample": True,
+                              "unit_methods": True}
 # `unit_methods`: a nested-loop item into a probed constant leaf of a unit DRIVEN
 # from a selective sub-select, when the leaf's own scan is UNIT_NL_RATIO times the
 # rows probing it (qplan._render_node). Measured 2026-10-25: the KG entity counts
@@ -101,9 +108,11 @@ FEATURES: Dict[str, bool] = {"qtree": False, "bgp_rows": False, "oracle": False,
 # experiment switch; off, a statement the qtree planner declines carries NO
 # advice and runs exactly as with the switch off.
 for _name in filter(None, (os.getenv("VG_PLANNER_FEATURES") or "").replace(" ", "").split(",")):
+    _on = not _name.startswith("-")
+    _name = _name.lstrip("-")
     if _name not in FEATURES:
         raise ValueError(f"VG_PLANNER_FEATURES: unknown feature {_name!r}; known: {sorted(FEATURES)}")
-    FEATURES[_name] = True
+    FEATURES[_name] = _on
 
 
 def retired(name: str) -> bool:
