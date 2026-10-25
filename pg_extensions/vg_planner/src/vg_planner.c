@@ -54,6 +54,7 @@ vgp_set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, Index rti, RangeTblEntr
 	{
 		vgp_size_base_rel(root, rel, rti, rte);
 		vgp_note_subquery(rel, rte);
+		vgp_note_appendrel(root, rti, rte);
 	}
 }
 

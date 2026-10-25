@@ -198,10 +198,25 @@ def _route_through_planner():
         g = await real(compile_result, space_id, *a, **kw)
         if log:
             d = g.plan_decisions or {}
+            ops = set()
+
+            def _ops(x):
+                # the algebra's operators (OpUnion, OpMinus, ...): a decline reason
+                # names the first one met, this every one the query holds
+                if isinstance(x, dict):
+                    if isinstance(x.get("type"), str) and x["type"].startswith("Op"):
+                        ops.add(x["type"])
+                    for v in x.values():
+                        _ops(v)
+                elif isinstance(x, list):
+                    for v in x:
+                        _ops(v)
+            _ops(getattr(compile_result, "raw", None))
             with open(log, "a") as f:
                 f.write(json.dumps({"test": os.environ.get("PYTEST_CURRENT_TEST", ""),
                                     "source": g.plan_source,
-                                    "declined": (d.get("declined") or {}).get("qtree_plan")}) + "\n")
+                                    "declined": (d.get("declined") or {}).get("qtree_plan"),
+                                    "ops": sorted(ops)}) + "\n")
         if g.ok and g.plan_advice:
             g.sql = g.plan_advice + "\n" + g.sql
         return g

@@ -25,7 +25,9 @@
 
 #include "fmgr.h"
 #include "lib/stringinfo.h"
+#include "nodes/pathnodes.h"
 #include "nodes/plannodes.h"
+#include "optimizer/optimizer.h"
 #include "parser/parsetree.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
@@ -78,6 +80,42 @@ vgp_note_subquery(RelOptInfo *rel, RangeTblEntry *rte)
 }
 
 /*
+ * A UNION ALL sub-query PostgreSQL pulled up into an append relation: its
+ * branches are child sub-query relations of their own, planned separately, and
+ * the parent has no sub-plan. Record the children as the parent's relations,
+ * so a branch's scans map to the parent (the UNION) a join of the outer query
+ * is advised with.
+ */
+void
+vgp_note_appendrel(PlannerInfo *root, Index rti, RangeTblEntry *rte)
+{
+	VgpAdvice  *adv = vgp_statement_advice();
+	MemoryContext old;
+	VgpSubquery *sq = NULL;
+	ListCell   *lc;
+
+	if (adv == NULL || rte->rtekind != RTE_SUBQUERY || !rte->inh || rte->eref == NULL)
+		return;
+	old = MemoryContextSwitchTo(adv->cxt);
+	foreach(lc, root->append_rel_list)
+	{
+		AppendRelInfo *ai = lfirst_node(AppendRelInfo, lc);
+
+		if (ai->parent_relid != rti)
+			continue;
+		if (sq == NULL)
+		{
+			sq = palloc0(sizeof(VgpSubquery));
+			sq->eref = rte->eref;
+		}
+		sq->inner_erefs = lappend(sq->inner_erefs, planner_rt_fetch(ai->child_relid, root)->eref);
+	}
+	if (sq != NULL)
+		adv->subqueries = lappend(adv->subqueries, sq);
+	MemoryContextSwitchTo(old);
+}
+
+/*
  * Per range-table index of the finished plan, the index of the sub-query
  * relation whose plan it belongs to, 0 at the top level.
  */
@@ -109,7 +147,14 @@ scope_parents(PlannedStmt *pstmt, VgpAdvice *advice)
 			Alias	   *eref = lfirst_node(RangeTblEntry, lc)->eref;
 
 			i++;
-			if (i != owner && eref != NULL && list_member_ptr(sq->inner_erefs, eref))
+			/*
+			 * The innermost owner wins. A pulled-up UNION's branches are in its
+			 * enclosing sub-query's range table too; sub-queries are noted inner
+			 * first (a sub-query's relations are planned before it), so the
+			 * UNION, noted earlier, is kept.
+			 */
+			if (i != owner && eref != NULL && parent[i] == 0 &&
+				list_member_ptr(sq->inner_erefs, eref))
 				parent[i] = owner;
 		}
 	}

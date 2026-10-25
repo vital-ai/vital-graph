@@ -186,7 +186,7 @@ def _unit_sql(reg, i: int):
     """The unit rendered alone, as the renderer writes it: (from-sql, the
     columns of its variables, its pending conditions)."""
     from . import qplan
-    r = qplan._R(qplan._Pos(reg.plans, reg.values))
+    r = qplan._R(qplan._pos_of(reg))
     node = qplan._base(reg, i)
     sql, _present, pend = qplan._render_node(node, reg, r)
     return sql, r, pend, r.pos
@@ -198,7 +198,7 @@ def _question(reg, s: int, t: Optional[int], hits: bool = True) -> Optional[_Que
     u = reg.units[s]
     if not u.subject.startswith("?") or u.anchor is None or u.anchor.s_var is None:
         return None
-    if t is not None and any(l.kind in ("subq", "vtable") for l in reg.units[t].leaves):
+    if t is not None and any(l.kind in ("subq", "vtable", "union") for l in reg.units[t].leaves):
         return None              # a sub-SELECT: no table to join a sample into (its own region is sampled)
     var = u.subject[1:]
     s_sql, s_r, s_pend, pos = _unit_sql(reg, s)
@@ -372,13 +372,13 @@ async def walk_hit_rate(q, space_id: str, conn=None, conn_params=None) -> Option
     from .generator import substitute_constants
     reg = q.region
     drv = qplan.topk_driver(q, reg)
-    if drv is None or reg.antis or any(l.kind in ("subq", "vtable") for u in reg.units for l in u.leaves):
+    if drv is None or reg.antis or any(l.kind in ("subq", "vtable", "union") for u in reg.units for l in u.leaves):
         return None
     var, d = drv
     a = reg.units[d].anchor
     if a is None or a.s_var != var:
         return None
-    pos = qplan._Pos(reg.plans, reg.values)
+    pos = qplan._pos_of(reg)
     a_col = next((f"{al}.{c}" for al, c in pos.positions.get(var, []) if al == a.alias), None)
     if a_col is None:
         return None
@@ -386,7 +386,7 @@ async def walk_hit_rate(q, space_id: str, conn=None, conn_params=None) -> Option
     smp = (f"SELECT DISTINCT {a_col} AS x0 FROM {pos.table[a.alias]} AS {a.alias} "
            f"WHERE {a_where} ORDER BY x0 LIMIT {SAMPLE_N}")
     tree = qplan._search_bound(reg, [var])
-    br = qplan._R(qplan._Pos(reg.plans, reg.values), outer={var: "smp.x0"})
+    br = qplan._R(qplan._pos_of(reg), outer={var: "smp.x0"})
     bsql, _bp, bpend = qplan._render_node(tree, reg, br)
     body = f"SELECT 1 FROM {bsql}" + (" WHERE " + " AND ".join(bpend) if bpend else "")
     sql = (f"WITH smp AS ({smp}) SELECT ARRAY[count(*), count(*) FILTER (WHERE EXISTS ({body}))]"
@@ -500,7 +500,7 @@ async def annotate_paths(q, space_id: str, conn=None, conn_params=None) -> Dict[
     t0 = time.perf_counter()
     asked = failed = 0
     for reg in _regions(q):
-        if len(reg.units) < 3 or any(l.kind in ("subq", "vtable") for u in reg.units for l in u.leaves):
+        if len(reg.units) < 3 or any(l.kind in ("subq", "vtable", "union") for u in reg.units for l in u.leaves):
             continue
         for _round in range(PATH_ROUNDS):
             tree = qplan.search(reg)
@@ -545,6 +545,9 @@ def _regions(q) -> list:
             for l in u.leaves:
                 if l.kind == "subq":
                     walk(l.sub.region)
+                elif l.kind == "union":
+                    for b in l.sub.branches:
+                        walk(b)
     walk(q.region)
     return out
 

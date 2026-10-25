@@ -767,4 +767,107 @@ SELECT vg_planner_last_report();
  method m1: nl applied
 (1 row)
 
+-- A UNION ALL sub-query is pulled up into an append relation, each branch a
+-- child sub-query: a branch's scans map to the UNION, so a join of the outer
+-- query with it is named by the UNION's alias.
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+size k1 50 a un
+method m1 hash a un
+*/ SELECT * FROM q9 a
+   JOIN ((SELECT b.s AS k FROM q9 b JOIN q9 c ON c.s = b.s WHERE b.p = 2 AND c.p = 3)
+         UNION ALL
+         (SELECT d.s AS k FROM q9 d JOIN q9 e ON e.s = d.s WHERE d.p = 4 AND e.p = 5)) un ON un.k = a.s
+   WHERE a.p = 1;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Hash Join
+   Hash Cond: (b.s = a.s)
+   ->  Append
+         ->  Hash Join
+               Hash Cond: (c.s = b.s)
+               ->  Bitmap Heap Scan on q9 c
+                     Recheck Cond: (p = 3)
+                     ->  Bitmap Index Scan on q9_ps
+                           Index Cond: (p = 3)
+               ->  Hash
+                     ->  Bitmap Heap Scan on q9 b
+                           Recheck Cond: (p = 2)
+                           ->  Bitmap Index Scan on q9_ps
+                                 Index Cond: (p = 2)
+         ->  Hash Join
+               Hash Cond: (d.s = e.s)
+               ->  Bitmap Heap Scan on q9 d
+                     Recheck Cond: (p = 4)
+                     ->  Bitmap Index Scan on q9_ps
+                           Index Cond: (p = 4)
+               ->  Hash
+                     ->  Bitmap Heap Scan on q9 e
+                           Recheck Cond: (p = 5)
+                           ->  Bitmap Index Scan on q9_ps
+                                 Index Cond: (p = 5)
+   ->  Hash
+         ->  Bitmap Heap Scan on q9 a
+               Recheck Cond: (p = 1)
+               ->  Bitmap Index Scan on q9_ps
+                     Index Cond: (p = 1)
+(30 rows)
+
+SELECT vg_planner_last_report();
+         vg_planner_last_report         
+----------------------------------------
+ size k1: 50 applied (PostgreSQL 12668)+
+ method m1: hash applied
+(1 row)
+
+-- The same UNION inside a fenced sub-query: its branches are in the fence's range
+-- table as well, and map to the UNION, the innermost.
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+method m1 hash a un
+*/ SELECT * FROM (SELECT a.s, un.k FROM q9 a
+   JOIN ((SELECT b.s AS k FROM q9 b JOIN q9 c ON c.s = b.s WHERE b.p = 2 AND c.p = 3)
+         UNION ALL
+         (SELECT d.s AS k FROM q9 d JOIN q9 e ON e.s = d.s WHERE d.p = 4 AND e.p = 5)) un ON un.k = a.s
+   WHERE a.p = 1 OFFSET 0) f;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Hash Join
+   Hash Cond: (b.s = a.s)
+   ->  Append
+         ->  Hash Join
+               Hash Cond: (c.s = b.s)
+               ->  Bitmap Heap Scan on q9 c
+                     Recheck Cond: (p = 3)
+                     ->  Bitmap Index Scan on q9_ps
+                           Index Cond: (p = 3)
+               ->  Hash
+                     ->  Bitmap Heap Scan on q9 b
+                           Recheck Cond: (p = 2)
+                           ->  Bitmap Index Scan on q9_ps
+                                 Index Cond: (p = 2)
+         ->  Hash Join
+               Hash Cond: (d.s = e.s)
+               ->  Bitmap Heap Scan on q9 d
+                     Recheck Cond: (p = 4)
+                     ->  Bitmap Index Scan on q9_ps
+                           Index Cond: (p = 4)
+               ->  Hash
+                     ->  Bitmap Heap Scan on q9 e
+                           Recheck Cond: (p = 5)
+                           ->  Bitmap Index Scan on q9_ps
+                                 Index Cond: (p = 5)
+   ->  Hash
+         ->  Bitmap Heap Scan on q9 a
+               Recheck Cond: (p = 1)
+               ->  Bitmap Index Scan on q9_ps
+                     Index Cond: (p = 1)
+(30 rows)
+
+SELECT vg_planner_last_report();
+ vg_planner_last_report  
+-------------------------
+ method m1: hash applied
+(1 row)
+
 DROP TABLE q9;

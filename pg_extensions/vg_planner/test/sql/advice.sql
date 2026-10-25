@@ -269,4 +269,28 @@ method m1 nl b c
          WHERE b.p = 2 AND c.p = 3 GROUP BY b.s) g ON g.s = a.s
    WHERE a.p = 1;
 SELECT vg_planner_last_report();
+-- A UNION ALL sub-query is pulled up into an append relation, each branch a
+-- child sub-query: a branch's scans map to the UNION, so a join of the outer
+-- query with it is named by the UNION's alias.
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+size k1 50 a un
+method m1 hash a un
+*/ SELECT * FROM q9 a
+   JOIN ((SELECT b.s AS k FROM q9 b JOIN q9 c ON c.s = b.s WHERE b.p = 2 AND c.p = 3)
+         UNION ALL
+         (SELECT d.s AS k FROM q9 d JOIN q9 e ON e.s = d.s WHERE d.p = 4 AND e.p = 5)) un ON un.k = a.s
+   WHERE a.p = 1;
+SELECT vg_planner_last_report();
+-- The same UNION inside a fenced sub-query: its branches are in the fence's range
+-- table as well, and map to the UNION, the innermost.
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+method m1 hash a un
+*/ SELECT * FROM (SELECT a.s, un.k FROM q9 a
+   JOIN ((SELECT b.s AS k FROM q9 b JOIN q9 c ON c.s = b.s WHERE b.p = 2 AND c.p = 3)
+         UNION ALL
+         (SELECT d.s AS k FROM q9 d JOIN q9 e ON e.s = d.s WHERE d.p = 4 AND e.p = 5)) un ON un.k = a.s
+   WHERE a.p = 1 OFFSET 0) f;
+SELECT vg_planner_last_report();
 DROP TABLE q9;

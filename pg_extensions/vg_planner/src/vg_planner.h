@@ -238,6 +238,7 @@ extern void vgp_size_base_rel(PlannerInfo *root, RelOptInfo *rel, Index rti,
 
 /* advice_check.c */
 extern void vgp_note_subquery(RelOptInfo *rel, RangeTblEntry *rte);
+extern void vgp_note_appendrel(PlannerInfo *root, Index rti, RangeTblEntry *rte);
 extern void vgp_check_plan(PlannedStmt *pstmt, VgpAdvice *advice);
 extern void vgp_set_report(const char *report);
 

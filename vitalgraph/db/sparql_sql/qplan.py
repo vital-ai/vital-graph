@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .ir import (KIND_BGP, KIND_DISTINCT, KIND_EXTEND, KIND_FILTER, KIND_GROUP,
                  KIND_JOIN, KIND_LEFT_JOIN, KIND_ORDER, KIND_PROJECT, KIND_REDUCED,
-                 KIND_SLICE, KIND_TABLE)
+                 KIND_SLICE, KIND_TABLE, KIND_UNION)
 from .qtree import Est, Leaf, Unit, _Stats, _leaves, _unit
 
 XSD_INTEGER = "http://www.w3.org/2001/XMLSchema#integer"
@@ -90,6 +90,9 @@ class Region:
     # its own companion columns (`_value_level`); a plain copy of a bound variable is
     # an alias of its key instead (keeps term identity)
     binds: List[Tuple[str, Any]] = field(default_factory=list)
+    # leaf alias as the IR names it -> as this region renders it: a UNION branch whose
+    # patterns another branch also holds under the same aliases (`_union_leaf`)
+    rename: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -241,7 +244,7 @@ def _analyze_subselect(p, ctx, exclude: frozenset) -> Query:
         raise Unsupported("sub-SELECT projects a variable that is neither a key nor an aggregate")
     q.region = _region(p.children[0], ctx, ctx.aliases, outer_vars=set(), exclude=exclude)
     if q.region.optionals or q.region.antis or any(
-            l.kind == "subq" for u in q.region.units for l in u.leaves):
+            l.kind in ("subq", "union", "vtable") for u in q.region.units for l in u.leaves):
         raise Unsupported("sub-SELECT with OPTIONAL, NOT EXISTS or a nested sub-SELECT")
     return q
 
@@ -286,8 +289,8 @@ def refresh_subqueries(q: Query) -> None:
     def walk(r: Region):
         for u in r.units:
             for l in u.leaves:
-                if l.kind == "subq":
-                    _subq_price(l)
+                if l.kind in ("subq", "union"):
+                    (_subq_price if l.kind == "subq" else _union_price)(l)
                     if u.anchor is l:
                         u.rows = Est(l.scan.rows, "subq")
         for o in r.optionals:
@@ -442,8 +445,93 @@ def _collect(p, ctx, aliases, parts, outer_vars):
     elif p.kind == KIND_PROJECT:
         # a grouped sub-SELECT joined into the pattern: one leaf, its own plan
         parts["leaves"].append(_subq_leaf(p, parts["ctx"], parts["exclude"]))
+    elif p.kind == KIND_UNION:
+        parts["leaves"].append(_union_leaf(p, ctx, aliases, parts, outer_vars))
     else:
         raise Unsupported(f"{p.kind} inside the pattern")
+
+
+@dataclass
+class _Union:
+    branches: List[Region]
+    vars: List[str]                 # every variable a branch binds
+    certain: Set[str]               # bound by every branch: the only ones it joins on
+
+
+def _union_leaf(p, ctx, aliases, parts, outer_vars) -> Leaf:
+    """`{ A } UNION { B } ...` as one leaf of the pattern: each branch a region,
+    planned and rendered on its own, the leaf the UNION ALL of their key sets, a
+    column k_<var> per variable any branch binds (NULL where a branch does not:
+    unbound). It joins the rest of the pattern only on variables EVERY branch binds
+    (`_build_region` declines otherwise: joining an unbound one is compatible with
+    anything, not equality). Never probed into (no index). Sized and priced by
+    `_union_price`."""
+    flat = []
+
+    def walk(x):
+        if x.kind == KIND_UNION:
+            for c in x.children:
+                walk(c)
+        else:
+            flat.append(x)
+    walk(p)
+    branches = []
+    for b in flat:
+        reg = _region(b, ctx, aliases, outer_vars, parts["exclude"])
+        if not reg.units:
+            raise Unsupported("a UNION branch with no pattern")
+        if reg.optionals or reg.antis or reg.binds:
+            raise Unsupported("a UNION branch with OPTIONAL, NOT EXISTS or BIND (C2)")
+        if any(l.kind in ("subq", "union") for u in reg.units for l in u.leaves):
+            raise Unsupported("a UNION branch with a sub-SELECT or a nested UNION")
+        branches.append(reg)
+    # `rewrite_distribute_union` copies the pattern joined to a UNION into every branch
+    # under the SAME aliases (unique per SELECT, which is all SQL needs). The advice
+    # names each relation once in the statement: a branch's colliding leaves are
+    # renamed, the region's `rename` applying it to its BGPs' tables, constraints and
+    # positions (`_Pos`), so everything that renders or samples it agrees.
+    seen: Set[str] = set()
+    for i, reg in enumerate(branches):
+        for u in reg.units:
+            for l in u.leaves:
+                if l.alias in seen:
+                    new = f"{l.alias}_{i}"
+                    while new in seen:
+                        new += "x"
+                    reg.rename[l.alias] = new
+                    l.alias = new
+                seen.add(l.alias)
+    bvars = [region_vars(reg) for reg in branches]
+    all_vars = sorted(set().union(*bvars))
+    certain = set.intersection(*bvars)
+    first = min(l.alias for reg in branches for u in reg.units for l in u.leaves)
+    leaf = Leaf(alias=f"un_{first}", kind="union", pred=None, s_var=None, o_var=None,
+                s_const=None, o_const=None, scan=Est(None, "subq"), pred_rows=None,
+                pred_objects=None, o_vars=[(f"k_{v}", v) for v in all_vars])
+    leaf.sub = _Union(branches=branches, vars=all_vars, certain=certain)
+    _union_price(leaf)
+    return leaf
+
+
+def _union_price(leaf: Leaf) -> None:
+    """Rows: the branches' rows summed (UNION ALL keeps every one). A variable's
+    distinct values: the branches' summed, at most the rows. Cost: the branches'."""
+    rows, cost, ndv = 0.0, 0.0, {}
+    for reg in leaf.sub.branches:
+        tree = search(reg)
+        rows += tree.rows
+        cost += tree.cost
+        b: Dict[str, float] = {}
+        for u in reg.units:
+            for v, n in _unit_ndv(u, reg.values, reg.bound).items():
+                b[v] = min(b.get(v, n), n)
+        for v in leaf.sub.vars:
+            if v in region_vars(reg):
+                ndv[v] = ndv.get(v, 0.0) + min(b.get(v, tree.rows), tree.rows)
+    rows = max(rows, 1.0)
+    leaf.scan = Est(rows, "subq")
+    leaf.col_ndv = {f"k_{v}": max(1.0, min(n, rows)) for v, n in ndv.items()}
+    leaf.sub_cost = cost
 
 
 def _vtable_leaf(p, aliases, parts, vars_=None, rows=None) -> Leaf:
@@ -546,6 +634,12 @@ def _build_region(parts, ctx, aliases) -> Region:
             if l.scan.rows is None or rows < l.scan.rows:
                 l.scan = Est(rows, "values")
         for l in holders:
+            if l.kind in ("union", "subq", "vtable") and l.scan.rows:
+                # a derived table: the pinned share of the column's distinct values
+                col = next(c for c, v in l.o_vars if v == var)
+                n = l.col_ndv.get(col) or l.scan.rows
+                l.scan = Est(max(1.0, l.scan.rows * min(1.0, len(uuids) / n)), l.scan.rule)
+                continue
             if not l.pred_uuid:
                 continue
             counts = [quad_stats.get((l.pred_uuid, u), extra.get((l.pred_uuid, u))) for u in uuids]
@@ -600,6 +694,26 @@ def _build_region(parts, ctx, aliases) -> Region:
                 others |= _region_all_vars(o2)
         if (_region_all_vars(o) & others) - left:
             raise Unsupported("an OPTIONAL shares a variable its own group does not bind")
+    # A UNION variable some branch leaves unbound joins nothing by equality (unbound
+    # is compatible with every value): read anywhere else in the region, decline.
+    for l in leaves:
+        if l.kind != "union":
+            continue
+        maybe = set(l.sub.vars) - l.sub.certain
+        if not maybe:
+            continue
+        other = {v for x in leaves if x is not l for v in [x.s_var] + [ov for _c, ov in x.o_vars] if v}
+        for o in parts["optionals"]:
+            other |= _region_all_vars(o)
+        for a_ in parts["antis"]:
+            other |= _region_all_vars(a_.region) | set().union(*(_expr_vars(f) for f in a_.filters))
+        for f in parts.get("filters", []):
+            other |= _expr_vars(f)
+        for _v, e in parts.get("binds", []):
+            other |= _expr_vars(e)
+        other |= {v for v, _u in parts.get("iri_ne", [])} | set(values)
+        if maybe & other:
+            raise Unsupported("a UNION variable some branch leaves unbound is joined or read outside it")
     binds = parts.get("binds", [])
     if binds:
         # a BIND's variable joining a pattern would join a computed value to stored
@@ -1157,7 +1271,7 @@ def _unit_build(u: Unit) -> Tuple[float, List[Tuple[Leaf, str]]]:
 def _base(r: Region, i: int) -> Node:
     u = r.units[i]
     rr = u.rows.rows or 0.0
-    if u.anchor is not None and u.anchor.kind in ("subq", "vtable"):
+    if u.anchor is not None and u.anchor.kind in ("subq", "vtable", "union"):
         return Node("scan", frozenset([i]), u.anchor.sub_cost, rr, _unit_ndv(u, r.values, r.bound), unit=i)
     cost, _plan = _unit_build(u)
     return Node("scan", frozenset([i]), cost, rr, _unit_ndv(u, r.values, r.bound), unit=i)
@@ -1275,7 +1389,9 @@ _ALIAS = re.compile(r"\b([a-z][a-z0-9_]*[0-9])\.")
 class _Pos:
     """Positions, filters and table names of one region's BGPs, plus the
     region's VALUES restrictions as filters on the leaves that hold them."""
-    def __init__(self, plans, values: Optional[Dict[str, List[str]]] = None):
+    def __init__(self, plans, values: Optional[Dict[str, List[str]]] = None,
+                 rename: Optional[Dict[str, str]] = None):
+        rn = rename or {}
         self.table: Dict[str, str] = {}
         self.filters: Dict[str, List[str]] = {}
         self.positions: Dict[str, List[Tuple[str, str]]] = {}
@@ -1293,8 +1409,11 @@ class _Pos:
                 if t.kind == "term":
                     self.term_table = self.term_table or t.table_name
                 else:
-                    self.table[t.alias] = t.table_name
+                    self.table[rn.get(t.alias, t.alias)] = t.table_name
             for owner, sql in p.tagged_constraints:
+                if rn:
+                    owner = rn.get(owner, owner)
+                    sql = _ALIAS.sub(lambda m: rn.get(m.group(1), m.group(1)) + ".", sql)
                 refs = set(_ALIAS.findall(sql))
                 if refs <= {owner}:
                     self.filters.setdefault(owner, []).append(self._name_sublink(owner, sql))
@@ -1302,12 +1421,17 @@ class _Pos:
                     raise Unsupported(f"cross-table condition that is not a variable equality: {sql}")
             for var, slot in p.var_slots.items():
                 for pos in slot.positions:
+                    pos = (rn.get(pos[0], pos[0]),) + tuple(pos[1:])
                     if pos[0] in self.table:
                         self.positions.setdefault(var, []).append(pos)
         for var, uuids in (values or {}).items():
             lits = ", ".join(f"'{u}'::uuid" for u in uuids)
             for a, col in self.positions.get(var, []):
                 self.filters.setdefault(a, []).append(f"{a}.{col} IN ({lits})")
+
+
+def _pos_of(reg: "Region") -> "_Pos":
+    return _Pos(reg.plans, reg.values, reg.rename)
 
 
 from .qtree import SUBLINK_RE as _SUBLINK     # owner, col, sel, table, cond
@@ -1625,7 +1749,7 @@ def _render_subq(leaf: Leaf, ctx, term_table: str) -> _SubSql:
     reg = q.region
     if reg.filters or reg.iri_ne or reg.binds:
         raise Unsupported("a FILTER or BIND inside a sub-SELECT (C3)")
-    pos = _Pos(reg.plans, reg.values)
+    pos = _pos_of(reg)
     tree = search(reg)
     r = _R(pos)
     core, _present, pend = _render_node(tree, reg, r)
@@ -1661,31 +1785,93 @@ def _render_subq(leaf: Leaf, ctx, term_table: str) -> _SubSql:
                    poses=[pos], base_sizes=_base_sizes(reg))
 
 
+def _derived_tables(reg: Region, pos: "_Pos", ctx, subs: List["_SubSql"], poses: List["_Pos"]) -> Set[str]:
+    """Register the region's sub-SELECT, UNION and VALUES leaves in `pos`: each
+    one's SQL is its table, its columns its variables' positions. Their own advice
+    goes to `subs`, their positions to `poses`. Returns the UNION variables some
+    branch leaves unbound."""
+    maybe: Set[str] = set()
+    for u in reg.units:
+        for l in u.leaves:
+            if l.kind == "vtable":
+                pos.table[l.alias] = _vtable_sql(l)
+            elif l.kind in ("subq", "union"):
+                s = (_render_subq if l.kind == "subq" else _render_union)(l, ctx, pos.term_table)
+                subs.append(s)
+                pos.table[l.alias] = f"({s.sql})"
+                poses += s.poses
+                if l.kind == "union":
+                    maybe |= set(l.sub.vars) - l.sub.certain
+            else:
+                continue
+            for c, v in l.o_vars:
+                pos.positions.setdefault(v, []).append((l.alias, c))
+                if v in reg.values:
+                    # the region's VALUES pin holds here too: `_Pos` applied it to the
+                    # BGPs' positions only, and a UNION binding ?t went unrestricted
+                    lits = ", ".join(f"'{u_}'::uuid" for u_ in reg.values[v])
+                    pos.filters.setdefault(l.alias, []).append(f"{l.alias}.{c} IN ({lits})")
+    return maybe
+
+
+def _render_union(leaf: Leaf, ctx, term_table: str) -> _SubSql:
+    """A UNION leaf's own SQL: each branch planned and rendered as a key set
+    (its FILTERs on value columns, `_value_level`), NULL for a variable it does
+    not bind, the branches joined by UNION ALL. Each branch's advice items name its
+    own relations."""
+    un = leaf.sub
+    sqls, sizes, units_adv, methods, poses, base = [], [], [], [], [], []
+    for i, reg in enumerate(un.branches):
+        pos = _pos_of(reg)
+        pos.term_table = pos.term_table or term_table
+        _derived_tables(reg, pos, ctx, [], [])
+        tree = search(reg)
+        r = _R(pos)
+        core, _present, pend = _render_node(tree, reg, r)
+        where = list(pend)
+        mine = sorted(v for v in un.vars if v in region_vars(reg))
+        for v in mine:
+            if v not in r.bound:
+                raise Unsupported(f"UNION branch: ?{v} is not bound by its plan")
+        for v, u_ in reg.iri_ne:
+            if v not in r.bound:
+                raise Unsupported(f"a FILTER reads ?{v}, which the plan does not bind")
+            where.append(f"{r.bound[v]} <> '{u_}'::uuid" if u_ else f"{r.bound[v]} IS NOT NULL")
+        if reg.filters:
+            inner = _value_level(reg, ctx, r, core, where, mine, False, term_table, [], [])
+            cols = [f"ub{i}.k_{v}" if v in mine else f"NULL::uuid AS k_{v}" for v in un.vars]
+            sqls.append(f"SELECT {', '.join(cols)}\nFROM ({inner}) AS ub{i}")
+        else:
+            cols = [f"{r.bound[v]} AS k_{v}" if v in mine else f"NULL::uuid AS k_{v}" for v in un.vars]
+            sqls.append(f"SELECT {', '.join(cols)}\nFROM {core}" + ("\nWHERE " + " AND ".join(where) if where else ""))
+        sizes += r.sizes
+        units_adv += r.units_advice
+        methods += r.methods
+        poses.append(pos)
+        base += _base_sizes(reg)
+    sql = "\nUNION ALL\n".join(f"({s})" for s in sqls)
+    return _SubSql(sql=sql, sizes=sizes, units_adv=units_adv, methods=methods, poses=poses, base_sizes=base)
+
+
 def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = None) -> Rendered:
     from .generator import substitute_constants
     reg = q.region
-    pos = _Pos(reg.plans, reg.values)
+    pos = _pos_of(reg)
+    if pos.term_table is None:
+        # the pattern is a UNION (or holds one): the term table of its branches
+        pos.term_table = next((_Pos(b.plans).term_table for u in reg.units for l in u.leaves
+                               if l.kind == "union" for b in l.sub.branches if _Pos(b.plans).term_table), None)
     if pos.term_table is None:
         raise Unsupported("no term table")
     poses = [pos]
-    # sub-SELECT leaves: their SQL is the leaf's table, their columns its positions
+    # sub-SELECT, UNION and VALUES leaves: their SQL is the leaf's table
     subs: List[_SubSql] = []
-    for u in reg.units:
-        for l in u.leaves:
-            if l.kind == "subq":
-                s = _render_subq(l, ctx, pos.term_table)
-                subs.append(s)
-                pos.table[l.alias] = f"({s.sql})"
-                for c, v in l.o_vars:
-                    pos.positions.setdefault(v, []).append((l.alias, c))
-                poses += s.poses
-            elif l.kind == "vtable":
-                pos.table[l.alias] = _vtable_sql(l)
-                for c, v in l.o_vars:
-                    pos.positions.setdefault(v, []).append((l.alias, c))
+    maybe_vars = _derived_tables(reg, pos, ctx, subs, poses)
+    if maybe_vars & {v for v, _d in q.order}:
+        # unbound sorts first in SPARQL; a NULL key sorts last here
+        raise Unsupported("ORDER BY a variable a UNION branch leaves unbound")
+    outer_vars_ = region_vars(reg)
     for o in list(reg.optionals) + [a.region for a in reg.antis]:
-        if any(l.kind in ("subq", "vtable") for u in o.units for l in u.leaves):
-            raise Unsupported("a sub-SELECT or VALUES table inside an OPTIONAL or NOT EXISTS")
         if o.filters or o.iri_ne or o.binds:
             raise Unsupported("a FILTER or BIND inside an OPTIONAL or NOT EXISTS body (C2)")
     tree = main_tree or search(reg)
@@ -1696,19 +1882,17 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     sizes = list(r.sizes)
     units_adv = list(r.units_advice)
     methods = list(r.methods)
-    for s in subs:
-        sizes += s.sizes
-        units_adv += s.units_adv
-        methods += s.methods
-        base_sizes += s.base_sizes
     rows = tree.rows
     anti_notes: List[str] = []
     late = _late_optional_ok(q, reg, r)
     late_opts: List[Tuple[str, List[str], "_R", List[str], int]] = []   # (LATERAL sql, page join columns, its _R, its projected vars, index)
     # OPTIONAL blocks, each planned on its own, left-joined on the shared vars
     for oi, opt in enumerate(reg.optionals):
-        opos = _Pos(opt.plans, opt.values)
+        opos = _pos_of(opt)
+        opos.term_table = opos.term_table or pos.term_table
         poses.append(opos)
+        if _derived_tables(opt, opos, ctx, subs, poses) & outer_vars_:
+            raise Unsupported("an OPTIONAL joins on a variable a UNION branch leaves unbound")
         if late:
             # Joined after the cut, in one of two forms, scored like a NOT EXISTS body:
             #   set         the OPTIONAL built once and hash-joined to the page rows;
@@ -1786,8 +1970,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         for f in anti.filters:
             _fv(f)
         corr = sorted((region_vars(body) | fvars) & set(r.bound))
-        bpos = _Pos(body.plans, body.values)
+        bpos = _pos_of(body)
+        bpos.term_table = bpos.term_table or pos.term_table
         poses.append(bpos)
+        if _derived_tables(body, bpos, ctx, subs, poses) & (outer_vars_ | set().union(*(_expr_vars(f) for f in anti.filters))):
+            raise Unsupported("a NOT EXISTS reads a variable a UNION branch leaves unbound")
         set_tree = search(body)
         dec_cost = set_tree.cost + rows
         body.bound = {v: 1.0 for v in corr}
@@ -1813,6 +2000,12 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         sizes += br.sizes
         methods += br.methods
         anti_notes.append(f"NOT EXISTS {form} (decorrelated {dec_cost:,.0f} vs correlated {cor_cost:,.0f})")
+    # the derived leaves' own advice (the OPTIONALs' and NOT EXISTS bodies' included)
+    for s in subs:
+        sizes += s.sizes
+        units_adv += s.units_adv
+        methods += s.methods
+        base_sizes += s.base_sizes
     # ORDER BY ?v ... LIMIT n: sort-then-limit (the key set, sorted, cut) vs
     # an ordered walk of ?v's values with early stop. Scored, measured on
     # decision_page (results/early_stop_decision_page.md): 51k vs ~190k
