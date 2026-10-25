@@ -257,8 +257,10 @@ def _emit_with(monkeypatch, *, model_order, with_groups):
     def regroup(plan, ctx, quad_tables, tagged, inner_cols, leaf_card):
         if not with_groups:
             return None
+        # (the rewrite, the unanchored group, the groups themselves: issue 310
+        # orders the remainder with them)
         return apply_groups(groups, quad_tables, tagged, inner_cols, leaf_card,
-                            reorder_joins), None
+                            reorder_joins), None, groups
 
     monkeypatch.setattr(E, "_leaf_cardinality", lambda plan, ctx: dict(card))
     monkeypatch.setattr(E, "_model_join_order", lambda *a, **k: model_order)

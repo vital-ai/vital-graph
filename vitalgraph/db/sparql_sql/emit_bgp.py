@@ -164,8 +164,11 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
         # own C_out chose the groups on every dashboard BGP where both applied
         # (`group_cost_probe.py`), so the rule is the precedence itself.
         from . import planner_ext
+        orig_tables, orig_card = quad_tables, leaf_card
         regrouped = None if planner_ext.retired("slot_group_cte") else _slot_group_ctes(
             plan, ctx, quad_tables, tagged, inner_cols, leaf_card)
+        groups = regrouped[2] if regrouped is not None else []
+        regrouped = regrouped[:2] if regrouped is not None else None
         if regrouped is not None and model_order:
             # The order is displaced, but the statement-wide pin it would have
             # set is KEPT. only_cause depends on it: the pin also fixes the
@@ -186,12 +189,23 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
                 # hashed). The CTEs cannot be probed by ?d, so a nested loop
                 # re-runs the whole BGP per outer row; materialise it once.
                 plan.slot_group_whole_bgp = unanchored
-        if model_order:
+        # After regrouping, the REMAINDER (the group units and the leaves no group
+        # took) in the model's order, the units priced as column leaves
+        # (`issues/310`). Not a pin: the written order is the model's best guess
+        # instead of `reorder_joins`'s, which matters wherever the order is kept:
+        # under the statement-wide pin another BGP set, and past PostgreSQL's
+        # join_collapse_limit. category_page, pinned: the remainder rooted on a
+        # field unit and probed ?d's ~1,090 graph members, 1.8M rows, 2.1 s.
+        remainder_order = (_remainder_model_order(plan, ctx, orig_tables, orig_card, quad_tables,
+                                                  tagged, leaf_card, groups)
+                           if regrouped is not None and not model_order else None)
+        if model_order or remainder_order:
             from .reorder_bgp import assign_constraints
             by_alias = {t.alias: t for t in quad_tables}
             ordered, on_map, first_conds = assign_constraints(
-                [by_alias[a] for a in model_order], tagged)
-            ctx.fixed_join_order = True
+                [by_alias[a] for a in (model_order or remainder_order)], tagged)
+            if model_order:
+                ctx.fixed_join_order = True
         else:
             ordered, on_map, first_conds = reorder_joins(
                 quad_tables, tagged,
@@ -199,6 +213,9 @@ def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> 
                 pred_stats=ctx.aliases.pred_stats,
                 leaf_cardinality=leaf_card,
             )
+            if len(ordered) > 1:
+                # written in a heuristic order: noted if the statement is pinned
+                ctx.heuristic_orders.append(ordered[0].alias)
         # When the anchor table has a text-filter (IN SELECT term_uuid),
         # wrap it in a subquery to force PG to evaluate the filter first.
         first_t = ordered[0]
@@ -334,9 +351,76 @@ def _slot_group_ctes(plan: PlanV2, ctx: EmitContext, quad_tables, tagged,
             return None
         unanchored = next((g.name for g in groups if g.detail.get("anchor") is None), None)
         return apply_groups(groups, quad_tables, tagged, inner_cols, leaf_card,
-                            reorder_joins), unanchored
+                            reorder_joins), unanchored, groups
     except Exception as exc:
         logger.warning("slot-group CTE failed, using the flat join: %s", exc)
+        return None
+
+
+def _remainder_model_order(plan, ctx, orig_tables, orig_card, tables, tagged, card, groups):
+    """The model's order for the remainder after slot-group CTEs, or None (keep
+    `reorder_joins`). The units are column leaves (`bgp_cardinality.unit_model`).
+    Taken when the model prices it cheaper than `reorder_joins`'s order, both
+    priced by the same model; None whenever anything is unpriced, and for a
+    TEXT, RANGE or FTS anchor, which the model does not price the way
+    `reorder_joins`'s rule needs (as `_model_join_order`). Never fails the
+    query: the default order is correct, only slower."""
+    from .bgp_cardinality import (PRICED_KINDS, REMAINDER_NAME, choose_order, estimate_order,
+                                  leaves_from, unit_model)
+    from .plan_decisions import recorder_for
+    rec = recorder_for(ctx.aliases)
+    if not groups or len(tables) < 2 or any(t.kind not in PRICED_KINDS for t in orig_tables):
+        return None
+    if _has_unpriced_anchor(plan, orig_card):
+        rec.declined(REMAINDER_NAME, "a text, range or FTS anchor keeps the default order")
+        return None
+    consts = getattr(ctx.aliases, "constants", None) or {}
+    resolved = getattr(ctx.aliases, "resolved_constants", None) or {}
+
+    def uuid_of(term):
+        col = consts.get(_widen_term(term))
+        return resolved.get(col) if col else None
+
+    try:
+        from .reorder_bgp import reorder_joins
+        leaves = leaves_from(plan, ctx.aliases, orig_tables, orig_card, uuid_of)
+        names = {g.name for g in groups}
+        remainder = [t.alias for t in tables]
+        if any(a not in leaves for a in remainder if a not in names):
+            rec.declined(REMAINDER_NAME, "a leaf has no statistics")
+            return None
+        um = unit_model(plan, leaves, [(g.name, set(g.aliases), g.pin) for g in groups])
+        if um is None:
+            rec.declined(REMAINDER_NAME, "a group unit cannot be priced")
+            return None
+        shim, all_leaves = um
+        bound = sorted(set(getattr(ctx, "correlated_scope", None) or ()) & set(plan.var_slots))
+        if bound:
+            # An EXISTS body, run per outer row. A unit is a MATERIALIZED CTE with
+            # no index: probed per row it is SCANNED per row, while the column-leaf
+            # model prices it as an indexed lookup (only_cause's body: 6,950 rows
+            # read per probe priced at 0.008). Outside a correlated body the CTE is
+            # built once and hash-joined, which the model does price fairly.
+            rec.declined(REMAINDER_NAME, "a correlated body: a unit has no index to probe per row",
+                         bound=bound)
+            return None
+        order, cost = choose_order(shim, all_leaves, remainder, bound)
+        default = [t.alias for t in reorder_joins(
+            tables, tagged, quad_stats=ctx.aliases.quad_stats,
+            pred_stats=ctx.aliases.pred_stats, leaf_cardinality=card)[0]]
+        est = estimate_order(shim, all_leaves, default, bound)
+        if not order or any(e is None for e in est):
+            rec.declined(REMAINDER_NAME, "the model cannot price both orders")
+            return None
+        detail = dict(tables=len(remainder), units=len(groups), model_root=order[0],
+                      default_root=default[0], model_cost=round(cost), default_cost=round(sum(est)))
+        if cost >= sum(est):
+            rec.declined(REMAINDER_NAME, "the default order is as cheap", **detail)
+            return None
+        rec.fired(REMAINDER_NAME, "", **detail)
+        return order
+    except Exception as exc:
+        logger.warning("slot-group remainder order failed, using the default: %s", exc)
         return None
 
 

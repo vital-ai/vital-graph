@@ -2113,6 +2113,9 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
     # Likewise the statement-wide join-order pin: a model order written inside
     # the body is only kept if the executor pins the statement.
     inner_ctx._fixed_join_order = ctx._fixed_join_order
+    # and the record of orders that pin keeps without the model having chosen
+    # them (`issues/310`): an EXISTS body's heuristic order is frozen like any other.
+    inner_ctx.heuristic_orders = ctx.heuristic_orders
 
     outer_vars = set(ctx.types.all_vars())
     inner_scope = compute_scope(inner_plan)

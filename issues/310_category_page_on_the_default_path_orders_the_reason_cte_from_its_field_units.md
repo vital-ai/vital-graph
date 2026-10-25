@@ -1,6 +1,52 @@
 # 310 — category_page on the default path orders the reason CTE from its field units
 
-## Status: OPEN — measured on production 2026-10-25 and reproduced locally (with the pin forced, below); fix proposed, not started. Default path; a heads-up to the qtree planner work, not a shared owner (see "Relation to the qtree planner").
+## Status: FIXED on the default path, 2026-10-25 (verified locally, pinned and unpinned; suites green). Open for: the production read-only EXPLAIN check, and the heuristic order by_reason_tied keeps under the pin (below).
+
+## Fix as built
+
+- **`bgp_cardinality.unit_model`:** each slot-group unit becomes ONE column leaf.
+  - Its rows are its members joined greedily from the pin.
+  - Its columns are the CTE's `alias__col` columns, with the BGP's variable positions remapped
+    onto them, one column per variable.
+  - It returns None when a member is unpriced.
+- **`emit_bgp._remainder_model_order`:** after regrouping, the remainder is priced with
+  `choose_order`, and the model's order is written when the same model prices it cheaper than
+  `reorder_joins`'s order.
+  - This is not a new pin, so `ENFORCE_MIN_GAIN`, which guards forcing, does not apply. The
+    written order is the model's best guess instead of the heuristic's.
+  - It falls back to `reorder_joins` when anything is unpriced, or for a text, range or FTS
+    anchor.
+  - **Not in a correlated (EXISTS) body.** A unit is a MATERIALIZED CTE with no index, so probed
+    per outer row it is SCANNED per row. The column-leaf model priced only_cause's body probe at
+    0.008 rows; it reads 6,950 per probe, about 24M over the outer rows. That body keeps its
+    measured order.
+- **`pinned_heuristic_order`** (a plan_decisions note, `EmitContext.heuristic_orders`, shared
+  with EXISTS bodies): names every BGP the statement-wide pin keeps without the model having
+  ordered it.
+  - On the UW dashboards it lists only_cause's NOT EXISTS body (deliberate: the pin is kept for
+    exactly that order) and **by_reason_tied's `q0` BGP**. by_reason_tied runs at about 57 ms
+    either way, so it is the next candidate, not a defect today.
+  - So the invariant proposed below does not hold, and is recorded, not asserted.
+
+**Measured** (`uw_prodshape2`, today's SQL before vs after, 5 interleaved runs, no swapping;
+results identical in every query):
+
+| query | as the executor runs it | pin forced (as production) |
+|---|---|---|
+| category_page | 521 → **329** ms | 1,209 → **334** ms |
+| only_cause | 1,488 → **695** ms | 1,445 → **679** ms |
+| naics_for_category | 202 → 211 ms (**5-9% slower**, repeated 3x) | 203 → **69** ms |
+| by_reason | 66 → 49 ms | 68 → 54 ms |
+| the other 7 dashboard queries | same SQL | same SQL |
+
+naics_for_category is the trade. Unpinned, PostgreSQL re-plans most of its 9-relation
+remainder itself, and the model's written order is slightly worse for the part past
+`join_collapse_limit` that it still controls. Pinned, it is 3x faster.
+
+Tests:
+- `tests/unit/sparql_sql/test_slot_group_remainder_order.py` (3);
+- `test_slot_group_cte.py`'s stub updated to the new `_slot_group_ctes` return value;
+- unit, DAWG conformance and the full integration suite green on the vg test stack.
 
 **Related:** `issues/293` (the class, and the dashboard this query belongs to),
 the qtree planner (`qplan.py`; its plan for this query is the target order below),

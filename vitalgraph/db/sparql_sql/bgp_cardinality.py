@@ -373,6 +373,89 @@ def choose_order(plan, leaves: Dict[str, Leaf], aliases: Sequence[str],
     return best
 
 
+def _greedy_from(plan, leaves: Dict[str, Leaf], root: str, aliases: Sequence[str]):
+    """`choose_order`'s greedy extension from a FIXED root: (order, rows after
+    the last step), or (None, None) when a step cannot be priced or nothing
+    connects."""
+    _var_at, holders = _positions(plan)
+    vars_of: Dict[str, Set[str]] = {}
+    for v, hs in holders.items():
+        for a in hs:
+            vars_of.setdefault(a, set()).add(v)
+    if leaves[root].scan_rows is None:
+        return None, None
+    order, placed, last = [root], {root}, leaves[root].scan_rows
+    while len(order) < len(aliases):
+        cands = []
+        for a in aliases:
+            if a in placed or not any(holders[v] & placed for v in vars_of.get(a, ())):
+                continue
+            est = estimate_order(plan, leaves, order + [a])[-1]
+            if est is not None:
+                cands.append((est, list(aliases).index(a), a))
+        if not cands:
+            return None, None
+        last, _, a = min(cands)
+        order.append(a)
+        placed.add(a)
+    return order, last
+
+
+class _Slots:
+    """A plan stand-in carrying only `var_slots`, which is all `estimate_order`
+    and `choose_order` read of the plan."""
+    def __init__(self, var_slots):
+        self.var_slots = var_slots
+
+
+class _Positions:
+    def __init__(self, positions):
+        self.positions = positions
+
+
+def unit_model(plan, leaves: Dict[str, Leaf],
+               units: Sequence[Tuple[str, Set[str], str]]):
+    """The BGP as the model sees it after slot-group CTEs (`slot_group_cte`,
+    `issues/310`): each unit `(name, member aliases, pin)` is ONE column leaf,
+    the CTE, whose rows are its members joined from the pin and whose columns
+    are the CTE's `alias__col` columns, the BGP's variable positions remapped
+    onto them (one column per variable). Returns (plan stand-in, leaves) for
+    `choose_order` / `estimate_order` over the remainder, or None when a unit
+    cannot be priced."""
+    owner = {a: name for name, members, _pin in units for a in members}
+    unit_rows: Dict[str, float] = {}
+    for name, members, pin in units:
+        _order, rows = _greedy_from(plan, leaves, pin, sorted(members))
+        if rows is None:
+            return None
+        unit_rows[name] = rows
+    var_slots = {}
+    cols: Dict[str, Dict[str, float]] = {name: {} for name in unit_rows}
+    for var, slot in plan.var_slots.items():
+        positions, seen_units = [], set()
+        for a, col in slot.positions:
+            name = owner.get(a)
+            if name is None:
+                positions.append((a, col))
+                continue
+            if name in seen_units:
+                continue                     # one column per variable per unit
+            seen_units.add(name)
+            c = f"{a}__{col}"
+            positions.append((name, c))
+            rows = unit_rows[name]
+            objs = leaves[a].pred_objects if a in leaves else None
+            cols[name][c] = rows if col == "subject_uuid" or not objs else min(rows, objs)
+        var_slots[var] = _Positions(positions)
+    out = {a: l for a, l in leaves.items() if a not in owner}
+    for name, rows in unit_rows.items():
+        out[name] = Leaf(name, None, False, False, rows, rows, None, cols=cols[name])
+    return _Slots(var_slots), out
+
+
+REMAINDER_NAME = "slot_group_remainder_order"
+
+
 #: Enforce the model's order only when it predicts at least this gain over the
 #: default (`reorder_joins`). The model's error, measured against actual counts
 #: on two workloads (`issues/293` stage 2), is 1.4-3.7x geometric mean with

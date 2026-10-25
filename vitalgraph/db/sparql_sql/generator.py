@@ -2570,6 +2570,12 @@ async def _generate_sql(
         # and why. Always on — a diagnostic nobody enables is indistinguishable
         # from not having one, which is what `issues/178` ran into.
         _rt_n, _rt_ms = roundtrip_count()
+        if ctx.fixed_join_order and ctx.heuristic_orders and plan_source is None:
+            # Kept as written under the pin, but ordered by `reorder_joins`, not the
+            # model (`issues/310`): the next frozen heuristic order shows up here.
+            _decisions.declined("pinned_heuristic_order",
+                                "the statement-wide pin keeps BGPs the model did not order",
+                                bgps=list(ctx.heuristic_orders))
         _decisions.emit(space_id=space_id,
                         extra={"db_roundtrips": _rt_n, "db_ms": _rt_ms})
 
