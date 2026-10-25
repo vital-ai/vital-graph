@@ -158,7 +158,7 @@ class TotalCountMode(str, Enum):
 _PROJECTABLE_SLOT_CLASSES = {
     "http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
     "http://vital.ai/ontology/haley-ai-kg#KGChoiceSlot",
-    "http://vital.ai/ontology/haley-ai-kg#KGJsonSlot",
+    "http://vital.ai/ontology/haley-ai-kg#KGJSONSlot",
     "http://vital.ai/ontology/haley-ai-kg#KGURISlot",
     "http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
     "http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot",

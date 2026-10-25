@@ -137,7 +137,6 @@ _RANGE_OPS = {
 
 _DATETIME_SLOT_CLASSES = {
     f"{_HALEY_NS}KGDateTimeSlot",
-    f"{_HALEY_NS}KGDateSlot",
 }
 
 _TEXT_SLOT_CLASSES = {

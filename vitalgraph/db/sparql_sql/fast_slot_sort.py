@@ -64,7 +64,7 @@ HALEY = "http://vital.ai/ontology/haley-ai-kg#"
 _LANE = {
     f"{HALEY}KGTextSlot": "text",
     f"{HALEY}KGChoiceSlot": "text",
-    f"{HALEY}KGJsonSlot": "text",
+    f"{HALEY}KGJSONSlot": "text",
     f"{HALEY}KGURISlot": "text",
     f"{HALEY}KGBooleanSlot": "text",
     f"{HALEY}KGIntegerSlot": "num",
