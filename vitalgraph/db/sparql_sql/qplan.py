@@ -81,11 +81,15 @@ class Region:
     # KGQuery edge chains); a prefix sampled as a whole does not.
     path_rows: Dict[int, Est] = field(default_factory=dict)
     # FILTER expressions over the region's own rows (a comparison, IN, a string or
-    # date function, ...), evaluated on VALUE columns (`_filter_level`, render).
+    # date function, ...), evaluated on VALUE columns (`_value_level`, render).
     filters: List[Any] = field(default_factory=list)
     # `?v != <iri>`: a term-identity test, rendered on the uuid column (var, uuid or
     # None for an IRI the term table does not hold, which every bound ?v differs from)
     iri_ne: List[Tuple[str, Optional[str]]] = field(default_factory=list)
+    # BIND(expr AS ?v), in evaluation order: a COMPUTED value (not a term), carried as
+    # its own companion columns (`_value_level`); a plain copy of a bound variable is
+    # an alias of its key instead (keeps term identity)
+    binds: List[Tuple[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -116,6 +120,8 @@ class Query:
     # the ORDER BY is the generator's own, synthesized for a stable page of an
     # unordered LIMIT (`hints["stable_paging"]`, collect._collect_slice), by uuid
     synth_order: bool = False
+    # top-level BIND / SELECT (expr AS ?v) above the pattern, outermost first
+    binds: List[Tuple[str, Any]] = field(default_factory=list)
 
 
 class _Shim:
@@ -171,8 +177,11 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
             e = p.extend_expr
             name = getattr(e, "var", None)
             if name is None or not name.startswith("."):
-                raise Unsupported(f"BIND / extend of a non-aggregate: {e}")
-            q.extend[p.extend_var] = name
+                if seen_group:
+                    raise Unsupported("an expression over aggregates or group keys (C3)")
+                q.binds.append((p.extend_var, e))     # SELECT (expr AS ?v), BIND above the pattern
+            else:
+                q.extend[p.extend_var] = name
         elif p.kind == KIND_GROUP:
             seen_group = True
             gv = p.group_vars or []
@@ -187,6 +196,17 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
             q.having.extend(p.filter_exprs or [])
         p = p.children[0]
     q.region = _region(p, ctx, ctx.aliases, outer_vars=set(), exclude=exclude)
+    if q.binds:
+        # evaluated innermost first: the loop above met them outermost first
+        from .var_scope import compute_scope
+        visible = set(compute_scope(p).all_visible)
+        for v, e in reversed(q.binds):
+            if _expr_vars(e) - visible:
+                raise Unsupported("a BIND reads a variable not bound below it")
+            if v in visible:
+                raise Unsupported(f"BIND to ?{v}, already bound")
+            visible.add(v)
+        q.region.binds = q.region.binds + list(reversed(q.binds))
     refresh_subqueries(q)
     return q
 
@@ -290,7 +310,7 @@ def _is_having(p, q) -> bool:
 
 def _region(p, ctx, aliases, outer_vars: Set[str], exclude: frozenset = frozenset()) -> Region:
     parts = {"leaves": [], "values": {}, "plans": [], "optionals": [], "antis": [], "exclude": exclude, "ctx": ctx,
-             "filters": [], "iri_ne": []}
+             "filters": [], "iri_ne": [], "binds": []}
     _collect(p, ctx, aliases, parts, outer_vars)
     r = _build_region(parts, ctx, aliases)
     return r
@@ -391,6 +411,18 @@ def _collect(p, ctx, aliases, parts, outer_vars):
                     if not uuids:
                         raise Unsupported("a FILTER restricts to terms absent from the term table (the generator's empty path)")
                     parts["values"][v] = uuids
+    elif p.kind == KIND_EXTEND:
+        # BIND(expr AS ?v) inside a group: sees only what its group bound BEFORE it
+        _collect(p.children[0], ctx, aliases, parts, outer_vars)
+        from .var_scope import compute_scope
+        visible = set(compute_scope(p.children[0]).all_visible)
+        if p.extend_var in visible:
+            raise Unsupported(f"BIND to ?{p.extend_var}, already bound")
+        if _expr_vars(p.extend_expr) - visible:
+            raise Unsupported("a BIND reads a variable its group has not bound before it")
+        if _expr_has_exists(p.extend_expr):
+            raise Unsupported("BIND with EXISTS (C2)")
+        parts["binds"].append((p.extend_var, p.extend_expr))
     elif p.kind == KIND_PROJECT:
         # a grouped sub-SELECT joined into the pattern: one leaf, its own plan
         parts["leaves"].append(_subq_leaf(p, parts["ctx"], parts["exclude"]))
@@ -488,9 +520,20 @@ def _build_region(parts, ctx, aliases) -> Region:
                     for cj, vj in lj.o_vars:
                         if vi == vj and vi not in subj:
                             edges.append(Edge(i, j, vi, "shared", li, lj, col_u=ci, col_v=cj))
+    binds = parts.get("binds", [])
+    if binds:
+        # a BIND's variable joining a pattern would join a computed value to stored
+        # terms: not planned yet (a value-to-term join)
+        pattern_vars = {v for l in leaves for v in [l.s_var] + [ov for _c, ov in l.o_vars] if v}
+        for o in parts["optionals"]:
+            pattern_vars |= region_vars(o)
+        for a in parts["antis"]:
+            pattern_vars |= region_vars(a.region)
+        if pattern_vars & {v for v, _e in binds}:
+            raise Unsupported("a BIND's variable is joined by a pattern")
     return Region(units=units, edges=edges, values=values, plans=parts["plans"],
                   aliases=aliases, optionals=parts["optionals"], antis=parts["antis"],
-                  filters=parts.get("filters", []), iri_ne=parts.get("iri_ne", []))
+                  filters=parts.get("filters", []), iri_ne=parts.get("iri_ne", []), binds=binds)
 
 
 def _conjuncts(e) -> List[Any]:
@@ -544,37 +587,40 @@ def _iri_restriction(e, aliases) -> Optional[Tuple[str, List[str]]]:
     return args[0].var, [_iri_uuid(c.node.value) for c in consts]
 
 
-def _filter_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: List[str],
-                  distinct: bool, term_table: str) -> str:
-    """The region's rows with its FILTERs applied, as a level of keys.
+def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: List[str],
+                 distinct: bool, term_table: str, computed: List[Tuple[str, Any]],
+                 out_computed: List[str]) -> str:
+    """The region's rows with its BINDs computed and its FILTERs applied, as a level
+    of keys (`k_<v>`, term uuids) plus the computed variables' companion columns
+    (`c_<v>`, `c_<v>__type`, ...) for `out_computed`.
 
-    VALUE COLUMNS (planning_planner/13, C1.2): the planner carries term uuids only,
-    and a FILTER needs values. Each variable a FILTER reads gets its term row's
-    columns under the generator's own companion names (text, type, lang, datatype,
-    number, boolean, date; `TypeRegistry.term_table_columns`), and the expression
-    is translated by the GENERATOR's translator over them (`expr_to_sql`, with a
-    registry naming those columns). One translator: the planner and the generator
-    cannot disagree on a SPARQL function, its type errors or its collations.
+    VALUE COLUMNS (planning_planner/13, C1.2-C1.3): the planner carries term uuids
+    only; a FILTER or a BIND needs values. Each variable they read gets its term
+    row's columns under the generator's own companion names, and every expression
+    is the GENERATOR's: `expr_to_sql` / `infer_expr_type` / `produce_companions` and
+    emit_extend's companion patches for a BIND, `ebv_sql` for a FILTER, each in the
+    scope of what it may read. One translator: the planner and the generator cannot
+    disagree on a SPARQL function, its type errors or its collations.
 
-    A FILTER is applied over the whole region (its group, its OPTIONALs included,
-    as SPARQL scopes it); PostgreSQL pushes a condition down to the scan it reads."""
+    The core joins are their own level, fenced (OFFSET 0), and the term rows join to
+    ITS rows: flattened, a FILTER's condition on a term column made the term join
+    inner and PostgreSQL drove from the whole term table (`?s ?p ?o FILTER(?s IN
+    (...) && ?p != ...)`: 2.1 s, today's SQL 1 ms). The advice applies inside the fence."""
+    from types import SimpleNamespace
     from .emit_bgp import (_BOOLEAN_DT, _DATETIME_DATATYPES, _NUMERIC_DATATYPES,
                            _NUMERIC_DT_SQL_LIST)
-    from .emit_expressions import ebv_sql
-    from .sql_type_generation import ColumnInfo, TypeRegistry
-    fvars = sorted(set().union(*(_expr_vars(e) for e in reg.filters)))
+    from .emit_expressions import ebv_sql, expr_to_sql
+    from .emit_extend import _patch_concat_companions, _patch_strafter_strbefore_companions
+    from .sql_type_generation import COMPANION_SUFFIXES, ColumnInfo, TypeRegistry, infer_expr_type
+    cvars = {v for v, _e in computed}
+    read = set().union(*(_expr_vars(e) for e in reg.filters), *(_expr_vars(e) for _v, e in computed)) - cvars
+    fvars = sorted(read)
     for v in fvars:
         if v not in r.bound:
-            raise Unsupported(f"a FILTER reads ?{v}, which the plan does not bind")
-    # The core joins first, as their own level, fenced (OFFSET 0): the term rows for
-    # the value columns are joined to ITS rows. Flattened into one join problem, the
-    # FILTER's condition on a term column made the term join inner, and PostgreSQL
-    # started from a scan of the whole term table: `?s ?p ?o FILTER(?s IN (...) &&
-    # ?p != ...)` read 365,745 terms and probed the quads 1,097,236 times (2.1 s,
-    # today's SQL 1 ms). The advice still applies inside the fence (its own join problem).
+            raise Unsupported(f"an expression reads ?{v}, which the plan does not bind")
     bind_vars = sorted(set(need) | set(fvars))
-    core_level = ("SELECT " + ", ".join(f"{r.bound[v]} AS b_{v}" for v in bind_vars) + "\nFROM " + core
-                  + ("\nWHERE " + " AND ".join(where) if where else "") + "\nOFFSET 0")
+    core_level = ("SELECT " + (", ".join(f"{r.bound[v]} AS b_{v}" for v in bind_vars) or "1 AS one")
+                  + "\nFROM " + core + ("\nWHERE " + " AND ".join(where) if where else "") + "\nOFFSET 0")
     cols = [f"cq.b_{v} AS k_{v}" for v in need]
     joins = []
     types = TypeRegistry(aliases=ctx.aliases)
@@ -590,22 +636,37 @@ def _filter_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: 
         types.register(ColumnInfo.simple_output(v, sn, from_triple=True))
     fctx = ctx.child(types=types)
     before = len(getattr(fctx, "_unresolved_vars", None) or [])
-    conds = []
-    # As `emit_filter` does: a FILTER takes its expression's EFFECTIVE BOOLEAN VALUE
-    # (`ebv_sql`; `FILTER(?w)` is not a boolean column), within the scope of the
-    # variables its group binds.
-    with fctx.expression_scope(set(fvars)):
-        for e in reg.filters:
-            s = ebv_sql(e, fctx)
-            if not s:
-                raise Unsupported(f"a FILTER expression the translator does not support: {type(e).__name__}")
-            conds.append(f"({s})")
-    if len(getattr(fctx, "_unresolved_vars", None) or []) > before:
-        raise Unsupported("a FILTER reads a variable the value columns do not provide")
-    inner = ("SELECT " + ", ".join(cols) + f"\nFROM ({core_level}) AS cq"
+    level = ("SELECT " + (", ".join(cols) or "1 AS one") + f"\nFROM ({core_level}) AS cq"
              + ("\n" + "\n".join(joins) if joins else ""))
-    return ("SELECT " + ("DISTINCT " if distinct else "") + ", ".join(f"k_{v}" for v in need)
-            + f"\nFROM ({inner}) AS fl\nWHERE " + " AND ".join(conds))
+    # BINDs, in order: each a level adding its companion columns (a later one may read it)
+    visible = set(fvars)
+    for i, (v, e) in enumerate(computed):
+        with fctx.expression_scope(set(visible)):
+            sql_e = expr_to_sql(e, fctx)
+        if not sql_e:
+            raise Unsupported(f"a BIND expression the translator does not support: {type(e).__name__}")
+        typed = infer_expr_type(e, fctx.types)
+        ns = SimpleNamespace(extend_expr=e, extend_var=v)
+        _patch_strafter_strbefore_companions(ns, fctx, typed)
+        _patch_concat_companions(ns, fctx, typed)
+        sn = f"c_{v}"
+        level = (f"SELECT lv{i}.*, " + ", ".join(typed.produce_companions(sn, sql_e))
+                 + f"\nFROM ({level}) AS lv{i}")
+        fctx.types.register_extend(v, typed, sn)
+        visible.add(v)
+    # FILTERs (`emit_filter`'s way: the effective boolean value, scoped)
+    conds = []
+    with fctx.expression_scope(set(visible)):
+        for e in reg.filters:
+            c = ebv_sql(e, fctx)
+            if not c:
+                raise Unsupported(f"a FILTER expression the translator does not support: {type(e).__name__}")
+            conds.append(f"({c})")
+    if len(getattr(fctx, "_unresolved_vars", None) or []) > before:
+        raise Unsupported("an expression reads a variable the value columns do not provide")
+    out = [f"k_{v}" for v in need] + [f"c_{v}{suf}" for v in out_computed for suf in ("",) + COMPANION_SUFFIXES]
+    return ("SELECT " + ("DISTINCT " if distinct else "") + (", ".join(out) or "1 AS one")
+            + f"\nFROM ({level}) AS fl" + ("\nWHERE " + " AND ".join(conds) if conds else ""))
 
 
 def _expr_vars(e) -> Set[str]:
@@ -1422,8 +1483,8 @@ def _render_subq(leaf: Leaf, ctx, term_table: str) -> _SubSql:
     from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
     q = leaf.sub
     reg = q.region
-    if reg.filters or reg.iri_ne:
-        raise Unsupported("a FILTER inside a sub-SELECT (C3)")
+    if reg.filters or reg.iri_ne or reg.binds:
+        raise Unsupported("a FILTER or BIND inside a sub-SELECT (C3)")
     pos = _Pos(reg.plans, reg.values)
     tree = search(reg)
     r = _R(pos)
@@ -1481,8 +1542,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     for o in list(reg.optionals) + [a.region for a in reg.antis]:
         if any(l.kind == "subq" for u in o.units for l in u.leaves):
             raise Unsupported("a sub-SELECT inside an OPTIONAL or NOT EXISTS")
-        if o.filters or o.iri_ne:
-            raise Unsupported("a FILTER inside an OPTIONAL or NOT EXISTS body (C2)")
+        if o.filters or o.iri_ne or o.binds:
+            raise Unsupported("a FILTER or BIND inside an OPTIONAL or NOT EXISTS body (C2)")
     tree = main_tree or search(reg)
     base_sizes = _base_sizes(reg)
     r = _R(pos)
@@ -1624,6 +1685,20 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     mentioned = region_vars(reg)
     for o in reg.optionals:
         mentioned |= region_vars(o)
+    # BINDs: a copy of a bound variable is an alias of its key (it keeps its term
+    # identity); anything else is COMPUTED, carried as companion columns
+    computed: List[Tuple[str, Any]] = []
+    for v, e in reg.binds:
+        mentioned.add(v)
+        if type(e).__name__ == "ExprVar" and e.var in r.bound and not computed:
+            r.bound[v] = r.bound[e.var]
+        else:
+            computed.append((v, e))
+    cvars = {v for v, _e in computed}
+    if cvars and q.group_vars is not None:
+        raise Unsupported("GROUP BY with a computed BIND (C3)")
+    if cvars & {v for v, _d in q.order}:
+        raise Unsupported("ORDER BY a computed BIND (C3)")
     if q.project is None and q.group_vars is None:
         # SELECT * (no PROJECT in the algebra): every variable the pattern binds, in
         # the generator's order (`names` follows its var_map). Without this the
@@ -1658,6 +1733,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # the page carries every variable an OPTIONAL joins on
         for _s, jcols, _o, _p, _i in late_opts:
             need |= {c.rsplit("pg_late.k_", 1)[1] for c in jcols}
+    need -= cvars
+    out_computed = [v for v in term_vars if v in cvars]
     for v in need:
         if v not in r.bound:
             raise Unsupported(f"?{v} is not bound by the plan")
@@ -1666,13 +1743,14 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         if v not in r.bound:
             raise Unsupported(f"a FILTER reads ?{v}, which the plan does not bind")
         where.append(f"{r.bound[v]} <> '{u}'::uuid" if u else f"{r.bound[v]} IS NOT NULL")
-    if reg.filters:
-        inner = _filter_level(reg, ctx, r, core, where, sorted(need), q.sub_distinct, pos.term_table)
+    if reg.filters or computed:
+        inner = _value_level(reg, ctx, r, core, where, sorted(need), q.sub_distinct, pos.term_table,
+                             computed, out_computed)
     else:
         inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + ", ".join(keys) + "\nFROM " + core
                  + ("\nWHERE " + " AND ".join(where) if where else ""))
     level = inner
-    out_keys = sorted(need)
+    out_keys = sorted(need) + out_computed
     if q.group_vars is not None:
         gk = [f"k_{v}" for v in q.group_vars]
         aggs = []
@@ -1694,7 +1772,10 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         dvars = [v for v in term_vars if v not in late_vars]
         if late:
             dvars += sorted(need - set(dvars))      # the join variables ride along (projected: checked)
-        level = f"SELECT DISTINCT {', '.join(f'k_{v}' for v in dvars)}\nFROM ({inner}) AS g0"
+        from .sql_type_generation import COMPANION_SUFFIXES as _CS
+        dcols = [f"k_{v}" for v in dvars if v not in cvars] + [
+            f"c_{v}{suf}" for v in dvars if v in cvars for suf in ("",) + _CS]
+        level = f"SELECT DISTINCT {', '.join(dcols)}\nFROM ({inner}) AS g0"
         out_keys = list(term_vars)
     if late:
         out_keys = sorted(set(out_keys) | set(late_vars))
@@ -1760,6 +1841,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             cols += [f"{a} AS {sn}", f"'L' AS {sn}__type", f"NULL::uuid AS {sn}__uuid",
                      f"NULL AS {sn}__lang", f"'{XSD_INTEGER}' AS {sn}__datatype",
                      f"{a} AS {sn}__num", f"NULL::boolean AS {sn}__bool", f"NULL::timestamp AS {sn}__dt"]
+            continue
+        if v in cvars:
+            # a computed value: its own companion columns, as the generator produced them
+            from .sql_type_generation import COMPANION_SUFFIXES as _CS
+            cols += [f"top.c_{v}{suf} AS {sn}{suf}" for suf in ("",) + _CS]
             continue
         t = f"d_{v}"
         djoins.append(f"LEFT JOIN {pos.term_table} AS {t} ON {t}.term_uuid = top.k_{v}")
@@ -1833,8 +1919,8 @@ def _late_optional_ok(q: Query, reg: Region, r: "_R") -> bool:
     from .planner_ext import FEATURES as _F
     if not _F.get("late_optional") or not reg.optionals or q.limit is None or not q.order:
         return False
-    if reg.filters or reg.iri_ne:
-        return False                    # a FILTER may read an OPTIONAL's variables
+    if reg.filters or reg.iri_ne or reg.binds:
+        return False                    # a FILTER or BIND may read an OPTIONAL's variables
     if q.group_vars is not None or q.sub_project is not None or q.having:
         return False
     if any(v in q.extend or v not in r.bound for v, _d in q.order):
