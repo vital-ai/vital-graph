@@ -53,10 +53,11 @@ _cache: Dict[Tuple[str, str], List[float]] = {}
 
 
 def invalidate(space_id: Optional[str] = None) -> None:
-    from .qtree import DERIVED_STATS
+    from .qtree import DERIVED_STATS, SUBLINKS
     if space_id is None:
         _cache.clear()
         DERIVED_STATS.clear()
+        SUBLINKS.clear()
         return
     for k in [k for k in _cache if k[0] == space_id]:
         _cache.pop(k, None)
@@ -64,11 +65,60 @@ def invalidate(space_id: Optional[str] = None) -> None:
     pre = f"{space_prefix(space_id)}_"
     for k in [k for k in DERIVED_STATS if k.startswith(pre)]:
         DERIVED_STATS.pop(k, None)
+    for k in [k for k in SUBLINKS if k[0].startswith(pre)]:
+        SUBLINKS.pop(k, None)
 
 
 # ---------------------------------------------------------------------------
 # Derived tables (edge, frame_slot): priced BEFORE analysis
 # ---------------------------------------------------------------------------
+
+def _sublinks(plan, aliases, out: set) -> None:
+    """(tbl, sel, cond) of every leaf filter `x.col IN (SELECT sel FROM tbl WHERE
+    cond)` in the plan, EXISTS bodies included."""
+    from .generator import substitute_constants
+    from .ir import KIND_BGP
+    from .qtree import SUBLINK_RE
+    if plan.kind == KIND_BGP:
+        for owner, sql in plan.tagged_constraints or []:
+            m = SUBLINK_RE.match(substitute_constants(sql, aliases))
+            if m and m.group(1) == owner:
+                out.add((m.group(4), m.group(3), m.group(5).strip()))
+    for c in plan.children or []:
+        _sublinks(c, aliases, out)
+    for e in getattr(plan, "filter_exprs", None) or []:
+        if getattr(e, "prepared_plan", None) is not None:
+            _sublinks(e.prepared_plan, e.prepared_aliases, out)
+
+
+async def load_sublinks(plan, ctx, conn) -> int:
+    """For each leaf sub-select filter: PostgreSQL's row estimate (EXPLAIN only,
+    no execution: the table's own statistics), the table's columns and its
+    unique column sets. Cached per (table, column, condition) until the space's
+    statistics are invalidated."""
+    import json as _json
+    from .qtree import SUBLINKS
+    need: set = set()
+    _sublinks(plan, ctx.aliases, need)
+    new = [k for k in need if k not in SUBLINKS]
+    tables_meta: Dict[str, Tuple[list, list]] = {}
+    for tbl, sel, cond in new:
+        if tbl not in tables_meta:
+            cols = [r[0] for r in await conn.fetch(
+                "SELECT attname FROM pg_attribute WHERE attrelid = to_regclass($1) AND attnum > 0 "
+                "AND NOT attisdropped", tbl)]
+            uniq = [list(r[0]) for r in await conn.fetch(
+                "SELECT array_agg(a.attname ORDER BY k.n) FROM pg_index i "
+                "CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum, n) "
+                "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum "
+                "WHERE i.indrelid = to_regclass($1) AND i.indisunique GROUP BY i.indexrelid", tbl)]
+            tables_meta[tbl] = (cols, uniq)
+        async with conn.transaction():
+            p = _json.loads(await conn.fetchval(f"EXPLAIN (FORMAT JSON) SELECT {sel} FROM {tbl} WHERE {cond}"))
+        cols, uniq = tables_meta[tbl]
+        SUBLINKS[(tbl, sel, cond)] = {"rows": float(p[0]["Plan"]["Plan Rows"]), "cols": cols, "unique": uniq}
+    return len(new)
+
 
 def _derived_tables(plan, out: set) -> None:
     """The derived tables (edge, frame_slot) a PlanV2 reads, EXISTS bodies included."""

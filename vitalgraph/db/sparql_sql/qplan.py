@@ -102,6 +102,9 @@ class Query:
     # before the outer GROUP reads it; the outer query sees only these variables.
     sub_project: Optional[List[str]] = None
     sub_distinct: bool = False
+    # the ORDER BY is the generator's own, synthesized for a stable page of an
+    # unordered LIMIT (`hints["stable_paging"]`, collect._collect_slice), by uuid
+    synth_order: bool = False
 
 
 class _Shim:
@@ -147,6 +150,8 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
         elif p.kind in (KIND_DISTINCT, KIND_REDUCED):
             q.distinct = True
         elif p.kind == KIND_ORDER:
+            if (getattr(p, "hints", None) or {}).get("stable_paging"):
+                q.synth_order = True
             for expr, d in (p.order_conditions or []):
                 if not isinstance(expr, str):
                     raise Unsupported(f"ORDER BY an expression: {expr}")
@@ -739,6 +744,11 @@ class _Pos:
         # leaf alias -> the alias of the term sub-select its range/IN criterion
         # reads (`_name_sublink`), added to every advised set containing the leaf
         self.sublinks: Dict[str, List[str]] = {}
+        # leaf alias -> [(sub-select alias, table, selected column, condition, the
+        # leaf's column, the rendered IN filter)]: candidates to DRIVE a unit from
+        self.sublink_parts: Dict[str, List[Tuple[str, str, str, str, str, str]]] = {}
+        # leaves rendered that way: no base size of their own (unfiltered alone)
+        self.driven: Set[str] = set()
         for p in plans:
             for t in p.tables:
                 if t.kind == "term":
@@ -761,7 +771,7 @@ class _Pos:
                 self.filters.setdefault(a, []).append(f"{a}.{col} IN ({lits})")
 
 
-_SUBLINK = re.compile(r"^\s*(\w+)\.(\w+) IN \(SELECT term_uuid FROM (\w+) WHERE (.+)\)\s*$", re.S)
+from .qtree import SUBLINK_RE as _SUBLINK     # owner, col, sel, table, cond
 
 
 def _name_sublink_sql(owner: str, sql: str, taken: List[str]) -> Tuple[str, Optional[str]]:
@@ -769,8 +779,8 @@ def _name_sublink_sql(owner: str, sql: str, taken: List[str]) -> Tuple[str, Opti
     if not m or m.group(1) != owner:
         return sql, None
     alias = f"r_{owner}" + (f"_{len(taken) + 1}" if taken else "")
-    return (f"{owner}.{m.group(2)} IN (SELECT {alias}.term_uuid FROM {m.group(3)} AS {alias} "
-            f"WHERE {m.group(4)})"), alias
+    return (f"{owner}.{m.group(2)} IN (SELECT {alias}.{m.group(3)} FROM {m.group(4)} AS {alias} "
+            f"WHERE {m.group(5)})"), alias
 
 
 def _pos_name_sublink(self, owner: str, sql: str) -> str:
@@ -783,6 +793,9 @@ def _pos_name_sublink(self, owner: str, sql: str) -> str:
     out, alias = _name_sublink_sql(owner, sql, self.sublinks.get(owner, []))
     if alias:
         self.sublinks.setdefault(owner, []).append(alias)
+        m = _SUBLINK.match(sql)
+        self.sublink_parts.setdefault(owner, []).append(
+            (alias, m.group(4), m.group(3), m.group(5), m.group(2), out))
     return out
 
 
@@ -842,6 +855,33 @@ def _chain(r: _R, leaves: List[Leaf], present: Set[str], start_sql: Optional[str
     return sql, pending
 
 
+def _pick_driver(u: Unit, pos: "_Pos", aliases):
+    """The sub-select filter to drive unit u from, or None: among its leaves'
+    `col IN (SELECT sel FROM tbl WHERE cond)` filters, the one PostgreSQL
+    estimates smallest (qcard.load_sublinks), provided joining it directly is the
+    semi-join exactly: `sel`, with `context_uuid` equated to the leaf's where the
+    table has one, covers a unique index (else duplicates would multiply rows)."""
+    from .generator import substitute_constants
+    from .qtree import SUBLINKS
+    best = None
+    for l in u.leaves:
+        for part in pos.sublink_parts.get(l.alias, []):
+            ra, tbl, sel, cond, col, fsql = part
+            info = SUBLINKS.get((tbl, sel, substitute_constants(cond, aliases).strip()))
+            if not info:
+                continue
+            has_ctx = "context_uuid" in info["cols"] and any(
+                f.strip().startswith(f"{l.alias}.context_uuid =") for f in pos.filters.get(l.alias, []))
+            cover = {sel} | ({"context_uuid"} if has_ctx else set())
+            ok = [set(un) for un in info["unique"] if sel in un and set(un) <= cover]
+            if not ok:
+                continue
+            ctx_eq = any("context_uuid" in un for un in ok) and not any(un == {sel} for un in ok)
+            if best is None or info["rows"] < best[2]:
+                best = (l, part, info["rows"], ctx_eq, info["cols"])
+    return best
+
+
 def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[str]]:
     """SQL for a plan node: (sql, aliases present, conditions still pending)."""
     if node.kind == "scan":
@@ -853,7 +893,27 @@ def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[st
         _c, build = _unit_build(u)
         hashed = [l for l, how in build if how == "hash"]
         order = [u.anchor] + hashed + [l for l, how in build if how == "probe"]
-        sql, pend = _chain(r, order[:1], present, None, [])
+        drv = _pick_driver(u, r.pos, reg.aliases)
+        if drv is not None:
+            # A unit DRIVEN from a sub-select filter of one of its leaves (a term
+            # range, a slot-sort fast path), the one PostgreSQL estimates smallest:
+            # the written join order makes it the access path. As a filter it was
+            # joined last: lead 100k's MQLRating >= 99.9 read all 100,000 slots to
+            # keep 149 (3.3 s, today's SQL 31 ms).
+            leaf, (ra, tbl, sel, cond, col, fsql), rows, ctx_eq, cols = drv
+            a = leaf.alias
+            order = [leaf] + [l for l in order if l is not leaf]
+            qcond = re.sub(r"(?<![\w.'])(" + "|".join(map(re.escape, cols)) + r")\b", rf"{ra}.\1", cond) if cols else cond
+            conds = [f"{a}.{col} = {ra}.{sel}", qcond] \
+                + ([f"{ra}.context_uuid = {a}.context_uuid"] if ctx_eq else []) \
+                + r.eqs(a, present) + [f for f in r.pos.filters.get(a, []) if f != fsql]
+            sql, pend = f"{tbl} AS {ra}\n  JOIN {r.pos.table[a]} AS {a} ON " + " AND ".join(conds), []
+            present.add(a)
+            r.bind(a)
+            r.pos.driven.add(a)
+            r.sizes.append((min(rows, leaf.scan.rows) if leaf.scan.rows else rows, sorted([a, ra])))
+        else:
+            sql, pend = _chain(r, order[:1], present, None, [])
         for l in hashed:
             sql, pend = _chain(r, [l], present, sql, pend)
             if not l.constant:                      # constant leaves are sized by _base_sizes
@@ -862,10 +922,15 @@ def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[st
         sql, pend = _chain(r, order[1 + len(hashed):], present, sql, pend) if len(order) > 1 + len(hashed) else (sql, pend)
         # (base scans are sized for every constant leaf in render(): see
         #  _base_sizes; not only the anchor)
-        if len(u.leaves) > 1:
+        if len(u.leaves) > 1 or drv is not None:
             steps = [l.alias for l in order]
             rr = f"{u.rows.rows:.0f}"
-            r.units_advice.append(f"steps({' '.join(steps)}) rows({' '.join(f'{s}:{rr}' for s in steps[1:])})")
+            rows_items = [f"{s}:{rr}" for s in steps[1:]]
+            if drv is not None:
+                # the driver's relation is the first step: every prefix contains it
+                rows_items = [f"{steps[0]}:{min(drv[2], drv[0].scan.rows) if drv[0].scan.rows else drv[2]:.0f}"] + rows_items
+                steps = [drv[1][0]] + steps
+            r.units_advice.append(f"steps({' '.join(steps)}) rows({' '.join(rows_items)})")
             sql = f"({sql})" if pend == [] else sql
         return sql, present, pend
     if node.kind == "probe":
@@ -1166,7 +1231,12 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         base_sizes += _base_sizes(opt)
     for anti in reg.antis:
         base_sizes += _base_sizes(anti.region)
-    sizes = base_sizes + sizes
+    # No base size for a leaf restricted by a sub-select filter (driving or not): alone,
+    # its scan is NOT restricted (the filter applies when the sub-select's relation is
+    # joined), and sizing it at the filtered rows made PostgreSQL hash a 437,000-row
+    # scan it believed was 100 rows. Its restriction is priced in every set holding both.
+    unfiltered = set().union(*(set(ps.sublink_parts) | ps.driven for ps in poses))
+    sizes = [z for z in base_sizes if not (len(z[1]) == 1 and z[1][0] in unfiltered)] + sizes
     lines = ["/*vg:plan 1"]
     lines += [f"bgp u{i} {a}" for i, a in enumerate(units_adv)]
     subl: Dict[str, List[str]] = {}
@@ -1179,9 +1249,28 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # (a scan of the leaf alone does not: its size is the leaf's own)
         if len(al) < 2:
             return al
-        return al + [x for a in al for x in subl.get(a, [])]
+        return al + [x for a in al for x in subl.get(a, []) if x not in al]
     lines += [f"size k{i} {max(rws, 1):.0f} {' '.join(named(al))}" for i, (rws, al) in enumerate(sizes) if len(al) >= 1]
-    lines += [f"method m{i} {how} {' '.join(named(al))}" for i, (how, al) in enumerate(methods) if len(al) >= 2]
+    # METHOD items: a leaf's sub-select is in the join's set only when PostgreSQL joins
+    # it as a relation of that join (a driver; a unique column, reduced to an inner
+    # join). A kept semi-join is its own node above, transparent to the extension:
+    # with it, the set matched no join (`q0` probed, its slot-sort semi-join above).
+    from .generator import substitute_constants as _subst
+    from .qtree import SUBLINKS as _SL
+    joined: Dict[str, List[str]] = {}         # leaf -> its sub-selects PostgreSQL joins as relations
+    for ps in poses:
+        for leaf, parts in ps.sublink_parts.items():
+            for ra, tbl, sel, cond, _col, _f in parts:
+                info = _SL.get((tbl, sel, _subst(cond, reg.aliases).strip())) or {}
+                unique_alone = any(set(un) == {sel} for un in info.get("unique", []))
+                if leaf in ps.driven or unique_alone:
+                    joined.setdefault(leaf, []).append(ra)
+
+    def mnamed(al: List[str]) -> List[str]:
+        # a driver, or a sub-select on a unique column (reduced to an inner join): in
+        # the join's set; a kept semi-join (non-unique): transparent to the extension
+        return al + [x for a in al for x in joined.get(a, []) if x not in al]
+    lines += [f"method m{i} {how} {' '.join(mnamed(al))}" for i, (how, al) in enumerate(methods) if len(al) >= 2]
     lines.append("*/")
     return Rendered(sql=outer, advice="\n".join(lines),
                     plan=describe(tree, reg) + "".join(f"; {n}" for n in anti_notes), cost=tree.cost)

@@ -210,6 +210,7 @@ async def plan_with_qtree(plan, ctx, var_map: Dict[str, str], space_id: Optional
         from . import qcard
         try:
             await qcard.load_derived(plan, ctx, conn)
+            await qcard.load_sublinks(plan, ctx, conn)
         except Exception as exc:  # unpriced derived leaves: the planner declines them
             rec.declined("qtree_derived_stats", f"{type(exc).__name__}: {exc}"[:300])
     try:
@@ -219,8 +220,13 @@ async def plan_with_qtree(plan, ctx, var_map: Dict[str, str], space_id: Optional
         # yet (planning_planner/09 item 6), so its plan computes every match
         # and cuts after: measured on KGQuery edge pages, 4,982 matches for 25
         # rows, 95 ms against today's 12 ms. Until top-k is costed, it stands aside.
-        if q.limit is not None and getattr(ctx, "needs_ordered_scan", False):
-            raise qplan.Unsupported("the generator's early-stop plan for LIMIT (top-k is not costed yet)")
+        if q.limit is not None and (getattr(ctx, "needs_ordered_scan", False) or not q.order or q.synth_order):
+            # Also for every UNORDERED page (LIMIT without ORDER BY): the generator
+            # orders it by the projected uuid (a stable page) and walks the driver in
+            # that order with early stop, whether or not it flags an ordered scan.
+            # Measured on selective KGQuery pages (lead 100k, MQLRating >= 99.0):
+            # 20 ms today vs 57 ms for the planner computing every match.
+            raise qplan.Unsupported("an unordered or early-stop LIMIT page (top-k is not costed yet)")
     except Exception as exc:     # Unsupported, or a planner defect: keep today's SQL
         rec.declined("qtree_plan", f"{type(exc).__name__}: {exc}"[:300])
         return None

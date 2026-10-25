@@ -172,6 +172,14 @@ DERIVED_KEYS = {"edge": ("edge_uuid", "source_node_uuid"),
 #:                           "mcv": {column: {value uuid: frequency}}}
 DERIVED_STATS: Dict[str, dict] = {}
 
+#: Leaf filters of the form `alias.col IN (SELECT sel FROM tbl WHERE cond)` (a
+#: term range, a slot-sort fast path), loaded by `qcard.load_derived`:
+#:   SUBLINKS[(tbl, sel, cond)] = {"rows": PostgreSQL's estimate of the sub-select,
+#:                                 "cols": tbl's columns, "unique": [unique column sets]}
+#: so the planner can DRIVE a unit from the most selective one (qplan render).
+SUBLINKS: Dict[Tuple[str, str, str], dict] = {}
+SUBLINK_RE = re.compile(r"^\s*(\w+)\.(\w+) IN \(SELECT (\w+) FROM (\w+) WHERE (.+)\)\s*$", re.S)
+
 #: A derived column that IS a quad pair's object, so a constant on it is priced
 #: from that pair's stored count (`rdf_stats`), exactly: the derived tables' own
 #: definitions (sync_frame_slot_table, sync_edge_table), not any query's schema.
