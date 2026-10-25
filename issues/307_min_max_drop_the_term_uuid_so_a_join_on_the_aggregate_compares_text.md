@@ -52,13 +52,86 @@ The planner path and today's path return the same rows on the UW data (contract,
    behave the same once `__uuid` is set. In particular, the decode must not re-join the term
    table on a uuid that was previously NULL and change the output columns.
 
+## Extent (assessed 2026-10-25)
+
+Small in lines, about 40 plus tests; roughly half a day. The real work is keeping term identity
+apart from boundness.
+
+### The direct change (about 15 lines)
+
+- `emit_group.py:181-185`: emit `<agg>__uuid` with `_ordered_pick` over `<input>__uuid`, using
+  the same `sparql_order_key` as `__type` / `__lang` / `__datatype`. Do this only when the
+  input variable `has_term_identity()`; otherwise keep `NULL::uuid`.
+- `sql_type_generation.register_aggregate` (`:513`): set `uuid_col` for that case, so
+  `has_term_identity()` (`:196`) is true and `emit_join` (`:240-243`) compares
+  `__uuid = __uuid`.
+
+The picked uuid is NULL exactly when the picked value is unbound, because it comes from the same
+row as the text. So the readers that use `__uuid` as the boundness column stay correct:
+`emit_join._boundness_col` (`:89`), the path seed (`:167`), the EXISTS probe (`:186`) and MINUS
+(`emit_minus.py:25`).
+
+### The hard part: one flag currently means two things
+
+`has_term_identity()` is `(from_triple or uuid_materialized) and uuid_col`. But
+`uuid_materialized` is ALSO read as "bound on every row":
+
+- `emit_join._always_bound` (`:300-335`) returns True for it, which drops the
+  `IS NULL OR` compatibility disjuncts and recovers a hashable equijoin. Issue 052 measured
+  more than 120 s against 1.3 s without that.
+- `emit_union.py:104-126` passes `uuid_materialized=ti` up from its branches, with `partial`
+  as the only guard.
+
+A MIN/MAX result is not always bound: an ungrouped `MAX` over no rows is unbound. Marking it
+`uuid_materialized` would claim boundness it doesn't have. A UNION with a MIN/MAX branch would
+then inherit that claim, and rows from the other branch would die on `NULL = x` (the bug class
+the comments at `emit_union.py:105-122` describe). Marking it `from_triple` is worse: that flag
+also drives DISTINCT, GROUP, MINUS and lane selection (issue 026).
+
+So:
+
+1. **An identity-only flag** on `ColumnInfo` (e.g. `term_identity`), read by
+   `has_term_identity()` and never by `_always_bound`.
+2. **A boundness rule for MIN/MAX:** always bound when there is a GROUP BY and the aggregated
+   variable is always bound in the group's input (a required triple, no OPTIONAL or UNION gap).
+   Without this the join keeps its `IS NULL OR` disjuncts and cannot be hashed, so the fix would
+   make `latest_per_deal_by_outcome` slower, not faster. An ungrouped MIN/MAX is never always bound.
+3. **`emit_union` passes up identity and boundness separately:** identity when every binding
+   branch has it; `uuid_materialized` only when every branch is always bound.
+4. **Audit the 16 `has_term_identity` / `uuid_materialized` reads** (`emit_join` 9,
+   `emit_union` 5, `emit_minus` 1, `emit_table` 1). Classify each as identity (gains from the
+   fix) or boundness (must read the new rule), and add a lint like `test_null_provenance_lint`
+   so new readers pick the right one.
+
+### Visible output change
+
+A projected MIN/MAX's `__uuid` column goes from NULL to the winning term's uuid. The planner's
+SQL already returns it (its decode reads the term by uuid), so this makes the two paths agree
+column for column. Check the executor's binding decode does not prefer `__uuid` over the
+text in a way that changes the binding.
+
+### Related, to check while in there (not verified)
+
+Under MAX, `sparql_order_key` orders text `DESC` with PostgreSQL's default NULLS FIRST. A group
+mixing an unbound input row with literals that have no numeric value may therefore pick the
+UNBOUND row. That would be an older defect independent of this fix. Check it against Jena's
+behaviour (unbound and error values are skipped by MIN/MAX).
+
 ## Tests
 
 - A unit or DAWG-style case where the outer side has the same text as the MAX in a different
   datatype: today joins (wrong), fixed does not.
 - A tie case: two terms with equal text and different datatypes in one group. Fixed joins exactly
   the picked term.
-- The DAWG aggregates suite (MIN/MAX, COUNT 8b on a numeric lane) unchanged.
+- An ungrouped `MAX` over no rows stays unbound, and joins as unbound (compatible), not as a
+  match on a NULL uuid read as a value.
+- A UNION with a MIN/MAX branch and a triple branch, joined to a third pattern: no rows lost
+  from either branch.
+- A grouped MAX joined to a required triple keeps a plain equijoin (no `IS NULL OR` in the ON
+  clause).
+- `test_null_provenance_lint` and the DAWG aggregates suite (MIN/MAX, COUNT 8b on a numeric lane)
+  unchanged.
+- The full vg test stack run: this is the path that runs without the plugin in production.
 - `latest_per_deal_by_outcome` on the vg test stack: same rows as before, and the SQL's ON clause
   compares `__uuid`; time it before and after (the text join decodes both sides).
 - Planner contract on the same query: today's and the planner's SQL agree, now by construction
