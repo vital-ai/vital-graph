@@ -51,7 +51,10 @@ vgp_set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, Index rti, RangeTblEntr
 	if (prev_set_rel_pathlist_hook)
 		prev_set_rel_pathlist_hook(root, rel, rti, rte);
 	if (vgp_enabled)
+	{
 		vgp_size_base_rel(root, rel, rti, rte);
+		vgp_note_subquery(rel, rte);
+	}
 }
 
 PG_FUNCTION_INFO_V1(vg_planner_info);

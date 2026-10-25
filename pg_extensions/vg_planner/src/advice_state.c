@@ -65,7 +65,7 @@ count_rte(RangeTblEntry *rte, AliasCount *ac)
 {
 	const char *name;
 
-	if (rte->rtekind != RTE_RELATION || rte->eref == NULL)
+	if (!VGP_NAMEABLE_RTE(rte))
 		return;
 	name = rte->eref->aliasname;
 	for (int b = 0; b < ac->advice->nbgps; b++)
@@ -184,8 +184,7 @@ find_relid(PlannerInfo *root, Relids problem_relids, const char *alias)
 		if (relid >= root->simple_rel_array_size)
 			break;
 		rte = root->simple_rte_array[relid];
-		if (rte && rte->rtekind == RTE_RELATION && rte->eref &&
-			strcmp(rte->eref->aliasname, alias) == 0)
+		if (VGP_NAMEABLE_RTE(rte) && strcmp(rte->eref->aliasname, alias) == 0)
 			return relid;
 	}
 	return 0;

@@ -52,6 +52,134 @@ vg_planner_last_report(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(cstring_to_text(last_report));
 }
 
+/*
+ * Record a sub-query relation's own range table (VgpAdvice.subqueries), so
+ * the check can find its scans after PostgreSQL removes the SubqueryScan.
+ */
+void
+vgp_note_subquery(RelOptInfo *rel, RangeTblEntry *rte)
+{
+	VgpAdvice  *adv = vgp_statement_advice();
+	MemoryContext old;
+	VgpSubquery *sq;
+	ListCell   *lc;
+
+	if (adv == NULL || rte->rtekind != RTE_SUBQUERY || rte->eref == NULL ||
+		rel->subroot == NULL)
+		return;
+	old = MemoryContextSwitchTo(adv->cxt);
+	sq = palloc0(sizeof(VgpSubquery));
+	sq->eref = rte->eref;
+	foreach(lc, rel->subroot->parse->rtable)
+		sq->inner_erefs = lappend(sq->inner_erefs,
+								  lfirst_node(RangeTblEntry, lc)->eref);
+	adv->subqueries = lappend(adv->subqueries, sq);
+	MemoryContextSwitchTo(old);
+}
+
+/*
+ * Per range-table index of the finished plan, the index of the sub-query
+ * relation whose plan it belongs to, 0 at the top level.
+ */
+static int *
+scope_parents(PlannedStmt *pstmt, VgpAdvice *advice)
+{
+	int			n = list_length(pstmt->rtable);
+	int		   *parent = palloc0(sizeof(int) * (n + 1));
+	ListCell   *lc,
+			   *lq;
+
+	foreach(lq, advice->subqueries)
+	{
+		VgpSubquery *sq = (VgpSubquery *) lfirst(lq);
+		int			owner = 0,
+					i = 0;
+
+		foreach(lc, pstmt->rtable)
+		{
+			i++;
+			if (lfirst_node(RangeTblEntry, lc)->eref == sq->eref)
+				owner = i;
+		}
+		if (owner == 0)
+			continue;
+		i = 0;
+		foreach(lc, pstmt->rtable)
+		{
+			Alias	   *eref = lfirst_node(RangeTblEntry, lc)->eref;
+
+			i++;
+			if (i != owner && eref != NULL && list_member_ptr(sq->inner_erefs, eref))
+				parent[i] = owner;
+		}
+	}
+	return parent;
+}
+
+/* `rti` and its enclosing sub-query relations, outermost first; returns the length. */
+static int
+scope_chain(int *parent, int rti, int *chain, int max)
+{
+	int			len = 0;
+
+	for (int x = rti; x > 0 && len < max; x = parent[x])
+		chain[len++] = x;
+	for (int i = 0; i < len / 2; i++)
+	{
+		int			t = chain[i];
+
+		chain[i] = chain[len - 1 - i];
+		chain[len - 1 - i] = t;
+	}
+	return len;
+}
+
+#define VGP_MAX_SCOPE 16
+
+/*
+ * `part` (a subset of `all`, both scanned under one join node) as the
+ * relations that join is between: each index replaced by its enclosing
+ * sub-query relation at the level just below the deepest one holding all of
+ * `all`. A join of `a` with sub-query `g`'s scans is a join of a and g; a join
+ * inside g stays a join of g's own relations.
+ */
+static Bitmapset *
+in_scope(int *parent, Bitmapset *all, Bitmapset *part)
+{
+	int			common = VGP_MAX_SCOPE;
+	int			first[VGP_MAX_SCOPE],
+				nfirst = -1,
+				chain[VGP_MAX_SCOPE],
+				len,
+				x = -1;
+	Bitmapset  *out = NULL;
+
+	while ((x = bms_next_member(all, x)) >= 0)
+	{
+		len = scope_chain(parent, x, chain, VGP_MAX_SCOPE);
+		if (nfirst < 0)
+		{
+			memcpy(first, chain, sizeof(int) * len);
+			nfirst = len;
+			common = len - 1;
+			continue;
+		}
+		for (int i = 0; i < common; i++)
+			if (i >= len - 1 || chain[i] != first[i])
+			{
+				common = i;
+				break;
+			}
+	}
+	x = -1;
+	while ((x = bms_next_member(part, x)) >= 0)
+	{
+		len = scope_chain(parent, x, chain, VGP_MAX_SCOPE);
+		out = bms_add_member(out, chain[Min(common, len - 1)]);
+	}
+	return out;
+}
+
 /* scanrelid of a scan node, 0 for anything else */
 static Index
 scan_rti(Plan *plan)
@@ -162,7 +290,7 @@ node_method(Plan *plan)
 }
 
 static void
-visit(Plan *plan, CheckBgp *cb, int ncb)
+visit(Plan *plan, CheckBgp *cb, int ncb, int *parent)
 {
 	ListCell   *lc;
 	VgpMethod	m;
@@ -174,6 +302,10 @@ visit(Plan *plan, CheckBgp *cb, int ncb)
 	{
 		Bitmapset  *l = scanned(plan->lefttree);
 		Bitmapset  *r = scanned(plan->righttree);
+		Bitmapset  *lr = bms_union(l, r);
+
+		l = in_scope(parent, lr, l);
+		r = in_scope(parent, lr, r);
 
 		for (int b = 0; b < ncb; b++)
 		{
@@ -190,7 +322,7 @@ visit(Plan *plan, CheckBgp *cb, int ncb)
 		}
 	}
 	foreach(lc, child_plans(plan))
-		visit((Plan *) lfirst(lc), cb, ncb);
+		visit((Plan *) lfirst(lc), cb, ncb, parent);
 }
 
 /* Was `name` the inner side of a semi-join during join search (VgpProblem.transparent)? */
@@ -221,7 +353,7 @@ alias_set_equals(PlannedStmt *pstmt, Bitmapset *rtis, VgpMethodItem *m, VgpAdvic
 		RangeTblEntry *rte = rt_fetch(x, pstmt->rtable);
 		bool		hit = false;
 
-		if (rte->rtekind != RTE_RELATION)
+		if (!VGP_NAMEABLE_RTE(rte))
 			continue;
 		if (rte->eref && is_transparent(advice, rte->eref->aliasname))
 			continue;
@@ -235,7 +367,7 @@ alias_set_equals(PlannedStmt *pstmt, Bitmapset *rtis, VgpMethodItem *m, VgpAdvic
 }
 
 static void
-check_methods(PlannedStmt *pstmt, Plan *plan, VgpAdvice *advice)
+check_methods(PlannedStmt *pstmt, Plan *plan, VgpAdvice *advice, int *parent)
 {
 	ListCell   *lc;
 	VgpMethod	m;
@@ -246,6 +378,8 @@ check_methods(PlannedStmt *pstmt, Plan *plan, VgpAdvice *advice)
 	if (m != VGP_M_NONE)
 	{
 		Bitmapset  *all = scanned(plan);
+
+		all = in_scope(parent, all, all);
 
 		for (int z = 0; z < advice->nmethods; z++)
 		{
@@ -260,7 +394,7 @@ check_methods(PlannedStmt *pstmt, Plan *plan, VgpAdvice *advice)
 		}
 	}
 	foreach(lc, child_plans(plan))
-		check_methods(pstmt, (Plan *) lfirst(lc), advice);
+		check_methods(pstmt, (Plan *) lfirst(lc), advice, parent);
 }
 
 static const char *
@@ -273,6 +407,7 @@ void
 vgp_check_plan(PlannedStmt *pstmt, VgpAdvice *advice)
 {
 	CheckBgp   *cb = palloc0(sizeof(CheckBgp) * Max(advice->nbgps, 1));
+	int		   *parent;
 	ListCell   *lc;
 	StringInfoData rep;
 	StringInfoData bad;
@@ -296,7 +431,7 @@ vgp_check_plan(PlannedStmt *pstmt, VgpAdvice *advice)
 				RangeTblEntry *rte = lfirst_node(RangeTblEntry, lc);
 
 				i++;
-				if (rte->rtekind == RTE_RELATION && rte->eref &&
+				if (VGP_NAMEABLE_RTE(rte) &&
 					strcmp(rte->eref->aliasname, bgp->steps[s].alias) == 0)
 				{
 					cb[b].rti[s] = i;
@@ -317,14 +452,15 @@ vgp_check_plan(PlannedStmt *pstmt, VgpAdvice *advice)
 		}
 	}
 
-	visit(pstmt->planTree, cb, advice->nbgps);
+	parent = scope_parents(pstmt, advice);
+	visit(pstmt->planTree, cb, advice->nbgps, parent);
 	foreach(lc, pstmt->subplans)
-		visit((Plan *) lfirst(lc), cb, advice->nbgps);
+		visit((Plan *) lfirst(lc), cb, advice->nbgps, parent);
 	if (advice->nmethods > 0)
 	{
-		check_methods(pstmt, pstmt->planTree, advice);
+		check_methods(pstmt, pstmt->planTree, advice, parent);
 		foreach(lc, pstmt->subplans)
-			check_methods(pstmt, (Plan *) lfirst(lc), advice);
+			check_methods(pstmt, (Plan *) lfirst(lc), advice, parent);
 	}
 
 	initStringInfo(&rep);

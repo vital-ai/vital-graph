@@ -326,7 +326,7 @@ vgp_size_base_rel(PlannerInfo *root, RelOptInfo *rel, Index rti, RangeTblEntry *
 	VgpAdvice  *adv = vgp_statement_advice();
 	ListCell   *lc;
 
-	if (adv == NULL || rte == NULL || rte->rtekind != RTE_RELATION || rte->eref == NULL)
+	if (adv == NULL || !VGP_NAMEABLE_RTE(rte))
 		return;
 	for (int z = 0; z < adv->nsizes; z++)
 	{

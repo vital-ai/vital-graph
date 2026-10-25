@@ -235,3 +235,38 @@ method m1 hash a b
    WHERE a.p = 1 AND b.p = 2 AND a.o IN (SELECT u FROM q8t WHERE v >= 65);
 SELECT vg_planner_last_report();
 DROP TABLE q8, q8t;
+
+-- A grouped sub-query inside the pattern stays one relation of the join problem
+-- (GROUP BY keeps PostgreSQL from flattening it): advice names it by its alias,
+-- sizes it and chooses the join with it.
+CREATE TABLE q9 (s int, p int, o int);
+INSERT INTO q9 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+CREATE INDEX q9_ps ON q9 (p, s);
+ANALYZE q9;
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+size s1 997 g
+size k1 77 a g
+method m1 hash a g
+*/ SELECT * FROM q9 a
+   JOIN (SELECT b.s, max(b.o) AS m FROM q9 b WHERE b.p = 2 GROUP BY b.s) g ON g.s = a.s
+   WHERE a.p = 1;
+SELECT vg_planner_last_report();
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+method m1 nl g a
+*/ SELECT * FROM q9 a
+   JOIN (SELECT b.s, max(b.o) AS m FROM q9 b WHERE b.p = 2 GROUP BY b.s) g ON g.s = a.s
+   WHERE a.p = 1;
+SELECT vg_planner_last_report();
+-- Items inside the sub-query name its own relations; items outside name it.
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+bgp b0 steps(a g) join(g:hash)
+method m1 nl b c
+*/ SELECT * FROM q9 a
+   JOIN (SELECT b.s, max(c.o) AS m FROM q9 b JOIN q9 c ON c.s = b.s
+         WHERE b.p = 2 AND c.p = 3 GROUP BY b.s) g ON g.s = a.s
+   WHERE a.p = 1;
+SELECT vg_planner_last_report();
+DROP TABLE q9;

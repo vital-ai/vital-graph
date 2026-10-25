@@ -125,8 +125,25 @@ typedef struct VgpAdvice
 	 * the context the advice was parsed in, which outlives planning.
 	 */
 	List	   *transparent_names;
+	/*
+	 * Sub-queries planned as relations of their own (VgpSubquery), recorded
+	 * at their scan (set_rel_pathlist_hook). PostgreSQL drops a trivial
+	 * SubqueryScan from the finished plan, leaving the sub-query's own scans
+	 * where its alias was; the check maps them back. Allocated in `cxt`.
+	 */
+	List	   *subqueries;
 	MemoryContext cxt;
 } VgpAdvice;
+
+/*
+ * A sub-query relation: its alias, and the range-table entries of its own
+ * plan, by their `eref`, which setrefs.c's flat copy of an entry keeps.
+ */
+typedef struct VgpSubquery
+{
+	Alias	   *eref;
+	List	   *inner_erefs;
+} VgpSubquery;
 
 /* advice_parse.c */
 extern const char *vgp_find_advice(const char *query_string);
@@ -185,6 +202,15 @@ typedef struct VgpProblem
 	Relids		transparent;
 } VgpProblem;
 
+/*
+ * A relation advice can name: a table, or a sub-query PostgreSQL keeps as one
+ * relation of the join problem (a grouped sub-SELECT inside a pattern, which
+ * GROUP BY prevents it from flattening).
+ */
+#define VGP_NAMEABLE_RTE(rte) \
+	((rte) != NULL && (rte)->eref != NULL && \
+	 ((rte)->rtekind == RTE_RELATION || (rte)->rtekind == RTE_SUBQUERY))
+
 extern void vgp_statement_push(VgpAdvice *advice);
 extern void vgp_statement_pop(void);
 extern VgpAdvice *vgp_statement_advice(void);
@@ -211,6 +237,7 @@ extern void vgp_size_base_rel(PlannerInfo *root, RelOptInfo *rel, Index rti,
 							  RangeTblEntry *rte);
 
 /* advice_check.c */
+extern void vgp_note_subquery(RelOptInfo *rel, RangeTblEntry *rte);
 extern void vgp_check_plan(PlannedStmt *pstmt, VgpAdvice *advice);
 extern void vgp_set_report(const char *report);
 
