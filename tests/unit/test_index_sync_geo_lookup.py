@@ -43,3 +43,31 @@ def test_a_graph_without_geo_slots_is_guarded_once():
 
 def test_the_sql_is_built_once_per_table():
     assert W._geo_slots_of_edges_sql("vgs_test_rdf_quad") is _sql()
+
+
+# ---------------------------------------------------------------------------
+# The same trap in the entity_slot_sort coverage probe (`issues/309` audit)
+# ---------------------------------------------------------------------------
+
+def test_the_coverage_probe_takes_no_parameters():
+    """Its four values are fixed constants. As `$1`-`$4` they let PostgreSQL
+    run it on a generic plan: 51.0 s and 3,299,947 buffers on the largest
+    production space against 3.2 s custom. With no parameters the generic plan
+    is the custom one."""
+    import asyncio
+    from vitalgraph.db.sparql_sql import sync_entity_slot_sort as S
+
+    calls = []
+
+    class Capture:
+        async def fetch(self, sql, *args, **kw):
+            calls.append((sql, args))
+            return []
+
+    asyncio.run(S.entity_slot_sort_coverage(Capture(), "test_space"))
+    (sql, args), = calls
+    assert args == ()
+    assert re.findall(r"\$\d+", sql) == []
+    assert f"'{S.ENTITY_TYPE_URI}'" in sql
+    for u in (S._VITALTYPE_UUID, S._ENTITY_FRAME_EDGE, S._EDGE_SOURCE_UUID):
+        assert f"'{u}'::uuid" in sql

@@ -177,3 +177,62 @@ passed; the vectorization / index-sync integration set, 27 passed.
 After deploy: `pg_stat_statements` for the lookup (mean was 4,373 ms over
 26,954 calls) and the worker's `QueryCanceledError` warnings (about 900 per
 29 h) should both drop to near zero.
+
+## Audit: the same trap elsewhere (2026-10-25)
+
+Production `pg_stat_statements`, `vitalgraph_user`, parameterized statements
+on the quad / term / edge / frame_slot tables, by total execution time since
+2026-10-21:
+
+| # | statement (code) | calls | total | mean | max |
+|---|---|---|---|---|---|
+| 1 | `entity_slot_sort_coverage` (`sync_entity_slot_sort.py`) | 41,430 | 40.1 h | 3.5 s | 310 s |
+| 2 | `discover_graphs_sql` (`kg_server_properties.py`) | 64,147 | 35.3 h | 2.0 s | 59.8 s |
+| 3 | the geo-slot lookup (fixed above) | 27,334 | 33.2 h | 4.4 s | 60 s |
+| 4 | edge-integrity dangling counts (`sync_edge_table.py`) | 9,086 | 29.3 h | 11.6 s | 59 s |
+| 5 | edge-type agreement (`edge_type_agreement.py`) | 2,675 | 21.4 h | 28.7 s | 298 s |
+| 6 | the `entity_slot_sort` `WITH slots ... has_value` scan, per space | ~817 each | 2.8-13.9 h | 12-61 s | 330 s |
+| 7 | `count_entities_needing_backfill_sql` (`kg_server_properties.py`) | 26,527 | 5.3 h | 722 ms | 59.5 s |
+| 8 | `check_subjects_exist` (`sparql_sql_space_impl.py`) | 136,674 | 2.5 h | 65 ms | 8 s |
+
+#4-#6 are maintenance scans of whole tables by design: slow on large spaces
+whatever the plan. They are the "maintenance timeouts" above.
+
+The targeted ones, replayed read-only on the largest space as SQL `PREPARE`
+with the exact SQL and arguments each function sends (captured through a stub
+connection), custom vs generic plan:
+
+| # | custom | generic | verdict |
+|---|---|---|---|
+| 1 coverage probe | 3.2 s, 867,678 buf | **51.0 s, 3,299,947 buf** | the trap: **fixed** |
+| 2 discover_graphs | 57 ms | 27 ms | fine either way |
+| 7 backfill count | **17.6 s** | 2.6 s | the opposite: the CUSTOM plan is 7x worse |
+| 8 check_subjects_exist | 14 ms | 1 ms | fine |
+
+**#1 fixed:** `entity_slot_sort_coverage`'s four values are fixed constants
+(the entity-type predicate URI, `vitaltype`, the frame-edge type,
+`hasEdgeSource`). As literals the statement has NO parameters, so its generic
+plan is its custom plan; no `SET LOCAL` needed, which matters because it runs
+inside a caller's transaction. Verified on production: no parameters, 867,678
+buffers (the custom plan's exactly). Unit: `test_the_coverage_probe_takes_no_parameters`;
+the existing `test_slot_sort_coverage_probe.py` passes. Its integration tests
+(`test_slot_sort_coverage_frameless.py`, `test_slot_sort_shortfall_is_visible.py`)
+could not run: the vg test stack was stopped for the planner stack. Run them
+before this ships.
+
+**Not a blanket fix.** #7 shows why `plan_cache_mode = force_custom_plan` must
+not be set for the whole internal pool: there the generic plan is the better
+one. Each statement needs its own measurement.
+
+**Found on the way, not the generic-plan trap (follow-ups):**
+
+- #7 `count_entities_needing_backfill_sql` is heavy by construction (four
+  `NOT EXISTS` over every KGEntity of a graph: 17.6 s custom on the largest
+  space) and runs 26,527 times in four days.
+- #2 `discover_graphs_sql` runs 64,147 times in four days (about one every
+  5 s). Its production mean of 2.0 s is not its plan (27-57 ms here on the
+  largest space), so the cost is elsewhere: other spaces, or contention.
+- Both belong to the server-properties backfill; how often it runs, and
+  whether it needs to rediscover graphs every cycle, is the question.
+- The coverage probe (#1) also runs ~10,000 times a day: frequency, not just
+  plan.

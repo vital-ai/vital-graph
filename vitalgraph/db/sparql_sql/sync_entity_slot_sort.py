@@ -112,6 +112,9 @@ def _u(uri: str) -> uuid.UUID:
 
 
 _ENTITY_FRAME_EDGE = _u(ENTITY_FRAME_EDGE_URI)
+# Literals for `entity_slot_sort_coverage`, which takes no parameters (`issues/309`).
+_VITALTYPE_UUID = _u(f"{CORE}vitaltype")
+_EDGE_SOURCE_UUID = _u(f"{CORE}hasEdgeSource")
 _SLOT_EDGE = _u(SLOT_EDGE_URI)
 _CHILD_FRAME_EDGE = _u(CHILD_FRAME_EDGE_URI)
 _SLOT_TYPE = _u(SLOT_TYPE_URI)
@@ -937,12 +940,18 @@ async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
     # check that trusts the derived table's own account of itself. Routing the
     # DENOMINATOR through the quads was right; routing the NUMERATOR through the
     # table's type column put the dependency straight back.
+    # NO PARAMETERS (`issues/309`): every value here is a fixed constant, and as
+    # `$1`-`$4` they let PostgreSQL switch this prepared statement to a generic
+    # plan, which on the largest production space took 51.0 s and 3,299,947
+    # buffers against the custom plan's 3.2 s (production: mean 3.5 s, max
+    # 310 s over 41,430 calls). With none, the generic plan IS the custom one.
+    entity_type = ENTITY_TYPE_URI.replace("'", "''")
     rows = await conn.fetch(f"""
         WITH of_type AS (
             SELECT DISTINCT q.object_uuid AS ty, q.subject_uuid AS entity_uuid
               FROM {space_prefix(space_id)}_rdf_quad q
               JOIN {space_prefix(space_id)}_term p ON p.term_uuid = q.predicate_uuid
-               AND p.term_text = $1
+               AND p.term_text = '{entity_type}'
              -- AN ENTITY OWNING NO FRAMES HAS NO ROWS BY CONSTRUCTION, so
              -- counting it here asks the table for something it can never hold.
              -- Production, 2026-09-08: one such entity (5 quads, no frames) held
@@ -972,9 +981,9 @@ async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
                   JOIN {space_prefix(space_id)}_rdf_quad vt
                     ON vt.subject_uuid = src.subject_uuid
                    AND vt.context_uuid = src.context_uuid
-                   AND vt.predicate_uuid = $2
-                   AND vt.object_uuid = $3
-                 WHERE src.predicate_uuid = $4
+                   AND vt.predicate_uuid = '{_VITALTYPE_UUID}'::uuid
+                   AND vt.object_uuid = '{_ENTITY_FRAME_EDGE}'::uuid
+                 WHERE src.predicate_uuid = '{_EDGE_SOURCE_UUID}'::uuid
                    AND src.object_uuid = q.subject_uuid))
         SELECT t.term_text AS entity_type,
                o.ty        AS entity_type_uuid,
@@ -992,8 +1001,7 @@ async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
                    SELECT 1 FROM {space_prefix(space_id)}_entity_slot_sort e
                     WHERE e.entity_uuid = o.entity_uuid))) DESC
          LIMIT {int(limit)}
-    """, ENTITY_TYPE_URI, _u(f"{CORE}vitaltype"), _ENTITY_FRAME_EDGE,
-         _u(f"{CORE}hasEdgeSource"), timeout=timeout)
+    """, timeout=timeout)
     return [
         {"entity_type": r["entity_type"],
          # The UUID, so a caller can act on the gap without re-resolving the
