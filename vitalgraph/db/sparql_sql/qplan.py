@@ -1406,6 +1406,13 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     mentioned = region_vars(reg)
     for o in reg.optionals:
         mentioned |= region_vars(o)
+    if q.project is None and q.group_vars is None:
+        # SELECT * (no PROJECT in the algebra): every variable the pattern binds, in
+        # the generator's order (`names` follows its var_map). Without this the
+        # select list was EMPTY: PostgreSQL accepts `SELECT FROM ...`, so the
+        # planner returned the right number of rows with no bindings in them (DAWG
+        # open-world/date-3, open-eq-02; no query in the dashboard corpus is SELECT *).
+        q.project = [v for v in names if v in mentioned] + sorted(v for v in mentioned if v not in names)
     unbound = {v for v in (q.project or []) if v not in agg_vars and v not in mentioned
                and v not in (q.group_vars or [])}
     q.order = [(v, d) for v, d in q.order if v not in unbound]

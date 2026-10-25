@@ -168,3 +168,42 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "sql_v2: Requires PostgreSQL + Jena sidecar"
     )
+    if os.environ.get("VG_CONFORMANCE_PLANNER", "").lower() in ("1", "true", "yes"):
+        _route_through_planner()
+
+
+# ---------------------------------------------------------------------------
+# VG_CONFORMANCE_PLANNER=1: the suite through the qtree PLANNER
+# ---------------------------------------------------------------------------
+#
+# The planner's correctness had been checked only against our own dashboard and
+# KG corpora. Run through it, the W3C suite found SELECT * answered with an EMPTY
+# select list (rows, no bindings) on its second test. With this set, every query
+# the SQL-v2 tests generate goes through `generate_sql(..., planner_ext=True)`
+# and runs with the planner's advice, as the executor runs it; the tests' own
+# verdicts are the check. It needs a database with the `vg_planner` extension
+# (the planner stack: VG_TEST_PG_PORT=5434, VG_TEST_SIDECAR_URL=:7072) and
+# VG_PLANNER_FEATURES=qtree,...; queries the planner declines run as today.
+# VG_CONFORMANCE_PLANNER_LOG=<file> also records, per generated query, whether
+# the planner planned it and why not (the coverage matrix).
+
+def _route_through_planner():
+    import json
+    from vitalgraph.db.sparql_sql import generator as G
+    real = G.generate_sql
+    log = os.environ.get("VG_CONFORMANCE_PLANNER_LOG")
+
+    async def planned(compile_result, space_id, *a, **kw):
+        kw["planner_ext"] = True
+        g = await real(compile_result, space_id, *a, **kw)
+        if log:
+            d = g.plan_decisions or {}
+            with open(log, "a") as f:
+                f.write(json.dumps({"test": os.environ.get("PYTEST_CURRENT_TEST", ""),
+                                    "source": g.plan_source,
+                                    "declined": (d.get("declined") or {}).get("qtree_plan")}) + "\n")
+        if g.ok and g.plan_advice:
+            g.sql = g.plan_advice + "\n" + g.sql
+        return g
+
+    G.generate_sql = planned
