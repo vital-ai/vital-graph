@@ -65,7 +65,14 @@ for _name in filter(None, (os.getenv("VG_PLANNER_RETIRE") or "").replace(" ", ""
 #: (`qtree` / `qplan`; the first prototypes are in `archive/planner_prototypes`) and replace the emitted SQL with the
 #: planner's. EXPERIMENTS: `VG_PLANNER_FEATURES=qtree`.
 FEATURES: Dict[str, bool] = {"qtree": False, "bgp_rows": False, "oracle": False, "implied": False,
-                              "unit_hash": False, "late_optional": False, "path_sample": False}
+                              "unit_hash": False, "late_optional": False, "path_sample": False,
+                              "unit_methods": False}
+# `unit_methods`: a nested-loop item into a probed constant leaf of a unit DRIVEN
+# from a selective sub-select, when the leaf's own scan is UNIT_NL_RATIO times the
+# rows probing it (qplan._render_node). Measured 2026-10-25: the KG entity counts
+# with a name search 149 -> 12 ms and 190 -> 22 ms on lead 100k (today's SQL 22 / 28;
+# PostgreSQL alone scanned and hashed the 100,000-row type pin). Full corpus with it:
+# no planner time >15% worse, 0 slower than today; the API suite passes with it.
 # `path_sample`: with `oracle`, also sample the chosen plan's join PREFIXES as
 # wholes and re-plan (qcard.annotate_paths): pairs sampled one at a time miss
 # correlation along a chain (11-20x low on the KGQuery edge chains; sampled,

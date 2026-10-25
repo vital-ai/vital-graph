@@ -54,6 +54,9 @@ class SparqlCompileCache:
         Returns the raw JSON response dict, identical to
         ``await client.compile(sparql)`` but potentially served from cache.
         """
+        from ..jena_sparql import jena_sidecar_client as _sc
+        if _sc._CAPTURE_PATH:
+            _sc._capture(sparql)        # the ORIGINAL text, cache hits included (VG_SPARQL_CAPTURE)
         normalized, uri_list = self._parameterize(sparql)
         key = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 

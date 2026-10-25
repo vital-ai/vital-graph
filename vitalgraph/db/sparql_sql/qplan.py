@@ -354,6 +354,13 @@ def _term_key(node):
 
 def _build_region(parts, ctx, aliases) -> Region:
     leaves: List[Leaf] = parts["leaves"]
+    # A constant predicate or object the term table does not hold matches nothing:
+    # the generator answers that on its provably-empty path (no scan). Priced, the
+    # leaf read the generator's estimate (100,000 for an absent entity type), and
+    # the planner ran a parallel plan over nothing, 6 ms against 1.
+    for l in leaves:
+        if l.kind == "quad" and ((l.o_const and l.o_uuid is None) or (l.pred and l.pred_uuid is None)):
+            raise Unsupported("a pattern constant absent from the term table (the generator's empty path)")
     values = parts["values"]
     # VALUES pins: a leaf whose object is the VALUES variable is restricted to
     # those terms, priced exactly from rdf_stats where the pairs are stored.
@@ -1005,6 +1012,11 @@ def _pick_driver(u: Unit, pos: "_Pos", aliases):
     return best
 
 
+#: `unit_methods`: advise a nested loop into a constant leaf only when its own scan
+#: is at least this many times the rows probing it.
+UNIT_NL_RATIO = 10.0
+
+
 def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[str]]:
     """SQL for a plan node: (sql, aliases present, conditions still pending)."""
     if node.kind == "scan":
@@ -1043,6 +1055,25 @@ def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[st
                 r.sizes.append((l.scan.rows, [l.alias]))
             r.methods.append(("hash", sorted(present)))
         sql, pend = _chain(r, order[1 + len(hashed):], present, sql, pend) if len(order) > 1 + len(hashed) else (sql, pend)
+        from .planner_ext import FEATURES as _F
+        if _F.get("unit_methods") and drv is not None:
+            # In a unit DRIVEN from a selective sub-select (a name search, a range), a
+            # probed CONSTANT leaf whose own scan is at least UNIT_NL_RATIO times the rows
+            # probing it gets a nested-loop item: probing reads a small fraction of what
+            # scanning would. Left to PostgreSQL, the KG entity count with a name search
+            # SCANNED the type pin's 100,000 rows by bitmap and hashed them, where 2,038
+            # probes were needed (149 ms, today's SQL 22 ms). Only there, measured: a
+            # nested loop on every probed leaf overrode the hash joins PostgreSQL rightly
+            # chose inside the dashboard units (all_of 11 -> 21 ms), and by the ratio
+            # alone, in a unit started from its own anchor (l6_const_value 42 -> 65 ms).
+            probes = order[1 + len(hashed):]
+            prefix = [l.alias for l in order[:1 + len(hashed)]]
+            cur = (min(drv[2], drv[0].scan.rows) if drv[0].scan.rows else drv[2]) if drv is not None \
+                else (order[0].scan.rows or u.rows.rows or 0.0)
+            for i, l in enumerate(probes):
+                if l.constant and l.scan.rows and cur * UNIT_NL_RATIO <= l.scan.rows:
+                    r.methods.append(("nl", sorted(prefix + [p.alias for p in probes[:i + 1]])))
+                cur = min(cur, u.rows.rows or cur)
         # (base scans are sized for every constant leaf in render(): see
         #  _base_sizes; not only the anchor)
         if len(u.leaves) > 1 or drv is not None:

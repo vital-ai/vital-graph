@@ -18,6 +18,21 @@ DEFAULT_URL = "http://localhost:7070"
 DEFAULT_TIMEOUT = 10.0
 MAX_INPUT_BYTES = 1_000_000  # 1 MB
 
+# DIAGNOSTICS: `VG_SPARQL_CAPTURE=<file>` appends every SPARQL string sent for
+# compilation, one JSON object per line, so a workload's real query shapes can be
+# collected and replayed (the planner's corpus, planning_planner/09 principle 7).
+# Off unless set; a capture failure is logged and never fails the query.
+_CAPTURE_PATH = os.getenv("VG_SPARQL_CAPTURE") or None
+
+
+def _capture(sparql: str) -> None:
+    import json
+    try:
+        with open(_CAPTURE_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": time.time(), "sparql": sparql}) + "\n")
+    except Exception as exc:  # diagnostics only
+        logger.warning("VG_SPARQL_CAPTURE: could not append to %s: %s", _CAPTURE_PATH, exc)
+
 
 class SidecarClient:
     """
@@ -80,6 +95,8 @@ class SidecarClient:
                 f"SPARQL input exceeds {MAX_INPUT_BYTES} byte limit"
             )
 
+        if _CAPTURE_PATH and "urn:cparam:" not in sparql:   # the compile cache captured the original
+            _capture(sparql)
         t0 = time.monotonic()
         resp = self._client.post(
             "/v1/sparql/compile",
@@ -165,6 +182,8 @@ class AsyncSidecarClient:
                 f"SPARQL input exceeds {MAX_INPUT_BYTES} byte limit"
             )
 
+        if _CAPTURE_PATH and "urn:cparam:" not in sparql:   # the compile cache captured the original
+            _capture(sparql)
         t0 = time.monotonic()
         resp = await self._client.post(
             "/v1/sparql/compile",
