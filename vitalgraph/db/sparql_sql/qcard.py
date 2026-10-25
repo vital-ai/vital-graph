@@ -194,6 +194,8 @@ def _question(reg, s: int, t: Optional[int], hits: bool = True) -> Optional[_Que
     u = reg.units[s]
     if not u.subject.startswith("?") or u.anchor is None or u.anchor.s_var is None:
         return None
+    if t is not None and any(l.kind == "subq" for l in reg.units[t].leaves):
+        return None              # a sub-SELECT: no table to join a sample into (its own region is sampled)
     var = u.subject[1:]
     s_sql, s_r, s_pend, pos = _unit_sql(reg, s)
     a = u.anchor
@@ -355,6 +357,49 @@ async def _run_batch(sqls: List[str], conn, timeout_ms: int) -> List[List[float]
     return [got[i] for i in range(len(sqls))]
 
 
+async def walk_hit_rate(q, space_id: str, conn=None, conn_params=None) -> Optional[float]:
+    """For a LIMIT page walked by ?v (`qplan.topk_driver`): the share of the
+    first SAMPLE_N values of ?v, in the order an early stop walks them, for which
+    the WHOLE pattern has a solution. One statement: the values off the driver
+    unit's anchor, each tested with the pattern rendered correlated on ?v (as a
+    correlated NOT EXISTS body is). None when the shape is not one it can ask
+    (NOT EXISTS or a sub-SELECT in the pattern) or the question fails."""
+    from . import qplan
+    from .generator import substitute_constants
+    reg = q.region
+    drv = qplan.topk_driver(q, reg)
+    if drv is None or reg.antis or any(l.kind == "subq" for u in reg.units for l in u.leaves):
+        return None
+    var, d = drv
+    a = reg.units[d].anchor
+    if a is None or a.s_var != var:
+        return None
+    pos = qplan._Pos(reg.plans, reg.values)
+    a_col = next((f"{al}.{c}" for al, c in pos.positions.get(var, []) if al == a.alias), None)
+    if a_col is None:
+        return None
+    a_where = " AND ".join(pos.filters.get(a.alias, []) or ["TRUE"])
+    smp = (f"SELECT DISTINCT {a_col} AS x0 FROM {pos.table[a.alias]} AS {a.alias} "
+           f"WHERE {a_where} ORDER BY x0 LIMIT {SAMPLE_N}")
+    tree = qplan._search_bound(reg, [var])
+    br = qplan._R(qplan._Pos(reg.plans, reg.values), outer={var: "smp.x0"})
+    bsql, _bp, bpend = qplan._render_node(tree, reg, br)
+    body = f"SELECT 1 FROM {bsql}" + (" WHERE " + " AND ".join(bpend) if bpend else "")
+    sql = (f"WITH smp AS ({smp}) SELECT ARRAY[count(*), count(*) FILTER (WHERE EXISTS ({body}))]"
+           f"::float8[] AS v FROM smp")
+    sql = substitute_constants(sql, reg.aliases)
+    if "_const" in sql:
+        return None
+    key = (space_id, sql)
+    if key not in _cache:
+        _cache[key] = (await _run([sql], conn, conn_params))[0]
+    v = _cache[key]
+    if not v or v[0] <= 0:
+        return None
+    # no hit in the sample: the rate is below 1/n; take half that, not zero
+    return (v[1] if v[1] > 0 else 0.5) / v[0]
+
+
 def _regions(q) -> list:
     out = []
 
@@ -364,6 +409,10 @@ def _regions(q) -> list:
             walk(o)
         for a in r.antis:
             walk(a.region)
+        for u in r.units:
+            for l in u.leaves:
+                if l.kind == "subq":
+                    walk(l.sub.region)
     walk(q.region)
     return out
 
@@ -388,6 +437,8 @@ async def annotate(q, space_id: str, conn=None, conn_params=None, rec=None) -> D
         _apply(x, v)
     for r in _regions(q):
         _pairs(r)
+    from .qplan import refresh_subqueries
+    refresh_subqueries(q)            # a sub-SELECT's groups and cost, from its sampled region
     return {"questions": len(qs), "sampled": len(todo), "failed": failed,
             "ms": round((time.perf_counter() - t0) * 1000, 1)}
 

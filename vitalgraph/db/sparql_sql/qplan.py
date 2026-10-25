@@ -176,7 +176,94 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
             q.having.extend(p.filter_exprs or [])
         p = p.children[0]
     q.region = _region(p, ctx, ctx.aliases, outer_vars=set(), exclude=exclude)
+    refresh_subqueries(q)
     return q
+
+
+def _analyze_subselect(p, ctx, exclude: frozenset) -> Query:
+    """A grouped sub-SELECT inside a pattern: `{ SELECT ?k (MAX(?v) AS ?m) WHERE
+    { ... } GROUP BY ?k }`, i.e. PROJECT, EXTENDs, GROUP over a pattern. Grouped
+    on variables, MIN / MAX aggregates of a variable, every projected variable a
+    group key or an aggregate."""
+    q = Query(region=None)                      # type: ignore[arg-type]
+    q.exclude = exclude
+    q.project = list(p.project_vars or [])
+    p = p.children[0]
+    while p.kind == KIND_EXTEND:
+        name = getattr(p.extend_expr, "var", None)
+        if name is None or not name.startswith("."):
+            raise Unsupported(f"sub-SELECT: BIND / extend of a non-aggregate: {p.extend_expr}")
+        q.extend[p.extend_var] = name
+        p = p.children[0]
+    if p.kind != KIND_GROUP:
+        raise Unsupported(f"sub-SELECT inside the pattern without GROUP BY ({p.kind})")
+    gv = p.group_vars or []
+    if not gv or any(g.expr is not None for g in gv):
+        raise Unsupported("sub-SELECT: GROUP BY nothing or an expression")
+    q.group_vars = [g.var for g in gv]
+    for k, agg in (p.aggregates or {}).items():
+        if agg.name.upper() not in ("MAX", "MIN") or type(agg.expr).__name__ != "ExprVar":
+            raise Unsupported(f"sub-SELECT aggregate {agg.name}")
+        q.aggregates[k] = agg
+    outside = [v for v in q.project if v not in q.group_vars and v not in q.extend]
+    if outside or set(q.extend.values()) - set(q.aggregates):
+        raise Unsupported("sub-SELECT projects a variable that is neither a key nor an aggregate")
+    q.region = _region(p.children[0], ctx, ctx.aliases, outer_vars=set(), exclude=exclude)
+    if q.region.optionals or q.region.antis or any(
+            l.kind == "subq" for u in q.region.units for l in u.leaves):
+        raise Unsupported("sub-SELECT with OPTIONAL, NOT EXISTS or a nested sub-SELECT")
+    return q
+
+
+def _subq_leaf(p, ctx, exclude: frozenset) -> Leaf:
+    """The sub-SELECT as one leaf of the outer pattern: alias `sq_<first alias
+    inside>` (unique in the statement), one row per group, a column k_<var> per
+    projected variable. Sized and priced by `refresh_subqueries`."""
+    inner = _analyze_subselect(p, ctx, exclude)
+    first = min((l.alias for u in inner.region.units for l in u.leaves), default="x")
+    leaf = Leaf(alias=f"sq_{first}", kind="subq", pred=None, s_var=None, o_var=None,
+                s_const=None, o_const=None, scan=Est(None, "subq"), pred_rows=None,
+                pred_objects=None, o_vars=[(f"k_{v}", v) for v in inner.project])
+    leaf.sub = inner
+    _subq_price(leaf)
+    return leaf
+
+
+def _subq_price(leaf: Leaf) -> None:
+    """Groups and cost of a sub-SELECT leaf from its inner plan: groups = the
+    inner rows, at most the product of the group keys' distinct values; cost =
+    the inner plan plus hashing its rows into groups."""
+    inner = leaf.sub
+    tree = search(inner.region)
+    ndv: Dict[str, float] = {}
+    for u in inner.region.units:
+        for v, n in _unit_ndv(u, inner.region.values, inner.region.bound).items():
+            ndv[v] = min(ndv.get(v, n), n)
+    groups = 1.0
+    for v in inner.group_vars:
+        groups *= ndv.get(v, tree.rows)
+    groups = max(1.0, min(groups, tree.rows))
+    leaf.scan = Est(groups, "subq")
+    leaf.col_ndv = {c: groups for c, _v in leaf.o_vars}
+    leaf.sub_cost = tree.cost + (tree.rows if COST_MODEL == "cout" else
+                                 W["hash_build"] + tree.rows * (W["hash_build_row"] + W["hash_probe_row"]))
+
+
+def refresh_subqueries(q: Query) -> None:
+    """Re-price every sub-SELECT leaf and its unit, after its inner region's
+    estimates changed (`qcard.annotate` samples it in place)."""
+    def walk(r: Region):
+        for u in r.units:
+            for l in u.leaves:
+                if l.kind == "subq":
+                    _subq_price(l)
+                    if u.anchor is l:
+                        u.rows = Est(l.scan.rows, "subq")
+        for o in r.optionals:
+            walk(o)
+        for a in r.antis:
+            walk(a.region)
+    walk(q.region)
 
 
 def _is_having(p, q) -> bool:
@@ -191,7 +278,7 @@ def _is_having(p, q) -> bool:
 
 
 def _region(p, ctx, aliases, outer_vars: Set[str], exclude: frozenset = frozenset()) -> Region:
-    parts = {"leaves": [], "values": {}, "plans": [], "optionals": [], "antis": [], "exclude": exclude}
+    parts = {"leaves": [], "values": {}, "plans": [], "optionals": [], "antis": [], "exclude": exclude, "ctx": ctx}
     _collect(p, ctx, aliases, parts, outer_vars)
     r = _build_region(parts, ctx, aliases)
     return r
@@ -244,6 +331,9 @@ def _collect(p, ctx, aliases, parts, outer_vars):
                 parts["antis"].append(Anti(region=br, correlated=[], filters=filters))
             else:
                 raise Unsupported(f"FILTER {type(e).__name__}")
+    elif p.kind == KIND_PROJECT:
+        # a grouped sub-SELECT joined into the pattern: one leaf, its own plan
+        parts["leaves"].append(_subq_leaf(p, parts["ctx"], parts["exclude"]))
     else:
         raise Unsupported(f"{p.kind} inside the pattern")
 
@@ -289,6 +379,15 @@ def _build_region(parts, ctx, aliases) -> Region:
     for u in units:
         if u.rows.rows is None:
             raise Unsupported(f"unit {u.subject} has no priced anchor")
+    # A sub-SELECT is joined with the WHOLE pattern, and OPTIONAL blocks are
+    # attached after it: Join(LeftJoin(A, B), C) = LeftJoin(Join(A, C), B) only
+    # when B and C share no variable A does not bind.
+    sub_vars = {ov for l in leaves if l.kind == "subq" for _c, ov in l.o_vars}
+    if sub_vars and parts["optionals"]:
+        plain = {v for l in leaves if l.kind != "subq" for v in [l.s_var] + [ov for _c, ov in l.o_vars] if v}
+        for o in parts["optionals"]:
+            if (region_vars(o) & sub_vars) - plain:
+                raise Unsupported("an OPTIONAL shares a variable with a sub-SELECT only")
     edges = []
     subj = {u.subject[1:]: i for i, u in enumerate(units) if u.subject.startswith("?")}
     for i, u in enumerate(units):
@@ -666,6 +765,8 @@ def _unit_build(u: Unit) -> Tuple[float, List[Tuple[Leaf, str]]]:
 def _base(r: Region, i: int) -> Node:
     u = r.units[i]
     rr = u.rows.rows or 0.0
+    if u.anchor is not None and u.anchor.kind == "subq":
+        return Node("scan", frozenset([i]), u.anchor.sub_cost, rr, _unit_ndv(u, r.values, r.bound), unit=i)
     cost, _plan = _unit_build(u)
     return Node("scan", frozenset([i]), cost, rr, _unit_ndv(u, r.values, r.bound), unit=i)
 
@@ -1031,6 +1132,65 @@ def alternatives(r: Region, k: int = 6) -> List[Node]:
     return out
 
 
+@dataclass
+class _SubSql:
+    sql: str
+    sizes: List[Tuple[float, List[str]]]
+    units_adv: List[str]
+    methods: List[Tuple[str, List[str]]]
+    poses: List["_Pos"]
+    base_sizes: List[Tuple[float, List[str]]]
+
+
+def _render_subq(leaf: Leaf, ctx, term_table: str) -> _SubSql:
+    """A sub-SELECT leaf's own SQL, keys only: one row per group, a column
+    k_<var> per projected variable (a term uuid). MIN / MAX pick the term that
+    sorts first under SPARQL's ordering exactly as today's SQL does
+    (`emit_group.sparql_order_key`: kind, then number, then text under the SPARQL
+    collation), here by the term's own uuid. Its advice items name its own
+    relations; the extension maps them inside the sub-query's plan."""
+    from .collation import collate
+    from .emit_bgp import _NUMERIC_DT_SQL_LIST
+    from .sql_type_generation import TypeRegistry
+    from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
+    q = leaf.sub
+    reg = q.region
+    pos = _Pos(reg.plans, reg.values)
+    tree = search(reg)
+    r = _R(pos)
+    core, _present, pend = _render_node(tree, reg, r)
+    need = set(q.group_vars) | {a.expr.var for a in q.aggregates.values()}
+    for v in need:
+        if v not in r.bound:
+            raise Unsupported(f"sub-SELECT: ?{v} is not bound by its plan")
+    cols = [f"{r.bound[v]} AS k_{v}" for v in sorted(need)]
+    joins: Dict[str, str] = {}                 # term alias -> the variable it decodes
+    picks = []
+    for out_var, ph in sorted(q.extend.items()):
+        agg = q.aggregates[ph]
+        v = agg.expr.var
+        t = f"m_{leaf.alias}_{v}"
+        if t not in joins:
+            joins[t] = v
+            tcols = TypeRegistry.term_table_columns(
+                "mv", t, "x", _NUMERIC_DT_SQL_LIST, dt_case_sql=ctx.dt_case_expr(t),
+                numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
+                boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
+                datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))
+            by = {c.rsplit(" AS ", 1)[1]: c.rsplit(" AS ", 1)[0] for c in tcols}
+            cols += [f"CASE WHEN {by['mv__type']} = 'B' THEN 1 WHEN {by['mv__type']} = 'U' THEN 2 ELSE 3 END AS r_{v}",
+                     f"{by['mv__num']} AS n_{v}", f"{by['mv']} AS x_{v}"]
+        d = "DESC" if agg.name.upper() == "MAX" else "ASC"
+        picks.append(f"(array_agg(k_{v} ORDER BY r_{v} {d}, n_{v} {d} NULLS LAST, "
+                     f"{collate(f'x_{v}')} {d}))[1] AS k_{out_var}")
+    tj = "".join(f"\n  JOIN {term_table} AS {t} ON {t}.term_uuid = {r.bound[v]}" for t, v in joins.items())
+    inner = (f"SELECT {', '.join(cols)}\nFROM {core}{tj}" + ("\nWHERE " + " AND ".join(pend) if pend else ""))
+    gk = [f"k_{v}" for v in q.group_vars]
+    sql = f"SELECT {', '.join(gk + picks)}\nFROM ({inner}) AS g_{leaf.alias}\nGROUP BY {', '.join(gk)}"
+    return _SubSql(sql=sql, sizes=list(r.sizes), units_adv=list(r.units_advice), methods=list(r.methods),
+                   poses=[pos], base_sizes=_base_sizes(reg))
+
+
 def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = None) -> Rendered:
     from .generator import substitute_constants
     reg = q.region
@@ -1038,6 +1198,20 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     if pos.term_table is None:
         raise Unsupported("no term table")
     poses = [pos]
+    # sub-SELECT leaves: their SQL is the leaf's table, their columns its positions
+    subs: List[_SubSql] = []
+    for u in reg.units:
+        for l in u.leaves:
+            if l.kind == "subq":
+                s = _render_subq(l, ctx, pos.term_table)
+                subs.append(s)
+                pos.table[l.alias] = f"({s.sql})"
+                for c, v in l.o_vars:
+                    pos.positions.setdefault(v, []).append((l.alias, c))
+                poses += s.poses
+    for o in list(reg.optionals) + [a.region for a in reg.antis]:
+        if any(l.kind == "subq" for u in o.units for l in u.leaves):
+            raise Unsupported("a sub-SELECT inside an OPTIONAL or NOT EXISTS")
     tree = main_tree or search(reg)
     base_sizes = _base_sizes(reg)
     r = _R(pos)
@@ -1046,6 +1220,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     sizes = list(r.sizes)
     units_adv = list(r.units_advice)
     methods = list(r.methods)
+    for s in subs:
+        sizes += s.sizes
+        units_adv += s.units_adv
+        methods += s.methods
+        base_sizes += s.base_sizes
     rows = tree.rows
     anti_notes: List[str] = []
     # OPTIONAL blocks, each planned on its own, left-joined on the shared vars
@@ -1182,6 +1361,10 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     for n, (v, d) in enumerate(q.order):
         if v in agg_vars:
             sort_cols.append((f"o.a_{_ph(agg_vars[v])}", d))
+        elif q.synth_order:
+            # the generator's own stable-paging order is by the term's UUID: the same
+            # here, so consecutive pages agree whichever path renders each of them
+            sort_cols.append((f"o.k_{v}", d))
         else:
             ts = f"s{n}"
             sort_joins.append(f"LEFT JOIN {pos.term_table} AS {ts} ON {ts}.term_uuid = o.k_{v}")
@@ -1274,6 +1457,81 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     lines.append("*/")
     return Rendered(sql=outer, advice="\n".join(lines),
                     plan=describe(tree, reg) + "".join(f"; {n}" for n in anti_notes), cost=tree.cost)
+
+
+def topk_driver(q: Query, reg: Region) -> Optional[Tuple[str, int]]:
+    """(?v, unit index) of the variable a LIMIT page is walked by, when it is a
+    unit's subject: the ORDER BY's first key, or the one projected variable."""
+    if q.limit is None:
+        return None
+    pv = None
+    if q.order:
+        pv = q.order[0][0]
+    elif q.project and len([v for v in q.project if v not in q.extend]) == 1:
+        pv = next(v for v in q.project if v not in q.extend)
+    d = next((i for i, u in enumerate(reg.units) if u.subject == f"?{pv}"), None)
+    return None if d is None else (pv, d)
+
+
+def topk_costs(q: Query, reg: Region, tree: Node,
+               hit_rate: Optional[float] = None) -> Optional[Tuple[float, float, str]]:
+    """(full plan cost, early-stop cost, note) for a LIMIT query whose rows are
+    paged by one variable ?v that is a unit's subject, or None when there is no
+    such driver.
+
+    Early stop (today's SQL for such pages): walk the driver unit's rows in ?v's
+    order and probe the rest of the pattern per row until `limit + offset`
+    results are found. Rows walked = needed / (results per driver row), capped
+    at the driver's rows; cost per walked row = a probe chain from the driver
+    (greedy: each step the cheapest probe into an adjacent unit), divided over
+    the driver's rows. The full plan computes every result and cuts.
+
+    `hit_rate`: the share of driver rows that complete the whole pattern, as
+    SAMPLED in walk order (`qcard.walk_hit_rate`). Without it the share is the
+    plan's own result estimate over the driver's rows, and that is the number a
+    chain of joins gets most wrong: on the KGQuery edge pages the pair-by-pair
+    estimate was 11-20x low (a high-rated slot's edge belongs to the MQL frame
+    always, not at the base rate), the walk read 11-20x too long, and the planner
+    took pages today's early stop answers 1.4-10x faster."""
+    drv = topk_driver(q, reg)
+    if drv is None:
+        return None
+    pv, d = drv
+    n = len(reg.units)
+    card = _Card(reg)
+    adj, by_pair = _mask_edges(reg)
+    cur = _base(reg, d)
+    while len(cur.units) < n:
+        best = None
+        for t in range(n):
+            if t in cur.units:
+                continue
+            m = _mask(cur.units)
+            edges = _edges_between(by_pair, m, 1 << t)
+            if not edges:
+                continue
+            S = cur.units | {t}
+            rows = card(_mask(S))
+            for e in edges:
+                fan = _probe_fan(e, t)
+                if fan is None:
+                    continue
+                c = _probe_cost(cur, fan, rows, len(reg.units[t].leaves))
+                if best is None or c < best.cost:
+                    best = Node("probe", S, c, rows, {}, left=cur, unit=t, edge=e)
+        if best is None:
+            return None                  # not a pure probe chain from the driver: no early stop
+        cur = best
+    drows = reg.units[d].rows.rows or 0.0
+    if drows <= 0:
+        return None
+    results = min(tree.rows, drows) if hit_rate is None else hit_rate * drows
+    need = (q.limit or 0) + (q.offset or 0)
+    walked = drows if results <= 0 else min(drows, need * drows / results)
+    early = cur.cost * walked / drows
+    return tree.cost, early, (f"top-k: full {tree.cost:,.0f} vs early stop {early:,.0f} "
+                              f"(walk {walked:,.0f} of {drows:,.0f} ?{pv} for {need}"
+                              + (f", sampled hit rate {hit_rate:.3g}" if hit_rate is not None else "") + ")")
 
 
 def _early_stop_note(q: Query, reg: Region, tree: Node, rows: float) -> str:

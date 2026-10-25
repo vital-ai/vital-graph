@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .ir import (KIND_BGP, KIND_DISTINCT, KIND_FILTER, KIND_JOIN,
                  KIND_LEFT_JOIN, KIND_ORDER, KIND_PROJECT, KIND_SLICE, PlanV2)
@@ -47,7 +47,7 @@ def _n(v: Optional[float]) -> str:
 @dataclass
 class Leaf:
     alias: str
-    kind: str                       # quad | edge | frame_slot
+    kind: str                       # quad | edge | frame_slot | subq
     pred: Optional[str]             # predicate IRI, when constant
     s_var: Optional[str]
     o_var: Optional[str]
@@ -73,13 +73,19 @@ class Leaf:
     # values per column (PostgreSQL's own statistics on the table, `derived_stats`).
     col_fan: Dict[str, float] = field(default_factory=dict)
     col_ndv: Dict[str, float] = field(default_factory=dict)
+    # A grouped sub-SELECT inside the pattern (kind "subq", `qplan._subq_leaf`): its
+    # own query, planned and rendered on its own; one row per group, its projected
+    # variables as columns k_<var>; no index, so never probed into. `sub_cost`: the
+    # inner plan's cost plus the grouping.
+    sub: Any = None
+    sub_cost: float = 0.0
 
     @property
     def constant(self) -> bool:
         """Restricted by its own constants (object, IN, range, FTS, a derived
         row's constant columns), so it can anchor a unit without probing anything."""
         return self.o_const is not None or self.scan.rule in (
-            "range", "fts", "in", "values", "values_bound", "derived_count")
+            "range", "fts", "in", "values", "values_bound", "derived_count", "subq")
 
     def fan(self, col: Optional[str]) -> Optional[float]:
         """Rows one index probe of this leaf reads, by column `col`."""

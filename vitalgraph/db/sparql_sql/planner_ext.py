@@ -171,6 +171,13 @@ def render() -> Optional[str]:
     return f"/*vg:plan {ADVICE_FORMAT}\n" + "\n".join(st.bgps) + "\n*/"
 
 
+#: Take a LIMIT page over from the generator's early-stop plan only when the
+#: planner's full plan is at least this much cheaper than the early-stop walk.
+TOPK_MARGIN = 0.5
+# EXPERIMENTS ONLY: VG_PLANNER_TOPK_FORCE=1 renders the planner's plan for every page,
+# to measure both choices on the same query.
+TOPK_FORCE = os.getenv("VG_PLANNER_TOPK_FORCE") == "1"
+
 #: Take the plan without the implied patterns only when it is at least this much
 #: cheaper. Its estimates differ from the kept plan's in exactly the joins the
 #: removal changes, and the census showed those can be badly wrong.
@@ -215,18 +222,13 @@ async def plan_with_qtree(plan, ctx, var_map: Dict[str, str], space_id: Optional
             rec.declined("qtree_derived_stats", f"{type(exc).__name__}: {exc}"[:300])
     try:
         q = qplan.analyze(plan, ctx)
-        # The generator chose an EARLY-STOP plan (an ordered scan that stops at
-        # the LIMIT: `needs_ordered_scan`). The planner has no top-k cost term
-        # yet (planning_planner/09 item 6), so its plan computes every match
-        # and cuts after: measured on KGQuery edge pages, 4,982 matches for 25
-        # rows, 95 ms against today's 12 ms. Until top-k is costed, it stands aside.
-        if q.limit is not None and (getattr(ctx, "needs_ordered_scan", False) or not q.order or q.synth_order):
-            # Also for every UNORDERED page (LIMIT without ORDER BY): the generator
-            # orders it by the projected uuid (a stable page) and walks the driver in
-            # that order with early stop, whether or not it flags an ordered scan.
-            # Measured on selective KGQuery pages (lead 100k, MQLRating >= 99.0):
-            # 20 ms today vs 57 ms for the planner computing every match.
-            raise qplan.Unsupported("an unordered or early-stop LIMIT page (top-k is not costed yet)")
+        # A LIMIT page: the generator may have chosen an EARLY-STOP plan (an
+        # ordered scan that stops at the LIMIT: `needs_ordered_scan`), where the
+        # planner's plan computes every match and cuts after (KGQuery edge pages:
+        # 4,982 matches for 25 rows, 95 ms against today's 12 ms). Such a page is
+        # the planner's only on cost, below (top-k, planning_planner/09 item 6).
+        topk_page = q.limit is not None and (getattr(ctx, "needs_ordered_scan", False)
+                                             or not q.order or q.synth_order)
     except Exception as exc:     # Unsupported, or a planner defect: keep today's SQL
         rec.declined("qtree_plan", f"{type(exc).__name__}: {exc}"[:300])
         return None
@@ -258,6 +260,47 @@ async def plan_with_qtree(plan, ctx, var_map: Dict[str, str], space_id: Optional
                     alts[0] = (qplan.analyze(plan, ctx), None, frozenset())   # undo any partial annotation
                 else:
                     alts[n] = None
+    if topk_page and not TOPK_FORCE and not getattr(ctx, "needs_ordered_scan", False):
+        # An unordered page the generator plans WITHOUT early stop: its own plan for
+        # it (range-driven, sorted by uuid, cut) is not one the planner can price, and
+        # measured it won at every selectivity tried (lead 100k, MQLRating >= 95 ...
+        # 99.9: 47 vs 159 ms ... 15 vs 20 ms).
+        rec.declined("qtree_plan", "an unordered page the generator plans itself (not costable)")
+        return None
+    if topk_page:
+        # TOP-K, chosen on cost (planning_planner/09 item 6): a page the generator
+        # walks with early stop is the planner's only when its full plan is clearly
+        # cheaper than that walk (lead 100k, >= 50 ... 90: early stop correctly
+        # chosen, by 2-10x in both estimate and measurement). Unordered pages are
+        # sorted by the uuid the generator orders them by, so pages agree.
+        # The walk's length rests on the share of ?v values with a solution: sampled
+        # in walk order where it can be (`qcard.walk_hit_rate`), not taken from the
+        # plan's chain of pair estimates (11-20x low on the KGQuery edge pages).
+        rate = None
+        if FEATURES["oracle"] and space_id is not None:
+            from . import qcard
+            try:
+                rate = await qcard.walk_hit_rate(alts[0][0], space_id, conn=conn, conn_params=conn_params)
+            except Exception as exc:
+                rec.declined("qtree_topk_sample", f"{type(exc).__name__}: {exc}"[:300])
+        if rate is None and not TOPK_FORCE:
+            # Unsampled (no oracle, a shape it cannot ask, or the sample timed out
+            # on a cold cache): the estimate is the one shown wrong, so keep the walk.
+            rec.declined("qtree_plan", "an early-stop page without a sampled hit rate")
+            return None
+        try:
+            costs = qplan.topk_costs(alts[0][0], alts[0][0].region, qplan.search(alts[0][0].region),
+                                     hit_rate=rate)
+        except qplan.Unsupported:
+            costs = None
+        if costs is None:
+            rec.declined("qtree_plan", "a LIMIT page with no early-stop driver to cost against")
+            return None
+        full, early, note = costs
+        if not (full < TOPK_MARGIN * early or TOPK_FORCE):
+            rec.declined("qtree_plan", f"early stop is cheaper: {note}")
+            return None
+        rec.fired("qtree_topk", note)
     names = {sparql: sql for sql, sparql in var_map.items()}
     rendered = []
     for n, alt in enumerate(alts):
