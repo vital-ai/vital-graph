@@ -1,6 +1,6 @@
 # 309 — Index sync on the largest space keeps hitting production's 60 s statement timeout
 
-## Status: OPEN — found in the production logs 2026-10-25; cause not yet measured.
+## Status: OPEN — root cause found and reproduced 2026-10-25 (a generic cached plan); fix proposed, not started.
 
 **Related:** `issues/291` (the index-sync queue and its trigger), `issues/294`
 (the consumer deadlock, fixed: 17 `DeadlockDetectedError` in the 29 h before
@@ -68,3 +68,77 @@ that is a logging defect worth its own fix.
    loader and the `object_count` migration do, `issues/304`), or smaller work
    per statement.
 3. Measure lag directly: the age of the oldest queued row over a write burst.
+
+## Root cause (2026-10-25): a generic cached plan for the geo-slot lookup
+
+**The statement.** RDS's own log (`log_min_duration_statement = 1000`, and a
+cancelled statement is logged with its text) for the 25 h after the deploy,
+downloaded to `internal_data/prod_logs_20261025/rds/`: **946** statement-timeout
+cancels, all as `vitalgraph_user`. **926** are one statement,
+`index_sync_worker._GEO_SLOTS_OF_EDGES_SQL`, the geo-slot lookup in
+`resolve()`, on this space's quad table (916 under its storage key, 10 under
+its old name just before the re-key). The other 20 are maintenance probes and
+a stats recompute: the maintenance timeouts above.
+
+**Its cost.** `pg_stat_statements` (since 2026-10-21): **26,954** completed
+calls, mean **4,373 ms**, max 59,972 ms, **0 rows every call**, about
+**3,749,808 buffers per call**. That is roughly 33 hours of execution in four
+days on the shared instance, plus the cancelled runs. Completed runs in the
+RDS log take 1-52 s. It always returns nothing: this space has no geo slots
+at all (no `vitaltype = KGGeoLocationSlot` quad in any graph).
+
+**Not the data, the subjects or the settings.** Replayed read-only:
+
+- sampled edge, slot-edge and non-edge subjects at batch sizes 1, 5, 13, 47,
+  100: 0.2-9 ms, 5 buffers;
+- the exact batches the worker had claimed, captured from the queue while it
+  ran (`queue_batches.json`), including a 50-subject batch that then failed
+  with the timeout in production: **3.9 ms, 5 buffers**;
+- session settings our code uses (`join_collapse_limit = 1`, `enable_sort =
+  off`, `jit = off`, ...): at most 211 ms.
+
+**Reproduced: the generic plan.** asyncpg prepares a statement once per
+connection and reuses it. Under the default `plan_cache_mode = auto`,
+PostgreSQL may switch a prepared statement to a GENERIC plan (planned without
+the parameter values) after five custom ones. With the failed batch:
+
+| plan | result |
+|---|---|
+| custom (`force_custom_plan`) | 3.3 ms |
+| generic (`PREPARE` + `force_generic_plan` + `EXPLAIN ANALYZE EXECUTE`) | **timeout (> 90 s)** |
+
+Every parameter is passed as `$N`, including the six constants (`$3`-`$8`:
+vitaltype, the two edge types, the edge source/destination predicates, the geo
+slot type). Without values, the generic plan estimates each type lookup at
+~11 rows by default selectivity. It nests loops through `qt`
+(`vitaltype = Edge_hasKGSlot`, really 3,984,555 rows) per frame, and joins
+`g` (the geo-slot check) as a Materialize with a join FILTER on
+`g.subject_uuid = d.dest`. That loses the custom plan's early exit, where the
+empty geo-slot side is read first and the statement stops. A worker
+connection lives for hours, so once a connection switches, every later call
+on it pays the full cost.
+
+(A first check of the generic plan prepared the `EXPLAIN` through asyncpg.
+PostgreSQL then plans the inner query with the values known, so that check
+showed the custom plan both times. Only a SQL-level `PREPARE` reproduces the
+generic plan.)
+
+## Fix (proposed)
+
+1. Write the six constants into the SQL as literals (they are fixed per
+   process), leaving only the graph (`$1`) and the subjects (`$2`) as
+   parameters. A generic plan then knows the types and their sizes.
+2. Run the statement with `SET LOCAL plan_cache_mode = force_custom_plan`
+   anyway; planning it per call costs well under a millisecond.
+3. Skip the lookup when the space has no geo slots (no `(vitaltype,
+   KGGeoLocationSlot)` pair in the loaded stats): most spaces, including this
+   one, so roughly 6,700 calls a day disappear.
+
+Validation: a unit test that the SQL carries the constants as literals; a
+generic-plan check on the vg test stack at prod scale (`sp_lead_synth_100k`
+holds 5.3M edges) with `PREPARE` + `force_generic_plan`; after deploy,
+`pg_stat_statements` for this statement and the worker's timeout warnings.
+
+Follow-up audit: other asyncpg-prepared statements on the quad tables that
+pass constants as parameters (the worker, `auto_sync`, maintenance) share the
+risk.
