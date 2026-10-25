@@ -63,6 +63,12 @@ class Leaf:
     # are probed more often than light ones, so the plain mean (rows/objects)
     # understates it. None when the predicate has no stored pairs.
     probe_fan: Optional[float] = None
+    # Rows per SUBJECT when the predicate is a VARIABLE (`?s ?p ?o` probed by its
+    # subject): a subject has many predicates, so a unit's rows multiply by this
+    # (`_unit`). None for a constant predicate, one value per subject.
+    s_fan: Optional[float] = None
+    # distinct predicates, for a variable predicate's column (`ndv("predicate_uuid")`)
+    pred_ndv: Optional[float] = None
     o_uuid: Optional[str] = None    # uuid of the constant object, when there is one
     # Every variable column other than the key, as (column, variable). A quad
     # leaf has at most one (object_uuid); a derived-table row has several: an
@@ -85,7 +91,7 @@ class Leaf:
         """Restricted by its own constants (object, IN, range, FTS, a derived
         row's constant columns), so it can anchor a unit without probing anything."""
         return self.o_const is not None or self.scan.rule in (
-            "range", "fts", "in", "values", "values_bound", "derived_count", "subq")
+            "range", "fts", "in", "values", "values_bound", "derived_count", "subq", "anchorless")
 
     def fan(self, col: Optional[str]) -> Optional[float]:
         """Rows one index probe of this leaf reads, by column `col`."""
@@ -96,8 +102,11 @@ class Leaf:
         return self.col_fan.get(col) if col else None
 
     def ndv(self, col: Optional[str]) -> Optional[float]:
-        """Distinct values of the variable at `col` (quad: the predicate's objects)."""
-        return self.pred_objects if self.kind == "quad" else self.col_ndv.get(col)
+        """Distinct values of the variable at `col` (quad: the predicate's objects, or
+        the distinct predicates for a variable predicate's column)."""
+        if self.kind == "quad":
+            return self.pred_ndv if col == "predicate_uuid" else self.pred_objects
+        return self.col_ndv.get(col)
 
     def short(self) -> str:
         p = (self.pred or "?").rsplit("#", 1)[-1].rsplit("/", 1)[-1]
@@ -226,6 +235,13 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
         o_term = terms.get((a, "object_uuid"))
         s_term = terms.get((a, "subject_uuid"))
         p_uuid = st.uuid_of(p_term) if p_term else None
+        if p_term is None or (s_term is not None and a not in card):
+            # A VARIABLE predicate, or a constant subject the generator does not
+            # price: from the quad table's own totals (qcard.load_derived).
+            vl = _anchorless_leaf(t, a, p_term, p_uuid, o_term, s_term, var_at, st)
+            if vl is not None:
+                out.append(vl)
+                continue
         rule = ("range" if a in range_aliases else "fts" if a in fts
                 else "pair" if o_term else "pred")
         scan = Est(card.get(a), rule if a in card else "unpriced")
@@ -245,6 +261,66 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
             o_uuid=st.uuid_of(o_term) if o_term else None,
             o_vars=[("object_uuid", var_at[(a, "object_uuid")])] if (a, "object_uuid") in var_at else []))
     return out
+
+
+def _anchorless_leaf(t, a, p_term, p_uuid, o_term, s_term, var_at, st: "_Stats") -> Optional[Leaf]:
+    """A quad leaf with a VARIABLE predicate (`?s ?p ?o`, `?s ?p <o>`, `<s> ?p ?o`), or
+    a constant subject the generator does not price (`<s> :p ?o`), priced from what
+    the statistics hold. None (unpriced) when the quad table's totals are not loaded.
+
+      variable predicate   rows: total quads; with a constant object, the stored
+                           (predicate, object) pairs for that object, summed (else
+                           total / distinct objects); with a constant subject, total
+                           / distinct subjects. Per subject: total / distinct subjects
+                           (`s_fan`); per object probe: total / distinct objects.
+      constant subject     rows: the predicate's rows / distinct subjects, at least 1.
+
+    Once they declined outright: ~170 of the W3C suite's queries, ~78 of the API
+    suite's (`planning_planner/13`, C1.1)."""
+    q = DERIVED_STATS.get(t.table_name)
+    if not q or not q.get("rows"):
+        return None
+    total = float(q["rows"])
+    nd = q.get("ndv", {})
+    n_s = nd.get("subject_uuid") or total
+    n_o = nd.get("object_uuid") or total
+    n_p = nd.get("predicate_uuid") or 1.0
+    o_uuid = st.uuid_of(o_term) if o_term else None
+    s_uuid = st.uuid_of(s_term) if s_term else None
+    if o_term and o_uuid is None or s_term and s_uuid is None:
+        return None                       # absent constant: qplan declines it (empty path)
+    o_vars = []
+    if (a, "object_uuid") in var_at:
+        o_vars.append(("object_uuid", var_at[(a, "object_uuid")]))
+    if p_term is None:
+        if (a, "predicate_uuid") in var_at:
+            o_vars.append(("predicate_uuid", var_at[(a, "predicate_uuid")]))
+        if o_term:
+            pairs = [c for (p, o), c in st.quad_stats.items() if o == o_uuid]
+            rows = float(sum(pairs)) if pairs else total / max(n_o, 1.0)
+        else:
+            rows = total
+        if s_term:
+            rows = max(1.0, min(rows, total / max(n_s, 1.0)))
+        pred_rows, pred_objects, s_fan = total, n_o, total / max(n_s, 1.0)
+        probe_fan = total / max(n_o, 1.0)
+    else:
+        prow = st.pred_rows.get(p_uuid) if p_uuid else None
+        if prow is None:
+            return None
+        rows = max(1.0, float(prow) / max(n_s, 1.0))
+        if o_term:
+            rows = 1.0
+        pred_rows, pred_objects, s_fan = float(prow), st.pred_objects.get(p_uuid), None
+        probe_fan = st.size_biased_fan(p_uuid)
+    return Leaf(
+        alias=a, kind=t.kind,
+        pred=str(p_term[0]) if p_term else None,
+        s_var=var_at.get((a, "subject_uuid")), o_var=var_at.get((a, "object_uuid")),
+        s_const=str(s_term[0]) if s_term else None, o_const=str(o_term[0]) if o_term else None,
+        scan=Est(rows, "anchorless"), pred_rows=pred_rows, pred_objects=pred_objects,
+        pred_uuid=p_uuid, probe_fan=probe_fan, o_uuid=o_uuid, o_vars=o_vars,
+        s_fan=s_fan, pred_ndv=n_p)
 
 
 def _in_list_rows(alias: str, p_uuid: Optional[str], filters: List[str], ctx, st: "_Stats") -> Optional[Est]:
@@ -357,6 +433,13 @@ def _unit(subject: str, leaves: List[Leaf]) -> Unit:
         anchor = min(priced, key=lambda l: l.scan.rows) if priced else None
         rows = Est(anchor.scan.rows if anchor else None, "pred" if anchor else "unpriced")
     probes = [l for l in leaves if l is not anchor]
+    # a VARIABLE-predicate probe reads every predicate of the subject: rows multiply
+    fan = 1.0
+    for l in probes:
+        if l.s_fan:
+            fan *= l.s_fan
+    if fan != 1.0 and rows.rows is not None:
+        rows = Est(rows.rows * fan, rows.rule + "*s_fan")
     return Unit(subject=subject, leaves=leaves, anchor=anchor, rows=rows, probes=probes)
 
 

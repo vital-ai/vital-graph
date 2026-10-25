@@ -123,11 +123,13 @@ async def load_sublinks(plan, ctx, conn) -> int:
 
 
 def _derived_tables(plan, out: set) -> None:
-    """The derived tables (edge, frame_slot) a PlanV2 reads, EXISTS bodies included."""
+    """The derived tables (edge, frame_slot) a PlanV2 reads, EXISTS bodies included,
+    and its quad tables: their totals and distinct subjects, predicates and objects
+    price a leaf with a VARIABLE predicate or a constant subject (qtree._leaves)."""
     from .ir import KIND_BGP
     from .qtree import DERIVED_KINDS
     if plan.kind == KIND_BGP:
-        out.update(t.table_name for t in plan.tables if t.kind in DERIVED_KINDS)
+        out.update(t.table_name for t in plan.tables if t.kind in DERIVED_KINDS + ("quad",))
     for c in plan.children or []:
         _derived_tables(c, out)
     for e in getattr(plan, "filter_exprs", None) or []:

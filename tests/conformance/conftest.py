@@ -207,3 +207,18 @@ def _route_through_planner():
         return g
 
     G.generate_sql = planned
+
+    # ... and run a planner statement as the executor does: its written join order
+    # IS the plan (`sparql_sql_space_impl._apply_join_order`). Without the pin
+    # PostgreSQL re-orders it and the advice's per-step sizes match no join.
+    from vitalgraph.db.sparql_sql import db_provider as dbp
+    real_exec = dbp.execute_query
+
+    async def execute(sql, params=None, conn_params=None, conn=None, **kw):
+        if conn is not None and isinstance(sql, str) and sql.lstrip().startswith("/*vg:plan"):
+            async with conn.transaction():
+                await conn.execute("SET LOCAL join_collapse_limit = 1")
+                return await real_exec(sql, params, conn_params, conn, **kw)
+        return await real_exec(sql, params, conn_params, conn, **kw)
+
+    dbp.execute_query = execute

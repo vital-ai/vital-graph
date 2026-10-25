@@ -292,7 +292,24 @@ def _region(p, ctx, aliases, outer_vars: Set[str], exclude: frozenset = frozense
 def _collect(p, ctx, aliases, parts, outer_vars):
     st = _Stats(p, ctx)
     if p.kind == KIND_BGP:
-        parts["leaves"].extend(l for l in _leaves(p, ctx, st) if l.alias not in parts["exclude"])
+        if any(col == "context_uuid" for slot in p.var_slots.values() for _a, col in slot.positions):
+            # GRAPH ?g: the graph is a variable, with the generator's scoping rules
+            # (the default graph is not a named one; `graph_scope_rewrite`). Not
+            # planned yet (planning_planner/13, C4).
+            raise Unsupported("a variable graph (GRAPH ?g)")
+        seen = {_leaf_identity(l) for l in parts["leaves"]}
+        for l in _leaves(p, ctx, st):
+            if l.alias in parts["exclude"]:
+                continue
+            k = _leaf_identity(l)
+            if k is not None and k in seen:
+                # The same triple pattern twice (`:x ?p $v . :x ?p ?v`, $v and ?v being
+                # one variable): one, as SPARQL's semantics allow. Joined, PostgreSQL 18
+                # eliminated the redundant self-join and the advice named a join that
+                # no longer existed.
+                continue
+            seen.add(k)
+            parts["leaves"].append(l)
         parts["plans"].append(p)
     elif p.kind == KIND_JOIN:
         for c in p.children:
@@ -341,6 +358,14 @@ def _collect(p, ctx, aliases, parts, outer_vars):
         parts["leaves"].append(_subq_leaf(p, parts["ctx"], parts["exclude"]))
     else:
         raise Unsupported(f"{p.kind} inside the pattern")
+
+
+def _leaf_identity(l: Leaf):
+    """What makes two quad leaves the same triple pattern, or None (a leaf with
+    filters of its own, or a derived table, is never merged)."""
+    if l.kind != "quad" or l.scan.rule in ("range", "fts", "in", "values", "values_bound"):
+        return None
+    return (l.pred, l.s_var, l.s_const, l.o_const, tuple(sorted(l.o_vars)))
 
 
 def _term_key(node):
