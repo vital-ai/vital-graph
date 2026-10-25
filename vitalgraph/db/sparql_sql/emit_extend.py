@@ -313,6 +313,18 @@ def emit_extend(plan: PlanV2, ctx: EmitContext) -> str:
             new_cols = [f"{src_sn} AS {sn}"]
             for suffix in COMPANION_SUFFIXES:
                 new_cols.append(f"{src_sn}{suffix} AS {sn}{suffix}")
+            if src_info.has_term_identity():
+                # The copy IS the source's term, `__uuid` included (copied just
+                # above), so it keeps the source's identity and boundness claims.
+                # Registered as a fresh BIND value it had none, and a join on it
+                # compared text: `{ SELECT ?k (MAX(?v) AS ?m) ... }` joined on ?m
+                # (issue 307), and any `BIND(?x AS ?y)` joined on ?y.
+                info = ctx.types.get(var)
+                info.uuid_col = f"{sn}__uuid"
+                info.from_triple = src_info.from_triple
+                info.uuid_materialized = src_info.uuid_materialized
+                info.partial = src_info.partial
+                info.text_materialized = src_info.text_materialized
             return (
                 f"SELECT *, {', '.join(new_cols)}\n"
                 f"FROM ({child_sql}) AS {e_alias}"

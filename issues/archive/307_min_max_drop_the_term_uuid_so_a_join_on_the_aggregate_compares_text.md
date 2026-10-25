@@ -1,6 +1,50 @@
 # 307 — MIN / MAX drop the term uuid, so a join on the aggregate compares text
 
-## Status: OPEN, 2026-10-25
+## Status: FIXED, 2026-10-25 — verified on the vg test stack (unit, DAWG conformance, full integration green); archived
+
+## Fix as built (differs from the plan below)
+
+**Identity.** No new flag was needed. Every reader of `from_triple` uses it to mean "`__uuid` is a
+real term uuid, NULL exactly when unbound":
+- joins and MINUS;
+- DISTINCT's and GROUP's deferred term resolution;
+- COUNT on the uuid column.
+
+That holds for a grouped MIN/MAX of a term-identity input, whose uuid is picked from the winning
+row. `from_triple` also already propagates through JOIN, MINUS and UNION, where
+`uuid_materialized` does not (`emit_join.py` output registration). So:
+
+- `emit_group.py`: under GROUP BY, with an input that `has_term_identity()`, `<agg>__uuid` is
+  the ordered pick of the input's `__uuid` (same key as the value), and the aggregate is
+  registered with `uuid_col` and `from_triple`. An ungrouped MIN/MAX, or one over a computed
+  value, is unchanged (`NULL::uuid`, no identity).
+- `emit_extend.py`: a variable COPY (`(MAX(?v) AS ?m)` is an EXTEND of the aggregate;
+  `BIND(?x AS ?y)`) already copied every companion, `__uuid` included, but registered the copy
+  as a fresh BIND value with no identity. It now keeps the source's identity and boundness
+  claims (`from_triple`, `uuid_materialized`, `partial`, `text_materialized`). This was the
+  second half of the defect: the dashboard's `?computedAt` is such a copy. Any join on a
+  `BIND(?x AS ?y)` copy was a text compare too.
+
+**Boundness: a defect that already existed, found by this issue's tests.** An unbound MIN/MAX
+joined NOTHING where SPARQL joins EVERYTHING (pyoxigraph 0.5.12 agrees), before and after the
+identity fix:
+- `var_scope.compute_scope` reported every group key and aggregate as DEFINED. Now a key on a
+  maybe-bound variable is maybe; so is a MIN/MAX/SAMPLE unless grouped and over an always-bound
+  variable.
+- An EXTEND copy now inherits its source's status. Other BIND expressions keep the optimistic
+  rule: widening it is separate and measured costly in issue 207.
+- `emit_join._all_required` saw no gap in an ungrouped MAX over no rows (one row, `?m` unbound).
+  A GROUP whose scope has maybe outputs now counts as one.
+- COUNT, SUM, AVG and GROUP_CONCAT keep today's rule.
+
+**Tests.**
+- `tests/unit/sparql_sql/test_min_max_keeps_term_identity.py`: 7 cases.
+- `tests/integration/test_min_max_join_compares_terms.py`: 7 cases on the vg test stack:
+  datatype, tie, the max is still the max, ungrouped over nothing, grouped over an OPTIONAL,
+  UNION, BIND copy. Against HEAD before the fix: 4 fail (datatype, tie, OPTIONAL, BIND copy;
+  the ungrouped case then did not join on ?m). With the fix: 7 pass.
+- `latest_per_deal_by_outcome`: the ON clause is now `j2.v4__uuid = j3.v14__uuid`, a plain
+  equijoin. Same 4 rows; 185 → 181 ms (5 interleaved runs).
 
 **Related:** `vitalgraph/db/sparql_sql/emit_group.py` (MIN/MAX companions),
 `emit_join.py` (the shared-variable ON clause), `qplan._render_subq` (the planner's

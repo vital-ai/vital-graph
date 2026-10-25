@@ -22,11 +22,21 @@ def _all_required(node, depth: int = 0) -> bool:
     disjuncts from a join condition, which is what turns it back into an
     equijoin PostgreSQL can hash or merge on.
     """
-    from .ir import KIND_LEFT_JOIN, KIND_UNION, KIND_TABLE, KIND_MINUS
+    from .ir import KIND_LEFT_JOIN, KIND_UNION, KIND_TABLE, KIND_MINUS, KIND_GROUP
     if node is None or depth > 12:
         return False
     if node.kind in (KIND_LEFT_JOIN, KIND_UNION, KIND_TABLE, KIND_MINUS):
         return False
+    if node.kind == KIND_GROUP:
+        # A GROUP can produce an unbound value with no gap below it: MIN / MAX /
+        # SAMPLE over an implicit group of NO rows (`{ SELECT (MAX(?v) AS ?m) ... }`
+        # matching nothing) is one row with ?m unbound, which joins every row
+        # and joined none (issue 307). `compute_scope` says which outputs can be.
+        try:
+            if compute_scope(node).maybe:
+                return False
+        except Exception:
+            return False
     return all(_all_required(c, depth + 1) for c in (node.children or []))
 
 

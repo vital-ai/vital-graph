@@ -104,11 +104,13 @@ class VarScope:
         return self  # MINUS doesn't introduce new variables
 
     def after_group(self, group_vars: Set[str],
-                     agg_vars: Set[str]) -> VarScope:
-        """Scope after GROUP BY — only grouped vars and aggregates visible."""
+                     agg_vars: Set[str],
+                     maybe_vars: Set[str] = frozenset()) -> VarScope:
+        """Scope after GROUP BY — only grouped vars and aggregates visible;
+        `maybe_vars` (a subset of both) can be unbound on some groups."""
         return VarScope(
-            defined=frozenset(group_vars | agg_vars),
-            maybe=frozenset(),
+            defined=frozenset((group_vars | agg_vars) - maybe_vars),
+            maybe=frozenset(maybe_vars),
         )
 
 
@@ -167,6 +169,16 @@ def compute_scope(plan: PlanV2) -> VarScope:
 
     if kind == KIND_EXTEND:
         inner = compute_scope(plan.child)
+        # A COPY of a variable (`BIND(?x AS ?y)`, and `(MAX(?v) AS ?m)`, which is an
+        # EXTEND of the aggregate) is bound exactly where its source is. Taken as
+        # always defined, a join on it dropped its compatible-mapping test, and an
+        # unbound MAX joined nothing instead of everything (issue 307). Any other
+        # expression keeps the optimistic rule (an error leaves it unbound too, but
+        # widening that is a separate change: issues/207 measured the cost).
+        if isinstance(plan.extend_expr, ExprVar):
+            if plan.extend_expr.var in inner.defined:
+                return inner.with_defined(plan.extend_var)
+            return inner.with_maybe(plan.extend_var)
         return inner.with_defined(plan.extend_var)
 
     if kind == KIND_GROUP:
@@ -178,7 +190,23 @@ def compute_scope(plan: PlanV2) -> VarScope:
             elif isinstance(gv, str):
                 group_var_names.add(gv)
         agg_var_names = set(plan.aggregates.keys()) if plan.aggregates else set()
-        return inner_scope.after_group(group_var_names, agg_var_names)
+        # Which of them can be unbound on some group (issue 307):
+        #   a key grouped on a variable the input does not always bind;
+        #   MIN / MAX / SAMPLE, unless grouped and over an always-bound variable:
+        #   they return a value of the group, and an implicit group over NO rows,
+        #   or a group whose values are all unbound, has none.
+        # COUNT is always bound; SUM / AVG / GROUP_CONCAT keep today's rule.
+        maybe: Set[str] = set()
+        for gv in (plan.group_vars or []):
+            if isinstance(gv, GroupVar) and gv.expr is None and gv.var not in inner_scope.defined:
+                maybe.add(gv.var)
+        grouped = bool(group_var_names)
+        for k, agg in (plan.aggregates or {}).items():
+            if (agg.name or "").upper() in ("MIN", "MAX", "SAMPLE"):
+                e = agg.expr
+                if not (grouped and isinstance(e, ExprVar) and e.var in inner_scope.defined):
+                    maybe.add(k)
+        return inner_scope.after_group(group_var_names, agg_var_names, maybe)
 
     if kind == KIND_PROJECT:
         inner = compute_scope(plan.child)

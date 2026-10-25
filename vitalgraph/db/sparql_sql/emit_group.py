@@ -158,6 +158,7 @@ def _emit_group_impl(plan: PlanV2, ctx: EmitContext) -> str:
             # same ordering as the value so type metadata cannot come from a
             # different row, plus a numerically-guarded __num lane.
             _minmax_companions = False
+            keep_identity = False
             if agg_name in ("MIN", "MAX") and input_var:
                 inp_info = ctx.types.get(input_var)
                 if inp_info and inp_info.sql_name:
@@ -178,7 +179,27 @@ def _emit_group_impl(plan: PlanV2, ctx: EmitContext) -> str:
                         f"CASE WHEN COUNT(*) != COUNT({g_alias}.{isrc}__num) "
                         f"THEN NULL ELSE {agg_name}({g_alias}.{isrc}__num) END "
                         f"AS {agg_sn}__num")
+                    # The winning row's TERM UUID, picked like the other companions:
+                    # MIN/MAX return that term (§18.5.1), so the result keeps the
+                    # input's term identity and a join on it compares terms. As a
+                    # constant NULL it had none, and every join on a MIN/MAX fell back
+                    # to comparing TEXT, matching terms that differ only in datatype
+                    # or language (issue 307).
+                    #
+                    # Only with GROUP BY keys. A group then has at least one row, and
+                    # the result is unbound only where the input is, which the join's
+                    # structural check sees (`_all_required` over the group's input).
+                    # An implicit group over NO rows yields one row with the result
+                    # unbound, and nothing structural shows it: GROUP is not a gap to
+                    # `_all_required`. Claiming identity there would also claim it
+                    # always bound.
+                    keep_identity = bool(plan.group_vars) and inp_info.has_term_identity()
                     for suffix in ("__uuid", "__bool", "__dt"):
+                        if suffix == "__uuid" and keep_identity:
+                            pick = _ordered_pick(g_alias, isrc,
+                                                 f"{g_alias}.{isrc}__uuid", key)
+                            agg_select.append(f"{pick} AS {agg_sn}__uuid")
+                            continue
                         _null = {"__uuid": "NULL::uuid",
                                  "__bool": "NULL::boolean",
                                  "__dt": "NULL::timestamp"}[suffix]
@@ -194,6 +215,14 @@ def _emit_group_impl(plan: PlanV2, ctx: EmitContext) -> str:
                 info.lang_col = f"{agg_sn}__lang"
                 info.num_col = f"{agg_sn}__num"
                 info._sql_has_companions = True
+            if keep_identity:
+                # A real term uuid, NULL exactly when the result is unbound: what
+                # `from_triple` means to every reader of it (joins, MINUS,
+                # DISTINCT, COUNT, deferred group keys).
+                inp_info = ctx.types.get(input_var)
+                info.uuid_col = f"{agg_sn}__uuid"
+                info.from_triple = True
+                info.text_materialized = inp_info.text_materialized
 
             # For SAMPLE, override companions to reference aggregated cols
             if agg_name == "SAMPLE" and input_var:
