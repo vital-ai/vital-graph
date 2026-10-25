@@ -1,9 +1,9 @@
 # 310 — category_page on the default path orders the reason CTE from its field units
 
-## Status: OPEN — measured on production 2026-10-25; fix proposed, not started. Owner to be agreed with the qtree planner work (see "Relation to the qtree planner").
+## Status: OPEN — measured on production 2026-10-25 and reproduced locally (with the pin forced, below); fix proposed, not started. Default path; a heads-up to the qtree planner work, not a shared owner (see "Relation to the qtree planner").
 
 **Related:** `issues/293` (the class, and the dashboard this query belongs to),
-the qtree planner (`planner_ext.py` `late_optional`, `qplan.py`),
+the qtree planner (`qplan.py`; its plan for this query is the target order below),
 `test_scripts_internal/kg_uw_decision_reasons/group_cost_probe.py` (the
 unit-aware pricing prototype).
 
@@ -39,6 +39,21 @@ answer needs.** The good order starts from the 11,527 reason-kind slot pins
 (`q5`), joins the frame and code slots, then hash-joins the field units on
 `?d` once: on the order of 10^5 rows.
 
+## Reproduced locally (2026-10-25, `uw_prodshape2` on the planner stack, switch off)
+
+Locally the statement-wide pin does NOT fire: the model's order gate declines ("predicted gain
+within the model's error band"). Without it PostgreSQL reorders the reason CTE itself. Forcing
+the pin that production's statistics fire (`SET LOCAL join_collapse_limit = 1` on today's SQL)
+reproduces production:
+
+| | total | reason CTE `bgp_sg_q11_cte` | largest join |
+|---|---|---|---|
+| unpinned (what runs locally) | 703 ms | 197 ms (3,475 rows) | small: hash and merge joins over the slot pins |
+| pin forced (as production) | **2,132 ms** | **1,850 ms** | merge joins of **1.8M rows** (graph-link members) |
+
+Production's 2.15 s matches the pinned run. **Any test of the fix must force the pin** (or
+reproduce the statistics that fire it), or it cannot see the defect locally.
+
 ## Cause
 
 `emit_bgp._emit_flat_inner`: after the slot-group rewrite, the remainder (the
@@ -51,6 +66,16 @@ makes the join take that route. `reorder_joins` roots on the smallest leaf
 `join_collapse_limit = 1` pin, set because the model's order fired elsewhere
 in the statement, then freezes exactly that written order.
 
+**The pin is the trigger.** The heuristic order is only harmful because the pin, which is
+statement-wide, freezes an order the model never chose. Unpinned, PostgreSQL repairs it (703 ms
+locally).
+
+**The class is wider than this BGP.** Whenever the model fires the pin for one BGP, every other
+BGP in the statement has its heuristic (`reorder_joins`) order frozen with it.
+`join_collapse_limit` has no per-BGP scope, so the practical repair is that every order a
+pinned statement can contain is model-chosen. This issue's fix does that for the slot-group
+remainder; other heuristic orders under the pin are latent instances of the same defect.
+
 ## Proposed fix (default path, so RDS production)
 
 Order the remainder after regrouping with the cardinality model, units
@@ -62,30 +87,54 @@ included:
   onto them;
 - choose the order with `choose_order` over units and leaves; fall back to
   `reorder_joins` whenever anything is unpriced, as everywhere else.
+- **let the model pick the driver; do not fix it at the reason-kind slot.** The "good order"
+  above starts from the 11,527 kind-slot pins. The qtree planner prices the same leaves and
+  starts from the reason-CODE slot pinned by the nine VALUES codes:
+  `(((((?f_c →f ?f_k) →d ?d) ⋈ ?gv) ⋈ ?o) ⋈ ?ca)`, i.e. code slot, its frame to the kind slot,
+  then `?d`, then the field units hashed on `?d`. That runs in **83-100 ms** locally, against
+  703 ms unpinned and 2,132 ms pinned. The model should see both candidates, with the VALUES pin
+  priced from `rdf_stats` pairs as the planner does (`qplan._build_region`). That order is the
+  target for the default path.
+
+Alongside the fix:
+
+- **An invariant over the dashboard set:** in a statement with `fixed_join_order`, every
+  multi-relation BGP's order is model-chosen. Checked by a test that generates each dashboard
+  query and inspects the decisions.
+- **A `plan_decisions` note** naming any BGP frozen by the pin with a heuristic order, so the
+  next instance shows in the logs rather than in a production bench.
 
 `group_plan_cost` in `group_cost_probe.py` is the pricing prototype. It was
 not shipped earlier because on the local fixtures it chose the same plan as
 the precedence rule; production's data is where it changes a decision.
 
-Validation as for the rest of 293: the dashboard set's result multisets and
-rows processed / buffers locally, the performance suite (slot groups fire on
-none of its queries, so its plans should not change), and read-only EXPLAIN
-ANALYZE on production for `category_page` and the other eight dashboard
-queries before and after.
+Validation as for the rest of 293:
+- the dashboard set's result multisets, and rows processed / buffers, locally;
+- **the pinned local run, before and after:** `uw_prodshape2` with `join_collapse_limit = 1`
+  forced, compared contract-style (identical result multisets, 5 interleaved runs, quiet
+  machine; check swap first: it was active on 2026-10-25);
+- the performance suite (slot groups fire on none of its queries, so its plans should not
+  change);
+- last, read-only EXPLAIN ANALYZE on production for `category_page` and the other eight
+  dashboard queries, before and after.
 
 ## Relation to the qtree planner
 
-The qtree planner (`VG_PLANNER_FEATURES=qtree`, with `late_optional`: "on an
-ORDER BY ... LIMIT page, cut the required part to the page FIRST and left-join
-the OPTIONALs onto those rows only") targets this query shape directly, and its
-NOT EXISTS planning has a decorrelated form, which `only_cause` needs. It runs
-only where the `vg_planner` extension is installed (`planner_ext.active()`
-needs `VG_PLANNER_EXTENSION=on|require` and a detected extension). RDS cannot
-load custom extensions, so production on RDS keeps the default path. The fix
-above is for that path. It touches `emit_bgp.py` and `bgp_cardinality.py`,
-which the planner work reads and whose route-arounds it retires by name
-(`planner_ext.retired("slot_group_cte")`), so it needs agreeing with that work
-before it starts.
+- **What the planner does with this query.** Nearly all of its gain on `category_page` is the
+  join order above (a code-slot driver). Joining the OPTIONALs after the cut (`late_optional`,
+  off by default) added only 101 → 83 ms on top. Its decorrelated NOT EXISTS (for `only_cause`)
+  is part of its base planning, not a feature.
+- **Where it runs.** Only with the `vg_planner` extension (`planner_ext.active()` needs
+  `VG_PLANNER_EXTENSION=on|require` and a detected extension). RDS cannot load it, and
+  production runs BOTH paths, so the planner cannot stand in for this fix. The default path
+  needs it regardless.
+- **The coupling is small.**
+  - `planner_ext.retired()` is true only with the switch ACTIVE and the route-around retired.
+    Nothing is retired today (`RETIRED` all False), and it has no effect with the switch off.
+  - With the switch on, the qtree planner replaces the SQL when it plans the query. When it
+    declines, the default SQL runs, so this fix helps both paths.
+  - Coordination is a heads-up that `emit_bgp.py` and `bgp_cardinality.py` change, not a
+    shared owner.
 
 ## Not covered here
 
