@@ -65,7 +65,18 @@ for _name in filter(None, (os.getenv("VG_PLANNER_RETIRE") or "").replace(" ", ""
 #: (`qtree` / `qplan`; the first prototypes are in `archive/planner_prototypes`) and replace the emitted SQL with the
 #: planner's. EXPERIMENTS: `VG_PLANNER_FEATURES=qtree`.
 FEATURES: Dict[str, bool] = {"qtree": False, "bgp_rows": False, "oracle": False, "implied": False,
-                              "unit_hash": False}
+                              "unit_hash": False, "late_optional": False, "path_sample": False}
+# `path_sample`: with `oracle`, also sample the chosen plan's join PREFIXES as
+# wholes and re-plan (qcard.annotate_paths): pairs sampled one at a time miss
+# correlation along a chain (11-20x low on the KGQuery edge chains; sampled,
+# within 7%). Measured 2026-10-25 (full corpus, results identical): only the
+# KGQuery edge counts change plan, lead 100k mql_edge_count 14.3 -> 5.2 s, lead
+# 10k 91 -> 65 and 104 -> 72 ms; no changed plan slower.
+# `late_optional`: on an ORDER BY ... LIMIT page, cut the required part to the
+# page FIRST and left-join the OPTIONALs onto those rows only (qplan.render,
+# `_late_optional_ok` says when that is the same result), each as a set or
+# correlated by cost. Measured 2026-10-25 (full corpus, results identical):
+# category_page 101 -> 83 ms, decision_page unchanged, nothing else affected.
 # `unit_hash`: let a unit's leaves be hash-joined instead of probed per row
 # (qplan._unit_build). OFF: measured mixed at production scale (lead 100k:
 # l2_page 2.9 -> 2.4 s, l5_pair_by_frame 0.69 -> 1.25 s), because PostgreSQL's
@@ -260,6 +271,15 @@ async def plan_with_qtree(plan, ctx, var_map: Dict[str, str], space_id: Optional
                     alts[0] = (qplan.analyze(plan, ctx), None, frozenset())   # undo any partial annotation
                 else:
                     alts[n] = None
+        if FEATURES["path_sample"]:
+            for n, alt in enumerate(list(alts)):
+                if alt is None:
+                    continue
+                try:
+                    info = await qcard.annotate_paths(alt[0], space_id, conn=conn, conn_params=conn_params)
+                    rec.fired("qtree_path_sample", "", **info) if n == 0 else None
+                except Exception as exc:  # unsampled prefixes: the pairwise estimates stand
+                    rec.declined("qtree_path_sample", f"{type(exc).__name__}: {exc}"[:300])
     if topk_page and not TOPK_FORCE and not getattr(ctx, "needs_ordered_scan", False):
         # An unordered page the generator plans WITHOUT early stop: its own plan for
         # it (range-driven, sorted by uuid, cut) is not one the planner can price, and

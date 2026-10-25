@@ -75,6 +75,11 @@ class Region:
     # sampled join sizes (`qcard`): (unit, unit) -> rows of the two joined
     pair_rows: Dict[Tuple[int, int], Est] = field(default_factory=dict)
     pair_samples: Dict[Tuple[int, int], list] = field(default_factory=dict)
+    # sampled sizes of whole join PREFIXES of a chosen plan (`qcard.annotate_paths`):
+    # unit mask -> rows. Pairs sampled one at a time miss correlation along a chain
+    # (a high-rated slot's edge always belongs to the MQL frame: 11-20x low on the
+    # KGQuery edge chains); a prefix sampled as a whole does not.
+    path_rows: Dict[int, Est] = field(default_factory=dict)
 
 
 @dataclass
@@ -661,8 +666,25 @@ class _Card:
             self.sel.append((key[0], key[1], 1.0 / d, e.var))
         self.sel.sort(key=lambda x: -x[2])          # Kruskal order: least selective first
         self._memo: Dict[int, float] = {}
+        self.paths: Dict[int, float] = {m: e.rows for m, e in r.path_rows.items() if e.rows is not None}
 
     def __call__(self, mask: int) -> float:
+        """rows(S). With sampled prefixes (`Region.path_rows`): the largest sampled
+        subset P of S, scaled by what the pairwise model says S adds to P,
+        rows(P) * indep(S) / indep(P), so a correlation measured on a prefix
+        carries to every set containing it, and rows stay split-independent."""
+        v = self._indep(mask)
+        if self.paths:
+            best = None
+            for p in self.paths:
+                if p & mask == p and (best is None or bin(p).count("1") > bin(best).count("1")):
+                    best = p
+            if best is not None:
+                base = self._indep(best)
+                v = self.paths[best] * (v / base) if base > 0 else self.paths[best]
+        return v
+
+    def _indep(self, mask: int) -> float:
         if mask not in self._memo:
             v = 1.0
             for i in _bits(mask):
@@ -1227,17 +1249,61 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         base_sizes += s.base_sizes
     rows = tree.rows
     anti_notes: List[str] = []
+    late = _late_optional_ok(q, reg, r)
+    late_opts: List[Tuple[str, List[str], "_R", List[str], int]] = []   # (LATERAL sql, page join columns, its _R, its projected vars, index)
     # OPTIONAL blocks, each planned on its own, left-joined on the shared vars
-    for opt in reg.optionals:
+    for oi, opt in enumerate(reg.optionals):
         opos = _Pos(opt.plans, opt.values)
         poses.append(opos)
+        if late:
+            # Joined after the cut, in one of two forms, scored like a NOT EXISTS body:
+            #   set         the OPTIONAL built once and hash-joined to the page rows;
+            #   correlated  planned with its join variables bound and rendered as a
+            #               LATERAL subquery, each page row probing its own rows.
+            # Measured on category_page: correlated was 381 ms against the set's 93,
+            # because the only way to "the slot of type T of entity d" is through d's
+            # ~1,000 graph members (per row), while the set reads T's ~965 slots once.
+            corr = sorted(v for v in region_vars(opt) if v in r.bound)
+            if not corr:
+                raise Unsupported("OPTIONAL shares no variable with the pattern")
+            page = float(q.limit + (q.offset or 0))
+            set_tree = search(opt)
+            set_cost = set_tree.cost + _hash_cost(Node("scan", frozenset(), 0.0, page, {}), set_tree, page) - set_tree.cost
+            opt.bound = {v: 1.0 for v in corr}
+            row_tree = _search_bound(opt, corr)
+            cor_cost = page * row_tree.cost
+            correlated = cor_cost < set_cost
+            if correlated:
+                orr = _R(opos, outer={v: f"pg_late.k_{v}" for v in corr})
+                osql, op, opend = _render_node(row_tree, opt, orr)
+                where_ = opend
+            else:
+                orr = _R(opos)
+                osql, op, opend = _render_node(set_tree, opt, orr)
+                where_ = opend
+            pvars = sorted(v for v in orr.bound if v not in corr)
+            jvars = corr if not correlated else []
+            sel = ", ".join(f"{orr.bound[v]} AS k_{v}" for v in pvars + jvars) or "1 AS one"
+            sub = (f"(SELECT {sel}\n FROM {osql}" + (f"\n WHERE {' AND '.join(where_)}" if where_ else "")
+                   + f") AS lo{oi}")
+            if correlated:
+                lsql = f"LATERAL {sub} ON TRUE"
+            else:
+                lsql = f"{sub} ON " + " AND ".join(f"lo{oi}.k_{v} = pg_late.k_{v}" for v in corr)
+            late_opts.append((lsql, [f"pg_late.k_{v}" for v in corr], orr, pvars, oi))
+            anti_notes.append(f"OPTIONAL {oi} {'correlated' if correlated else 'set'} "
+                              f"(set {set_cost:,.0f} vs correlated {cor_cost:,.0f})")
+            sizes += orr.sizes
+            units_adv += orr.units_advice
+            methods += orr.methods
+            continue
         otree = search(opt)
         orr = _R(opos)
         osql, op, opend = _render_node(otree, opt, orr)
         conds = []
         for var in sorted(region_vars(opt)):
             if var in r.bound and var in orr.bound:
-                conds.append(f"{orr.bound[var]} = {r.bound[var]}")
+                conds.append(f"{orr.bound[var]} = " + (f"pg_late.k_{var}" if late else r.bound[var]))
         if not conds:
             raise Unsupported("OPTIONAL shares no variable with the pattern")
         core = f"({core}\n LEFT JOIN {osql} ON " + " AND ".join(conds + opend) + ")"
@@ -1328,6 +1394,14 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         if outside:
             raise Unsupported(f"the outer query reads ?{', ?'.join(sorted(outside))}, not projected by its sub-SELECT")
         need = set(q.sub_project)
+    late_vars: List[str] = []           # projected variables only the OPTIONALs bind (late mode)
+    if late:
+        opt_bound = {v for _s, _c, _o, pv, _i in late_opts for v in pv}
+        late_vars = [v for v in term_vars if v not in r.bound and v in opt_bound]
+        need -= set(late_vars)
+        # the page carries every variable an OPTIONAL joins on
+        for _s, jcols, _o, _p, _i in late_opts:
+            need |= {c.rsplit("pg_late.k_", 1)[1] for c in jcols}
     for v in need:
         if v not in r.bound:
             raise Unsupported(f"?{v} is not bound by the plan")
@@ -1354,8 +1428,13 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
                  + (f"\nHAVING {' AND '.join(having)}" if having else ""))
         out_keys = list(q.group_vars)
     elif q.distinct:
-        level = f"SELECT DISTINCT {', '.join(f'k_{v}' for v in term_vars)}\nFROM ({inner}) AS g0"
+        dvars = [v for v in term_vars if v not in late_vars]
+        if late:
+            dvars += sorted(need - set(dvars))      # the join variables ride along (projected: checked)
+        level = f"SELECT DISTINCT {', '.join(f'k_{v}' for v in dvars)}\nFROM ({inner}) AS g0"
         out_keys = list(term_vars)
+    if late:
+        out_keys = sorted(set(out_keys) | set(late_vars))
     # ORDER BY / LIMIT on the keys, values decoded after
     sort_joins, sort_cols = [], []
     for n, (v, d) in enumerate(q.order):
@@ -1373,10 +1452,30 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     top = f"SELECT {', '.join(topsel)}\nFROM ({level}) AS o\n" + "\n".join(sort_joins)
     if sort_cols:
         top += "\nORDER BY " + ", ".join(f"sk{i} {d}" for i, (_c, d) in enumerate(sort_cols))
-    if q.limit is not None:
-        top += f"\nLIMIT {q.limit}"
-    if q.offset:
-        top += f" OFFSET {q.offset}"
+    if late:
+        # The page of the REQUIRED part, offset included, then the OPTIONALs joined onto
+        # those rows only, then the real page. Each page row yields at least one row
+        # after a LEFT JOIN, so the first limit+offset results come from the first
+        # limit+offset page rows (`_late_optional_ok` holds the rest).
+        top += f"\nLIMIT {q.limit + (q.offset or 0)}"
+        cols = ["pg_late.*"] + [
+            f"lo{next(i for _s, _c, _o, pv, i in late_opts if v in pv)}.k_{v}" for v in late_vars]
+        joined = f"({top}) AS pg_late"
+        for lsql, _jc, _o, _pv, _i in late_opts:
+            joined = f"{joined}\n LEFT JOIN {lsql}"
+        late_sql = f"SELECT {', '.join(cols)}\nFROM {joined}"
+        if q.distinct:
+            late_sql = f"SELECT DISTINCT *\nFROM ({late_sql}) AS d_late"
+        top = (f"SELECT *\nFROM ({late_sql}) AS o_late\nORDER BY "
+               + ", ".join(f"sk{i} {d}" for i, (_c, d) in enumerate(sort_cols))
+               + f"\nLIMIT {q.limit}" + (f" OFFSET {q.offset}" if q.offset else ""))
+        sizes.append((float(q.limit + (q.offset or 0)), ["pg_late"]))
+        anti_notes.append(f"OPTIONALs joined after the cut ({len(late_opts)} onto {q.limit + (q.offset or 0)} rows)")
+    else:
+        if q.limit is not None:
+            top += f"\nLIMIT {q.limit}"
+        if q.offset:
+            top += f" OFFSET {q.offset}"
     # decode, in the executor's column contract
     from .emit_bgp import (_BOOLEAN_DT, _DATETIME_DATATYPES, _NUMERIC_DATATYPES,
                            _NUMERIC_DT_SQL_LIST)
@@ -1457,6 +1556,36 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     lines.append("*/")
     return Rendered(sql=outer, advice="\n".join(lines),
                     plan=describe(tree, reg) + "".join(f"; {n}" for n in anti_notes), cost=tree.cost)
+
+
+def _late_optional_ok(q: Query, reg: Region, r: "_R") -> bool:
+    """Whether a page may be cut on its REQUIRED part before its OPTIONALs are
+    joined, with the same result: an ORDER BY ... LIMIT page (no GROUP, no
+    sub-SELECT projection) whose sort keys are all bound by the required part,
+    whose NOT EXISTS bodies read none of the OPTIONALs' own variables, and, under
+    DISTINCT, whose OPTIONALs join only on projected variables (so deduplicating
+    the page first and the joined rows after agree). Each page row then yields at
+    least one row after the LEFT JOINs, so the first k results come from the
+    first k page rows; a multi-valued OPTIONAL is cut again after the join."""
+    from .planner_ext import FEATURES as _F
+    if not _F.get("late_optional") or not reg.optionals or q.limit is None or not q.order:
+        return False
+    if q.group_vars is not None or q.sub_project is not None or q.having:
+        return False
+    if any(v in q.extend or v not in r.bound for v, _d in q.order):
+        return False
+    core = set(r.bound)
+    opt_only = set().union(*(region_vars(o) for o in reg.optionals)) - core
+    if any(region_vars(a.region) & opt_only for a in reg.antis):
+        return False
+    if q.distinct:
+        proj = set(q.project or [])
+        if any(v not in proj for v, _d in q.order):
+            return False                    # a sort key in the page's DISTINCT would change it
+        for o in reg.optionals:
+            if (region_vars(o) & core) - proj:
+                return False
+    return True
 
 
 def topk_driver(q: Query, reg: Region) -> Optional[Tuple[str, int]]:

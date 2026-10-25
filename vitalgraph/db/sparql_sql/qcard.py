@@ -45,6 +45,8 @@ SCAN_CAP = 20_000       # anchor rows read to draw the sample from
 FAN_CAP = 5_000         # rows counted per sampled row and probe
 TIMEOUT_MS = 2_000      # the whole batch
 ONE_TIMEOUT_MS = 500    # each question, when the batch failed and they are retried apart
+PATH_CAP = 200_000      # rows counted per sampled prefix (more: a lower bound)
+PATH_ROUNDS = 2         # re-plan and sample the new plan's prefixes at most this often
 HIT_BUDGET = 20_000     # rows a join-size question may complete (sample size x fan-out)
 MIN_N = 8               # never sample fewer source subjects than this
 
@@ -398,6 +400,134 @@ async def walk_hit_rate(q, space_id: str, conn=None, conn_params=None) -> Option
         return None
     # no hit in the sample: the rate is below 1/n; take half that, not zero
     return (v[1] if v[1] > 0 else 0.5) / v[0]
+
+
+def _visit_order(node) -> List[int]:
+    """Units in the order the plan builds them: the leftmost scan first."""
+    if node.kind == "scan":
+        return [node.unit]
+    if node.kind == "probe":
+        return _visit_order(node.left) + [node.unit]
+    return _visit_order(node.left) + _visit_order(node.right)
+
+
+def _connected(reg, mask: int) -> bool:
+    members = [i for i in range(len(reg.units)) if mask >> i & 1]
+    seen, todo = {members[0]}, [members[0]]
+    while todo:
+        x = todo.pop()
+        for e in reg.edges:
+            for a, b in ((e.u, e.v), (e.v, e.u)):
+                if a == x and b < len(reg.units) and mask >> b & 1 and b not in seen:
+                    seen.add(b)
+                    todo.append(b)
+    return len(seen) == len(members)
+
+
+def _path_question(reg, tree) -> Optional[Tuple[str, List[int], float]]:
+    """One statement sampling join prefixes AS WHOLES: the first SAMPLE_N
+    subjects of the driver (the plan's leftmost unit), then one unit at a time,
+    each step a MATERIALIZED join of the previous step's rows with the next unit
+    (so a prefix costs its own rows, not a re-join from scratch). The order is
+    the plan's build order, taking the first unit connected to those joined so
+    far (no step is a cross product). Returns (sql, the masks counted, the
+    driver anchor's rows), or None when the plan cannot be asked."""
+    from .generator import substitute_constants
+    plan_order = _visit_order(tree)
+    d = plan_order[0]
+    u = reg.units[d]
+    if not u.subject.startswith("?") or u.anchor is None or u.anchor.s_var is None:
+        return None
+    var = u.subject[1:]
+    a = u.anchor
+    d_sql, d_r, d_pend, pos = _unit_sql(reg, d)
+    a_col = next((f"{al}.{c}" for al, c in pos.positions.get(var, []) if al == a.alias), None)
+    dcol = d_r.bound.get(var)
+    if a_col is None or dcol is None:
+        return None
+    a_where = " AND ".join(pos.filters.get(a.alias, []) or ["TRUE"])
+    smp = (f"SELECT x0 FROM (SELECT DISTINCT {a_col} AS x0 FROM {pos.table[a.alias]} AS {a.alias} "
+           f"WHERE {a_where} LIMIT {SCAN_CAP}) a ORDER BY x0 LIMIT {SAMPLE_N}")
+
+    def cols(r):
+        return {v: c for v, c in r.bound.items()}
+    have = cols(d_r)
+    ctes = [f"smp AS ({smp})",
+            "c0 AS MATERIALIZED (SELECT " + ", ".join(f"{c} AS v_{v}" for v, c in sorted(have.items()))
+            + f" FROM {d_sql} WHERE " + " AND ".join(d_pend + [f"{dcol} IN (SELECT x0 FROM smp)"])
+            + f" LIMIT {PATH_CAP})"]
+    joined, mask, masks = [d], 1 << d, []
+    rest = [i for i in plan_order if i != d]
+    while rest:
+        nxt = next((i for i in rest if _connected(reg, mask | 1 << i)), None)
+        if nxt is None:
+            break
+        rest.remove(nxt)
+        try:
+            t_sql, t_r, t_pend, _p = _unit_sql(reg, nxt)
+        except Exception:
+            break
+        tcols = cols(t_r)
+        eqs = [f"{tcols[v]} = pv.v_{v}" for v in sorted(set(tcols) & set(have))]
+        if not eqs:
+            break
+        k = len(joined)
+        new_vars = {v: c for v, c in tcols.items() if v not in have}
+        sel = ["pv.*"] + [f"{c} AS v_{v}" for v, c in sorted(new_vars.items())]
+        ctes.append(f"c{k} AS MATERIALIZED (SELECT {', '.join(sel)} FROM c{k - 1} AS pv, {t_sql} WHERE "
+                    + " AND ".join(t_pend + eqs) + f" LIMIT {PATH_CAP})")
+        have.update({v: f"v_{v}" for v in new_vars})
+        joined.append(nxt)
+        mask |= 1 << nxt
+        masks.append(mask)
+    if not masks:
+        return None
+    counts = ", ".join(f"(SELECT count(*) FROM c{k})" for k in range(1, len(joined)))
+    sql = (f"WITH {', '.join(ctes)} SELECT ARRAY[(SELECT count(*) FROM smp), {counts}]::float8[] AS v")
+    sql = substitute_constants(sql, reg.aliases)
+    if "_const" in sql:
+        return None
+    return sql, masks, float(a.scan.rows or 0.0)
+
+
+async def annotate_paths(q, space_id: str, conn=None, conn_params=None) -> Dict[str, float]:
+    """Sample the chosen plan's join prefixes as wholes, set `Region.path_rows`,
+    re-plan, and repeat for a changed plan (at most PATH_ROUNDS). For regions
+    of three or more units: pairs are sampled already (`annotate`)."""
+    from . import qplan
+    t0 = time.perf_counter()
+    asked = failed = 0
+    for reg in _regions(q):
+        if len(reg.units) < 3 or any(l.kind == "subq" for u in reg.units for l in u.leaves):
+            continue
+        for _round in range(PATH_ROUNDS):
+            tree = qplan.search(reg)
+            pq = _path_question(reg, tree)
+            if pq is None:
+                break
+            sql, masks, anchor_rows = pq
+            if all(m in reg.path_rows for m in masks):
+                break
+            key = (space_id, sql)
+            if key not in _cache:
+                asked += 1
+                _cache[key] = (await _run([sql], conn, conn_params))[0]
+            v = _cache[key]
+            if v is None:
+                failed += 1
+                break
+            n = v[0]
+            scale = 1.0 if n < SAMPLE_N else (anchor_rows / n if n > 0 else 1.0)
+            exact = n < SAMPLE_N
+            for m, c in zip(masks, v[1:]):
+                rule = "path_sample_capped" if c >= PATH_CAP else (
+                    "path_sample_exact" if exact else "path_sample")
+                # none of the sampled subjects completed it: below one sampled row
+                rows = c * scale if (c > 0 or exact) else 0.5 * scale
+                reg.path_rows[m] = Est(rows, rule)
+    from .qplan import refresh_subqueries
+    refresh_subqueries(q)
+    return {"asked": asked, "failed": failed, "ms": round((time.perf_counter() - t0) * 1000, 1)}
 
 
 def _regions(q) -> list:
