@@ -573,6 +573,7 @@ class _Union:
     branches: List[Region]
     vars: List[str]                 # every variable a branch binds
     certain: Set[str]               # bound by every branch: the only ones it joins on
+    branch_vars: List[Set[str]] = field(default_factory=list)   # per branch, its OPTIONALs' included
 
 
 def _union_leaf(p, ctx, aliases, parts, outer_vars) -> Leaf:
@@ -597,20 +598,22 @@ def _union_leaf(p, ctx, aliases, parts, outer_vars) -> Leaf:
         reg = _region(b, ctx, aliases, outer_vars, parts["exclude"])
         if not reg.units:
             raise Unsupported("a UNION branch with no pattern")
-        if reg.optionals or reg.antis or reg.binds:
-            raise Unsupported("a UNION branch with OPTIONAL, NOT EXISTS or BIND (C2)")
-        if any(l.kind in ("subq", "union") for u in reg.units for l in u.leaves):
-            raise Unsupported("a UNION branch with a sub-SELECT or a nested UNION")
         branches.append(reg)
     # (branches repeating a pattern's aliases are renamed by `_unique_aliases`)
-    bvars = [region_vars(reg) for reg in branches]
-    all_vars = sorted(set().union(*bvars))
-    certain = set.intersection(*bvars)
+    # a branch is planned and rendered as a query of its own (`_render_union`): its
+    # OPTIONALs' variables are variables that branch may leave unbound
+    # and its BINDs' variables are its own too: a copy carries its key, a computed
+    # value is not a key and the branch's render declines it (dropped from the branch,
+    # `BIND(<frame> AS ?subject)` came back unbound: the frame-slot listing, empty)
+    req = [region_vars(reg) | {v for v, _e in reg.binds} for reg in branches]
+    ball = [r_ | set().union(*(_region_all_vars(o) for o in reg.optionals)) for r_, reg in zip(req, branches)]
+    all_vars = sorted(set().union(*ball))
+    certain = set.intersection(*req)
     first = min(l.alias for reg in branches for u in reg.units for l in u.leaves)
     leaf = Leaf(alias=f"un_{first}", kind="union", pred=None, s_var=None, o_var=None,
                 s_const=None, o_const=None, scan=Est(None, "subq"), pred_rows=None,
                 pred_objects=None, o_vars=[(f"k_{v}", v) for v in all_vars])
-    leaf.sub = _Union(branches=branches, vars=all_vars, certain=certain)
+    leaf.sub = _Union(branches=branches, vars=all_vars, certain=certain, branch_vars=ball)
     _union_price(leaf)
     return leaf
 
@@ -1708,6 +1711,15 @@ def _pick_driver(u: Unit, pos: "_Pos", aliases):
 UNIT_NL_RATIO = 10.0
 
 
+def _pinned_to_one(reg: Region, jvars) -> bool:
+    """Every join variable restricted to ONE value (a one-term VALUES, `?v = <iri>`):
+    PostgreSQL derives `= constant` on both sides and no join clause is left, so a
+    nested loop is the only join it can build and an advised hash or merge would not
+    apply (the frame-slot listing: `FILTER(?subject = <frame>)` and an OPTIONAL on
+    ?subject, `hash NOT APPLIED (plan: nl)`)."""
+    return bool(jvars) and all(len(reg.values.get(v, ())) == 1 for v in jvars)
+
+
 def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[str]]:
     """SQL for a plan node: (sql, aliases present, conditions still pending)."""
     if node.kind == "scan":
@@ -1799,7 +1811,7 @@ def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[st
         present = lp | rp
         r.sizes.append((node.rows, sorted(present)))
         return f"({lsql}\n JOIN {rsql} ON " + " AND ".join(rpend or ["TRUE"]) + ")", present, lpend
-    conds = []
+    conds, jvars = [], []
     for var, poss in r.pos.positions.items():
         canon = r.bound.get(var)
         if canon is None or canon.split(".")[0] not in lp:
@@ -1807,10 +1819,12 @@ def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[st
         for a, col in poss:
             if a in rp:
                 conds.append(f"{a}.{col} = {canon}")
+                jvars.append(var)
                 break
     present = lp | rp
     r.sizes.append((node.rows, sorted(present)))
-    r.methods.append(("hash", sorted(present)))
+    if not _pinned_to_one(reg, jvars):
+        r.methods.append(("hash", sorted(present)))
     on = conds + rpend
     sql = f"({lsql}\n JOIN {rsql} ON " + " AND ".join(on or ["TRUE"]) + ")"
     return sql, present, lpend
@@ -2003,43 +2017,27 @@ def _derived_tables(reg: Region, pos: "_Pos", ctx, subs: List["_SubSql"], poses:
 
 
 def _render_union(leaf: Leaf, ctx, term_table: str) -> _SubSql:
-    """A UNION leaf's own SQL: each branch planned and rendered as a key set
-    (its FILTERs on value columns, `_value_level`), NULL for a variable it does
-    not bind, the branches joined by UNION ALL. Each branch's advice items name its
-    own relations."""
+    """A UNION leaf's own SQL: each branch planned and rendered as a query of its
+    own up to its keys (`render(..., keys_only=True)`: its FILTERs, BINDs,
+    OPTIONALs, negations and sub-SELECTs included), NULL for a variable it does not
+    bind, the branches joined by UNION ALL. Each branch's advice items name its own
+    relations."""
     un = leaf.sub
     sqls, sizes, units_adv, methods, poses, base = [], [], [], [], [], []
     for i, reg in enumerate(un.branches):
-        pos = _pos_of(reg)
-        pos.term_table = pos.term_table or term_table
-        _derived_tables(reg, pos, ctx, [], [])
-        tree = search(reg)
-        r = _R(pos)
-        core, _present, pend = _render_node(tree, reg, r)
-        where = list(pend)
-        mine = sorted(v for v in un.vars if v in region_vars(reg))
-        for v in mine:
-            if v not in r.bound:
-                raise Unsupported(f"UNION branch: ?{v} is not bound by its plan")
-        for v, u_ in reg.iri_ne:
-            if v not in r.bound:
-                raise Unsupported(f"a FILTER reads ?{v}, which the plan does not bind")
-            where.append(f"{r.bound[v]} <> '{u_}'::uuid" if u_ else f"{r.bound[v]} IS NOT NULL")
-        if reg.filters:
-            inner = _value_level(reg, ctx, r, core, where, mine, False, term_table, [], [])
-            cols = [f"ub{i}.k_{v}" if v in mine else f"NULL::uuid AS k_{v}" for v in un.vars]
-            sqls.append(f"SELECT {', '.join(cols)}\nFROM ({inner}) AS ub{i}")
-        else:
-            cols = [f"{r.bound[v]} AS k_{v}" if v in mine else f"NULL::uuid AS k_{v}" for v in un.vars]
-            sqls.append(f"SELECT {', '.join(cols)}\nFROM {core}" + ("\nWHERE " + " AND ".join(where) if where else ""))
-        sizes += r.sizes
-        units_adv += r.units_advice
-        methods += r.methods
-        poses.append(pos)
-        base += _base_sizes(reg)
+        mine = sorted(v for v in un.vars if v in un.branch_vars[i])
+        bq = Query(region=reg)
+        bq.project = list(mine)
+        s = render(bq, {}, ctx, keys_only=True)
+        cols = [f"ub{i}.k_{v}" if v in mine else f"NULL::uuid AS k_{v}" for v in un.vars]
+        sqls.append(f"SELECT {', '.join(cols)}\nFROM ({s.sql}) AS ub{i}")
+        sizes += s.sizes
+        units_adv += s.units_adv
+        methods += s.methods
+        poses += s.poses
+        base += s.base_sizes
     sql = "\nUNION ALL\n".join(f"({s})" for s in sqls)
     return _SubSql(sql=sql, sizes=sizes, units_adv=units_adv, methods=methods, poses=poses, base_sizes=base)
-
 
 def _outer_values(core: str, where: List[str], r: "_R", vars_: List[str], term_table: str, ctx,
                   ocols: Dict[str, str], fence: bool = False) -> Tuple[str, List[str], str]:
@@ -2388,7 +2386,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             methods += orr.methods
             present = set(present) | op
             sizes.append((rows, sorted(present)))
-            if keyed:                               # no equality, no hash join to advise
+            if keyed and not _pinned_to_one(reg, [v for v in okeys if v in r.bound]):
                 methods.append(("hash", sorted(present)))
             for v in okeys:
                 r.bound.setdefault(v, f"{lo}.k_{v}")
@@ -2408,7 +2406,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         methods += orr.methods
         present |= op
         sizes.append((rows, sorted(present)))
-        if keyed:                                   # no equality, no hash join to advise
+        jv = [var for var in region_vars(opt) if var in r.bound and var in orr.bound]
+        if keyed and not _pinned_to_one(reg, jv):   # no usable equality, no method to advise
             # Scored like the late form: the OPTIONAL built once and hashed, against a
             # probe per row with its join variables bound. Always hashed, 3 frames read
             # all 120,000 hasKGFrameType rows to be extended (s03: 0.7 -> 9 ms).
