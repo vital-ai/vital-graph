@@ -769,8 +769,6 @@ def _path_leaf(p, parts) -> Leaf:
     (`_build_region`): the generator SEEDS that recursion from the binding pattern,
     and unseeded it closes over the whole graph (issues/124: 26 ms vs 67 s)."""
     meta = p.path_meta or {}
-    if meta.get("graph_var"):
-        raise Unsupported("a path inside GRAPH ?g (C4)")
     info = (p.hints or {}).get("qplan_path")
     if info is None:
         raise Unsupported("a property path not priced (no connection)")
@@ -967,14 +965,21 @@ def _build_region(parts, ctx, aliases) -> Region:
     # A RECURSIVE path whose variable end another pattern binds: the generator seeds
     # the recursion from that pattern; a path leaf cannot be (yet), and unseeded it
     # closes over the whole graph (issues/124)
+    # Its START is seeded as the generator seeds it (`path_start_seed`), from the
+    # cheapest pattern binding it (`_path_seed`, at render); a bound object end is
+    # not seeded by the generator either.
     for l in leaves:
         if l.kind == "path" and l.sub.get("recursive"):
-            ends = {v for _c, v in l.o_vars}
-            if len(ends) == len(l.o_vars) == 2:
+            start, end = l.sub.get("start"), l.sub.get("end")
+            if start and end and start != end:
+                pattern = {v for x in leaves if x is not l and x.kind in ("quad", "edge", "frame_slot")
+                           for v in [x.s_var] + [ov for _c, ov in x.o_vars] if v}
                 bound = {v for x in leaves if x is not l for v in [x.s_var] + [ov for _c, ov in x.o_vars] if v}
                 bound |= set(values) | set(outer_vars_of(parts))
-                if ends & bound:
-                    raise Unsupported("a recursive path whose end another pattern binds (seeding: C4)")
+                if start in bound - set(outer_vars_of(parts)) and (start in pattern or start in values):
+                    l.seed_var = start
+                elif {start, end} & bound:
+                    raise Unsupported("a recursive path whose end another pattern binds, not seedable")
     # A UNION variable some branch leaves unbound joins nothing by equality (unbound
     # is compatible with every value): read anywhere else in the region, decline.
     for l in leaves:
@@ -2258,7 +2263,8 @@ def _derived_tables(reg: Region, pos: "_Pos", ctx, subs: List["_SubSql"], poses:
             elif l.kind == "path":
                 # fenced: its outer SELECT is a simple sub-query PostgreSQL pulls up,
                 # and the advice naming the path would match nothing
-                pos.table[l.alias] = f"(SELECT * FROM ({l.sub['sql']}) AS pf OFFSET 0)"
+                psql = _path_seeded_sql(l, reg, pos, ctx) if getattr(l, "seed_var", None) else l.sub["sql"]
+                pos.table[l.alias] = f"(SELECT * FROM ({psql}) AS pf OFFSET 0)"
             elif l.kind in ("subq", "union"):
                 s = (_render_subq if l.kind == "subq" else _render_union)(l, ctx, pos.term_table)
                 if getattr(l, "vals", None):
@@ -2278,6 +2284,48 @@ def _derived_tables(reg: Region, pos: "_Pos", ctx, subs: List["_SubSql"], poses:
                     lits = ", ".join(f"'{u_}'::uuid" for u_ in reg.values[v])
                     pos.filters.setdefault(l.alias, []).append(f"{l.alias}.{c} IN ({lits})")
     return maybe
+
+
+def _path_seed(leaf: Leaf, reg: Region, pos: "_Pos") -> str:
+    """SQL of the uuids a recursive path's start may take: the VALUES that pin it,
+    else the rows of the cheapest constant-anchored pattern binding it, on its own
+    constraints. A superset of the starts the join keeps, so seeding from it drops
+    nothing (`emit_join`'s `path_start_seed` seeds from the whole left side)."""
+    v = leaf.seed_var
+    if v in reg.values:
+        return "SELECT unnest(ARRAY[" + ", ".join(f"'{u}'" for u in reg.values[v]) + "]::uuid[])"
+    best = None
+    for u in reg.units:
+        for l in u.leaves:
+            if l is leaf or l.alias not in pos.table or not l.constant:
+                continue
+            for a, col in pos.positions.get(v, []):
+                if a == l.alias and (best is None or (l.scan.rows or 1e18) < (best[0].scan.rows or 1e18)):
+                    best = (l, col)
+    if best is None:
+        raise Unsupported("a recursive path whose start no constant-anchored pattern binds")
+    l, col = best
+    # its own alias and its named sub-selects' renamed: each relation is named once
+    # in the statement (the advice)
+    ren = lambda s: re.sub(rf"\br_{re.escape(l.alias)}\b", "sdr", re.sub(rf"\b{re.escape(l.alias)}\.", "sd.", s))
+    conds = [ren(f) for f in pos.filters.get(l.alias, [])]
+    return (f"SELECT sd.{col} FROM {pos.table[l.alias]} AS sd"
+            + (" WHERE " + " AND ".join(conds) if conds else ""))
+
+
+def _path_seeded_sql(leaf: Leaf, reg: Region, pos: "_Pos", ctx) -> str:
+    """The path's SQL emitted again with its start seeded (`_path_seed`), its
+    columns renamed to the ones the leaf was planned with."""
+    import copy
+    from .emit_path import emit_path
+    from .sql_type_generation import TypeRegistry
+    from .generator import substitute_constants
+    node = copy.copy(leaf.sub["node"])
+    node.hints = {**(node.hints or {}), "path_start_seed": _path_seed(leaf, reg, pos)}
+    pctx = ctx.child(types=TypeRegistry(aliases=ctx.aliases))
+    sql = substitute_constants(emit_path(node, pctx, keys_only=True), ctx.aliases)
+    cols = ", ".join(f"ps.{pctx.types.get(v).sql_name}__uuid AS {c}" for v, c in leaf.sub["cols"].items())
+    return f"SELECT {cols} FROM ({sql}) AS ps"
 
 
 def _render_union(leaf: Leaf, ctx, term_table: str) -> _SubSql:
@@ -3197,11 +3245,15 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             if o in al and len(al) > first_with.get(o, len(al)):
                 out += [x for x in xs if x not in out]
         return out
-    lines += [f"method m{i} {how} {' '.join(mnamed(al))}" for i, (how, al) in enumerate(methods) if len(al) >= 2]
+    pin = not _has_recursive_path(q.region)
+    # Unpinned, PostgreSQL orders the joins, and a method names a join it may never
+    # form (a seeded path's hash join: `method m0 NOT APPLIED (plan: no such join)`)
+    if pin:
+        lines += [f"method m{i} {how} {' '.join(mnamed(al))}" for i, (how, al) in enumerate(methods) if len(al) >= 2]
     lines.append("*/")
     return Rendered(sql=_safe_dotted(outer, q), advice="\n".join(lines),
                     plan=describe(tree, reg) + "".join(f"; {n}" for n in anti_notes), cost=tree.cost,
-                    pin=not _has_recursive_path(q.region))
+                    pin=pin)
 
 
 def _late_optional_ok(q: Query, reg: Region, r: "_R") -> bool:

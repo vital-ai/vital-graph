@@ -116,7 +116,7 @@ async def load_paths(plan, ctx, conn) -> int:
     _path_nodes(plan, nodes)
     for node in nodes:
         meta = node.path_meta or {}
-        if meta.get("graph_var") or "qplan_path" in (node.hints or {}):
+        if "qplan_path" in (node.hints or {}):
             continue
         bare = copy.copy(node)
         bare.hints = {k: v for k, v in (node.hints or {}).items() if k != "path_start_seed"}
@@ -130,6 +130,10 @@ async def load_paths(plan, ctx, conn) -> int:
             if isinstance(end, VarNode):
                 info = pctx.types.get(end.name)
                 cols[end.name] = f"{info.sql_name}__uuid"
+        if meta.get("graph_var"):
+            # inside GRAPH ?g: the graph each answer was found in, a key like an end's
+            info = pctx.types.get(meta["graph_var"])
+            cols[meta["graph_var"]] = f"{info.sql_name}__uuid"
 
         def recursive(e) -> bool:
             if isinstance(e, (PathOneOrMore, PathZeroOrMore)):
@@ -150,8 +154,10 @@ async def load_paths(plan, ctx, conn) -> int:
                         _generate_term_uuid(end.value, "U"))
                     absent_pin = absent_pin or stored is None
         node.hints = dict(node.hints or {})
+        ends = [e.name if isinstance(e, VarNode) else None for e in (meta.get("subject"), meta.get("object"))]
         node.hints["qplan_path"] = {"sql": sql, "rows": float(p[0]["Plan"]["Plan Rows"]), "cols": cols,
                                     "recursive": recursive(meta.get("path")),
+                                    "start": ends[0], "end": ends[1], "node": bare,
                                     "term_table": meta.get("term_table"), "absent_pin": absent_pin}
     return len(nodes)
 
