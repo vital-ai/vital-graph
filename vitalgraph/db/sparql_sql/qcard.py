@@ -116,7 +116,12 @@ async def load_sublinks(plan, ctx, conn) -> int:
                 "WHERE i.indrelid = to_regclass($1) AND i.indisunique GROUP BY i.indexrelid", tbl)]
             tables_meta[tbl] = (cols, uniq)
         async with conn.transaction():
-            p = _json.loads(await conn.fetchval(f"EXPLAIN (FORMAT JSON) SELECT {sel} FROM {tbl} WHERE {cond}"))
+            v = await conn.fetchval(f"EXPLAIN (FORMAT JSON) SELECT {sel} FROM {tbl} WHERE {cond}")
+            # the server's pool decodes json (a codec on its connections), a plain
+            # connection returns text: in the app every load failed on json.loads
+            # ("the JSON object must be str ... not list"), so no sub-select was
+            # ever priced or driven there, unlike in every script that measured it
+            p = v if isinstance(v, (list, dict)) else _json.loads(v)
         cols, uniq = tables_meta[tbl]
         SUBLINKS[(tbl, sel, cond)] = {"rows": float(p[0]["Plan"]["Plan Rows"]), "cols": cols, "unique": uniq}
     return len(new)
