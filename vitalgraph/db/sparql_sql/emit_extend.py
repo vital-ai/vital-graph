@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from ..jena_sparql.jena_types import ExprFunction, ExprVar, ExprValue, LiteralNode
 
@@ -52,6 +52,49 @@ def _patch_strafter_strbefore_companions(
     dt_src = arg0_info.dt_col or "NULL"
     typed.datatype = (f"CASE WHEN {found_cond} THEN {dt_src} ELSE NULL END")
     typed.datatype_is_sql = True
+
+
+_ARITH = {"add": 0, "subtract": 0, "multiply": 0, "divide": 1}     # name -> rank floor
+
+
+def _arith_rank_sql(expr, types) -> Optional[str]:
+    """An arithmetic result's XSD promotion rank as SQL, through nested operations:
+    `infer_expr_type` answers an operand known only at run time with the static
+    floor (it classifies, so it must stay static), and `?v * 2 + 1` over a float
+    would rank as an integer."""
+    from .sql_type_generation import (infer_expr_type, _PROMOTION_RANK,
+                                      _promotion_rank_sql)
+    if isinstance(expr, ExprFunction) and (expr.name or "").lower() in _ARITH:
+        parts = [str(_ARITH[(expr.name or "").lower()])]
+        for a in expr.args or []:
+            r = _arith_rank_sql(a, types)
+            if r is None:
+                return None
+            parts.append(r)
+        return f"GREATEST({', '.join(parts)})"
+    t = infer_expr_type(expr, types)
+    if not t.datatype:
+        return None
+    if t.datatype_is_sql:
+        return _promotion_rank_sql(t.datatype)
+    return str(_PROMOTION_RANK.get(t.datatype, 0))
+
+
+def arith_datatype_companion(expr, types, sn: str, cols: List[str]) -> List[str]:
+    """`BIND(?v * 2 AS ?w)`: the `__datatype` column of an arithmetic result, per
+    row. The companion was the static inference, whose operand known only at run
+    time counts as the floor, so a float times 2 came out "3.0"^^xsd:integer
+    (issues/318); `DATATYPE(?v * 2)` already reported it per row."""
+    from .sql_type_generation import _RANK_TO_DT
+    if not (isinstance(expr, ExprFunction) and (expr.name or "").lower() in _ARITH):
+        return cols
+    rank = _arith_rank_sql(expr, types)
+    if rank is None or not any(ch.isalpha() for ch in rank.replace("GREATEST", "")):
+        return cols                     # every operand static: the inference is exact
+    whens = " ".join(f"WHEN {rank} = {r} THEN '{uri}'" for r, uri in sorted(_RANK_TO_DT.items(), reverse=True)
+                     if r > 0)
+    dt = f"(CASE {whens} ELSE '{_RANK_TO_DT[0]}' END)"
+    return [f"{dt} AS {sn}__datatype" if c.endswith(f" AS {sn}__datatype") else c for c in cols]
 
 
 def _patch_concat_companions(
@@ -330,7 +373,8 @@ def emit_extend(plan: PlanV2, ctx: EmitContext) -> str:
                 f"FROM ({child_sql}) AS {e_alias}"
             )
 
-    new_cols = typed.produce_companions(sn, sql_expr)
+    new_cols = arith_datatype_companion(plan.extend_expr, ctx.types,
+                                        sn, typed.produce_companions(sn, sql_expr))
     node = getattr(plan.extend_expr, "node", None)
     if isinstance(plan.extend_expr, ExprValue) and type(node).__name__ == "URINode":
         # `BIND(<iri> AS ?s)` is that stored term, its uuid included: with a NULL uuid

@@ -1153,7 +1153,8 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
     from .emit_bgp import (_BOOLEAN_DT, _DATETIME_DATATYPES, _NUMERIC_DATATYPES,
                            _NUMERIC_DT_SQL_LIST)
     from .emit_expressions import ebv_sql, expr_to_sql
-    from .emit_extend import _patch_concat_companions, _patch_strafter_strbefore_companions
+    from .emit_extend import (_patch_concat_companions, _patch_strafter_strbefore_companions,
+                              arith_datatype_companion)
     from .sql_type_generation import COMPANION_SUFFIXES, ColumnInfo, TypeRegistry, infer_expr_type
     cvars = {v for v, _e in computed}
     outer_refs = outer_refs or {}
@@ -1207,7 +1208,8 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
         _patch_strafter_strbefore_companions(ns, fctx, typed)
         _patch_concat_companions(ns, fctx, typed)
         sn = f"c_{v}"
-        level = (f"SELECT lv{i}.*, " + ", ".join(typed.produce_companions(sn, sql_e))
+        level = (f"SELECT lv{i}.*, " + ", ".join(arith_datatype_companion(e, fctx.types, sn,
+                                                                         typed.produce_companions(sn, sql_e)))
                  + f"\nFROM ({level}) AS lv{i}")
         fctx.types.register_extend(v, typed, sn)
         if lanes is not None:
@@ -3528,7 +3530,8 @@ def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str
     from types import SimpleNamespace
     from ..jena_sparql.jena_types import ExprVar
     from .emit_expressions import ebv_sql, expr_to_sql
-    from .emit_extend import _patch_concat_companions, _patch_strafter_strbefore_companions
+    from .emit_extend import (_patch_concat_companions, _patch_strafter_strbefore_companions,
+                              arith_datatype_companion)
     from .emit_group import aggregate_columns
     from .sql_type_generation import ColumnInfo, TypeRegistry, infer_expr_type
     fv_order = sorted(set().union(*(_expr_vars(f) for f in filters)) | set(ainputs))
@@ -3579,7 +3582,7 @@ def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str
         ns = SimpleNamespace(extend_expr=e, extend_var=v)
         _patch_strafter_strbefore_companions(ns, gctx, typed)
         _patch_concat_companions(ns, gctx, typed)
-        res += typed.produce_companions(f"c_{v}", sql_e)
+        res += arith_datatype_companion(e, gctx.types, f"c_{v}", typed.produce_companions(f"c_{v}", sql_e))
     conds = []
     with gctx.expression_scope(scope):
         for h in q.having:
