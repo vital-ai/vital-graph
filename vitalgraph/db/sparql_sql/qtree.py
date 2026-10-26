@@ -85,6 +85,8 @@ class Leaf:
     # inner plan's cost plus the grouping.
     sub: Any = None
     sub_cost: float = 0.0
+    # distinct graphs (contexts) of its quad table, for a GRAPH ?g variable's column
+    ctx_ndv: Optional[float] = None
 
     @property
     def constant(self) -> bool:
@@ -95,6 +97,9 @@ class Leaf:
 
     def fan(self, col: Optional[str]) -> Optional[float]:
         """Rows one index probe of this leaf reads, by column `col`."""
+        if self.kind == "quad" and col == "context_uuid":
+            # probed by graph: the predicate's rows in one graph
+            return (self.pred_rows / self.ctx_ndv) if self.pred_rows and self.ctx_ndv else None
         if self.kind == "quad":
             if self.probe_fan:
                 return self.probe_fan
@@ -104,6 +109,8 @@ class Leaf:
     def ndv(self, col: Optional[str]) -> Optional[float]:
         """Distinct values of the variable at `col` (quad: the predicate's objects, or
         the distinct predicates for a variable predicate's column)."""
+        if self.kind == "quad" and col == "context_uuid":
+            return self.ctx_ndv
         if self.kind == "quad":
             return self.pred_ndv if col == "predicate_uuid" else self.pred_objects
         return self.col_ndv.get(col)
@@ -273,7 +280,9 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
             # triples WITHOUT their predicates (an entity read back with no properties)
             o_vars=([("object_uuid", var_at[(a, "object_uuid")])] if (a, "object_uuid") in var_at else [])
                    + ([("predicate_uuid", var_at[(a, "predicate_uuid")])]
-                      if p_term is None and (a, "predicate_uuid") in var_at else [])))
+                      if p_term is None and (a, "predicate_uuid") in var_at else [])
+                   + _graph_var(a, var_at),
+            ctx_ndv=_ctx_ndv(t)))
     return out
 
 
@@ -338,8 +347,20 @@ def _anchorless_leaf(t, a, p_term, p_uuid, o_term, s_term, var_at, st: "_Stats")
         s_var=var_at.get((a, "subject_uuid")), o_var=var_at.get((a, "object_uuid")),
         s_const=str(s_term[0]) if s_term else None, o_const=str(o_term[0]) if o_term else None,
         scan=Est(rows, "anchorless"), pred_rows=pred_rows, pred_objects=pred_objects,
-        pred_uuid=p_uuid, probe_fan=probe_fan, o_uuid=o_uuid, o_vars=o_vars,
-        s_fan=s_fan, pred_ndv=n_p)
+        pred_uuid=p_uuid, probe_fan=probe_fan, o_uuid=o_uuid, o_vars=o_vars + _graph_var(a, var_at),
+        s_fan=s_fan, pred_ndv=n_p, ctx_ndv=_ctx_ndv(t))
+
+
+def _graph_var(a, var_at) -> List[Tuple[str, str]]:
+    """GRAPH ?g: the leaf's context column is a variable like any other (the
+    generator's scoping, the default graph excluded, is in its constraints)."""
+    return [("context_uuid", var_at[(a, "context_uuid")])] if (a, "context_uuid") in var_at else []
+
+
+def _ctx_ndv(t) -> Optional[float]:
+    q = DERIVED_STATS.get(getattr(t, "table_name", None)) or {}
+    n = (q.get("ndv") or {}).get("context_uuid")
+    return float(n) if n else None
 
 
 def _subject_in_count(alias: str, filters: List[str], ctx) -> Optional[int]:

@@ -194,7 +194,14 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
         elif p.kind == KIND_EXTEND:
             e = p.extend_expr
             name = getattr(e, "var", None)
-            if name is None or not name.startswith("."):
+            from .graph_scope_rewrite import is_graph_ctx_var
+            if name is not None and is_graph_ctx_var(name):
+                # GRAPH ?g's correlation variable copied back to ?g
+                # (`graph_scope_rewrite`): a BIND copy, not an aggregate result
+                if seen_group:
+                    raise Unsupported("a graph variable above a GROUP")
+                q.binds.append((p.extend_var, e))
+            elif name is None or not name.startswith("."):
                 if seen_group:
                     raise Unsupported("an expression over aggregates or group keys (C3)")
                 q.binds.append((p.extend_var, e))     # SELECT (expr AS ?v), BIND above the pattern
@@ -325,6 +332,12 @@ def _subsel_leaf(p, ctx, exclude: frozenset) -> Leaf:
     # companions), not a key: projected, ordered or deduplicated outside, never joined
     vals = [v for v in inner.project if v in inner.extend or v in {b for b, _e in inner.binds}
             or v in {b for b, _e in inner.region.binds}]
+    # inside GRAPH ?g, the sub-SELECT's patterns read the graph through a variable
+    # (`context_uuid`); one it does not project is not tied to the outer graph, and
+    # its rows came from every graph (W3C sq02: 2 rows for 1)
+    if any(c == "context_uuid" and v not in inner.project
+           for u in inner.region.units for l in u.leaves for c, v in l.o_vars):
+        raise Unsupported("a sub-SELECT inside GRAPH ?g that does not project the graph")
     first = min((l.alias for u in inner.region.units for l in u.leaves), default="x")
     leaf = Leaf(alias=f"ss_{first}", kind="subq", pred=None, s_var=None, o_var=None,
                 s_const=None, o_const=None, scan=Est(None, "subq"), pred_rows=None,
@@ -416,7 +429,16 @@ def _is_having(p, q) -> bool:
         for a in getattr(e, "args", None) or []:
             yield from refs(a)
     names = set(q.extend) | set(q.extend.values())
-    return all(any(r.startswith(".") or r in names for r in refs(e)) for e in (p.filter_exprs or []))
+    from .graph_scope_rewrite import GRAPH_CTX_PREFIX, GRAPH_INNER_PREFIX
+
+    def agg(r: str) -> bool:
+        # `.gctx` / `.gp` are GRAPH ?g's scoping variables (`graph_scope_rewrite`), not
+        # aggregate placeholders: read as one, its compatibility FILTER was taken for a
+        # HAVING and never applied (W3C graph-variable-join: 3 rows for 1)
+        if r.startswith((GRAPH_CTX_PREFIX, GRAPH_INNER_PREFIX)):
+            return False
+        return r.startswith(".") or r in names
+    return all(any(agg(r) for r in refs(e)) for e in (p.filter_exprs or []))
 
 
 def _region(p, ctx, aliases, outer_vars: Set[str], exclude: frozenset = frozenset()) -> Region:
@@ -430,11 +452,9 @@ def _region(p, ctx, aliases, outer_vars: Set[str], exclude: frozenset = frozense
 def _collect(p, ctx, aliases, parts, outer_vars):
     st = _Stats(p, ctx)
     if p.kind == KIND_BGP:
-        if any(col == "context_uuid" for slot in p.var_slots.values() for _a, col in slot.positions):
-            # GRAPH ?g: the graph is a variable, with the generator's scoping rules
-            # (the default graph is not a named one; `graph_scope_rewrite`). Not
-            # planned yet (planning_planner/13, C4).
-            raise Unsupported("a variable graph (GRAPH ?g)")
+        # GRAPH ?g: the graph is a variable (`context_uuid`), a column of each leaf
+        # like any other (qtree._graph_var); the generator's scoping (named graphs
+        # only, `graph_scope_rewrite`) is in the BGP's own constraints
         seen = {_leaf_identity(l) for l in parts["leaves"]}
         for l in _leaves(p, ctx, st):
             if l.alias in parts["exclude"]:
@@ -1111,6 +1131,34 @@ def _expr_has_exists(e) -> bool:
     if type(e).__name__ == "ExprExists":
         return True
     return any(_expr_has_exists(a) for a in (getattr(e, "args", None) or []))
+
+
+def _all_vars(r: Region) -> Set[str]:
+    out = _region_all_vars(r) | set(r.values) | {v for v, _e in r.binds}
+    for e in r.filters:
+        out |= _expr_vars(e)
+    for u in r.units:
+        for l in u.leaves:
+            if l.kind == "subq":
+                out |= _all_vars(l.sub.region)
+            elif l.kind == "union":
+                for b in l.sub.branches:
+                    out |= _all_vars(b)
+    for a in r.antis:
+        out |= _all_vars(a.region)
+    return out
+
+
+def _safe_dotted(sql: str, q: Query) -> str:
+    """Column names built from a variable (`k_<v>`, `c_<v>`, `b_<v>`, ...) for the
+    anonymous variables the generator introduces (GRAPH ?g's `.gctx…` / `.gp…`,
+    `graph_scope_rewrite`): `k_.gctxg0` is not an identifier. Exactly `_<name>` is
+    rewritten, for the dotted names the statement holds, nothing else."""
+    dotted = sorted((v for v in _all_vars(q.region) | {v for v, _e in q.binds}
+                     if v.startswith(".") and not v[1:].isdigit()), key=len, reverse=True)
+    for v in dotted:
+        sql = sql.replace(f"_{v}", f"_d{v[1:]}")
+    return sql
 
 
 def _has_recursive_path(r: Region) -> bool:
@@ -2723,7 +2771,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     else:
         from .sql_type_generation import COMPANION_SUFFIXES as _CS
         keys = keys + [f"{a}.c_{v}{suf} AS c_{v}{suf}" for v, a in sorted(carry.items()) for suf in ("",) + _CS]
-        inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + ", ".join(keys) + "\nFROM " + core
+        inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + (", ".join(keys) or "1 AS one") + "\nFROM " + core
                  + ("\nWHERE " + " AND ".join(where) if where else ""))
     level = inner
     out_keys = sorted(need) + out_computed
@@ -2768,7 +2816,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         from .sql_type_generation import COMPANION_SUFFIXES as _CS
         dcols = [f"k_{v}" for v in dvars if v not in cvars] + [
             f"c_{v}{suf}" for v in dvars if v in cvars for suf in ("",) + _CS]
-        level = f"SELECT DISTINCT {', '.join(dcols)}\nFROM ({inner}) AS g0"
+        level = f"SELECT DISTINCT {', '.join(dcols) or '1 AS one'}\nFROM ({inner}) AS g0"
         out_keys = list(term_vars)
     if late:
         out_keys = sorted(set(out_keys) | set(late_vars))
@@ -2889,7 +2937,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
             boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
             datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))]
-    outer = f"SELECT {', '.join(cols)}\nFROM ({top}) AS top\n" + "\n".join(djoins)
+    # (a pattern binding no variable, `SELECT * { GRAPH <g> {} }`: one placeholder)
+    outer = f"SELECT {', '.join(cols) or '1 AS one'}\nFROM ({top}) AS top\n" + "\n".join(djoins)
     if sort_cols:
         outer += "\nORDER BY " + ", ".join(f"top.sk{i} {d}" for i, (_c, d) in enumerate(sort_cols))
     for opt in reg.optionals:
@@ -2961,7 +3010,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         return out
     lines += [f"method m{i} {how} {' '.join(mnamed(al))}" for i, (how, al) in enumerate(methods) if len(al) >= 2]
     lines.append("*/")
-    return Rendered(sql=outer, advice="\n".join(lines),
+    return Rendered(sql=_safe_dotted(outer, q), advice="\n".join(lines),
                     plan=describe(tree, reg) + "".join(f"; {n}" for n in anti_notes), cost=tree.cost,
                     pin=not _has_recursive_path(q.region))
 
