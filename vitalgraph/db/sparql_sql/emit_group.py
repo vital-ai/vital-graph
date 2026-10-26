@@ -496,7 +496,9 @@ def _all_count_no_keys(plan: PlanV2, ctx: EmitContext) -> bool:
     for _agg_var, agg_expr in (plan.aggregates or {}).items():
         if isinstance(agg_expr, ExprAggregator):
             agg_name = (agg_expr.name or "COUNT").upper()
-            if agg_name != "COUNT":
+            # COUNT(*) / COUNT(?v) need only uuids; COUNT(LCASE(?n)) needs ?n's text
+            # (issues/315: deferred, the generator refused the statement)
+            if agg_name != "COUNT" or (agg_expr.expr is not None and not isinstance(agg_expr.expr, ExprVar)):
                 return False
     # Child chain must be safe modifiers + leaf
     node = plan.child
@@ -554,8 +556,8 @@ def _pushdown_candidates(plan: PlanV2, ctx: EmitContext) -> Set[str]:
     for _agg_var, agg_expr in (plan.aggregates or {}).items():
         if isinstance(agg_expr, ExprAggregator):
             agg_name = (agg_expr.name or "COUNT").upper()
-            if agg_name != "COUNT":
-                return set()
+            if agg_name != "COUNT" or (agg_expr.expr is not None and not isinstance(agg_expr.expr, ExprVar)):
+                return set()            # an expression needs its variables' text (issues/315)
 
     # HAVING may reference text columns — skip push-down
     if plan.having_exprs:
