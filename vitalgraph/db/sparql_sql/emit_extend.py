@@ -331,6 +331,15 @@ def emit_extend(plan: PlanV2, ctx: EmitContext) -> str:
             )
 
     new_cols = typed.produce_companions(sn, sql_expr)
+    node = getattr(plan.extend_expr, "node", None)
+    if isinstance(plan.extend_expr, ExprValue) and type(node).__name__ == "URINode":
+        # `BIND(<iri> AS ?s)` is that stored term, its uuid included: with a NULL uuid
+        # SELECT DISTINCT kept it beside the same IRI read from a pattern, two rows for
+        # one term (the frame fetch's `{ BIND(<f> AS ?subject) ... } UNION { ?subject
+        # hasFrameGraphURI <f> }`, issues/317). Resolved as a VALUES constant is.
+        from .emit_table import _uuid_expr
+        u = _uuid_expr(ctx, node.value, "U")
+        new_cols = [f"{u} AS {sn}__uuid" if c.endswith(f" AS {sn}__uuid") else c for c in new_cols]
 
     return (
         f"SELECT *, {', '.join(new_cols)}\n"
