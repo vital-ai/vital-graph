@@ -321,14 +321,17 @@ def _subsel_leaf(p, ctx, exclude: frozenset) -> Leaf:
     inner = analyze(p, ctx, exclude)
     if not inner.project:
         raise Unsupported("a sub-SELECT * inside the pattern")
-    if set(inner.project) & (set(inner.extend) | {v for v, _e in inner.binds}):
-        raise Unsupported("a sub-SELECT projecting a computed value or an aggregate (C3)")
+    # a projected computed value or aggregate is a VALUE of the leaf (c_<var> and its
+    # companions), not a key: projected, ordered or deduplicated outside, never joined
+    vals = [v for v in inner.project if v in inner.extend or v in {b for b, _e in inner.binds}
+            or v in {b for b, _e in inner.region.binds}]
     first = min((l.alias for u in inner.region.units for l in u.leaves), default="x")
     leaf = Leaf(alias=f"ss_{first}", kind="subq", pred=None, s_var=None, o_var=None,
                 s_const=None, o_const=None, scan=Est(None, "subq"), pred_rows=None,
-                pred_objects=None, o_vars=[(f"k_{v}", v) for v in inner.project])
+                pred_objects=None, o_vars=[(f"k_{v}", v) for v in inner.project if v not in vals])
     leaf.sub = inner
     leaf.general = True
+    leaf.vals = {v: None for v in vals}
     _subq_price(leaf)
     return leaf
 
@@ -354,8 +357,21 @@ def _subq_price(leaf: Leaf) -> None:
     inner = leaf.sub
     tree = search(inner.region)
     if getattr(leaf, "general", False):
-        # its page: the pattern's rows, at most the LIMIT; cost: the plan and the sort
-        rows = tree.rows if inner.limit is None else min(tree.rows, float(inner.limit))
+        # its page: the pattern's rows, at most the LIMIT; cost: the plan and the sort.
+        # A unit the render will DRIVE from a sub-select filter (`_pick_driver`: a name
+        # search, a range) is that filter's size, not the unit's unfiltered rows: priced
+        # unfiltered, a name-search sub-SELECT was 10,000 rows, the outer query hashed
+        # every Lead to join it, where probing from its 211 rows took 3 ms (14 planned).
+        rows = tree.rows
+        pos = _pos_of(inner.region)
+        for u in inner.region.units:
+            drv = _pick_driver(u, pos, inner.region.aliases)
+            if drv is not None and u.rows.rows:
+                dleaf, _part, drows, _ce, _cols = drv
+                driven = drows * (dleaf.fan("object_uuid") or 1.0)
+                if driven < u.rows.rows:
+                    rows *= driven / u.rows.rows
+        rows = rows if inner.limit is None else min(rows, float(inner.limit))
         rows = max(1.0, rows)
         leaf.scan = Est(rows, "subq")
         leaf.col_ndv = {c: rows for c, _v in leaf.o_vars}
@@ -556,8 +572,13 @@ def _collect(p, ctx, aliases, parts, outer_vars):
             raise Unsupported("BIND with EXISTS (C2)")
         parts["binds"].append((p.extend_var, p.extend_expr))
     elif p.kind == KIND_PROJECT and _grouped_subselect(p):
-        # a grouped sub-SELECT joined into the pattern: one leaf, its own plan
-        parts["leaves"].append(_subq_leaf(p, parts["ctx"], parts["exclude"]))
+        # a grouped sub-SELECT joined into the pattern: one leaf, its own plan. The
+        # MIN / MAX form keeps the picked TERM (a key, joinable); any other grouping is
+        # the general form, its aggregates values (`_subsel_leaf`)
+        try:
+            parts["leaves"].append(_subq_leaf(p, parts["ctx"], parts["exclude"]))
+        except Unsupported:
+            parts["leaves"].append(_subsel_leaf(p, parts["ctx"], parts["exclude"]))
     elif p.kind in (KIND_PROJECT, KIND_SLICE, KIND_DISTINCT, KIND_REDUCED, KIND_ORDER):
         # any other sub-SELECT (its own DISTINCT, ORDER, LIMIT): a leaf whose query is
         # planned and rendered as a whole, up to its page, as keys (`_subsel_leaf`)
@@ -917,7 +938,8 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
                  outer_refs: Optional[Dict[str, str]] = None, extra_filters: Optional[List[Any]] = None,
                  top_where: Optional[List[str]] = None, expose: Optional[List[str]] = None,
                  prefix: str = "fv", core_alias: str = "cq",
-                 lanes: Optional[Dict[str, Optional[str]]] = None) -> str:
+                 lanes: Optional[Dict[str, Optional[str]]] = None,
+                 carry: Optional[Dict[str, str]] = None) -> str:
     """The region's rows with its BINDs computed and its FILTERs applied, as a level
     of keys (`k_<v>`, term uuids) plus the computed variables' companion columns
     (`c_<v>`, `c_<v>__type`, ...) for `out_computed`.
@@ -964,9 +986,13 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
         if v not in r.bound:
             raise Unsupported(f"an expression reads ?{v}, which the plan does not bind")
     bind_vars = sorted(set(need) | set(fvars))
-    core_level = ("SELECT " + (", ".join(f"{r.bound[v]} AS b_{v}" for v in bind_vars) or "1 AS one")
+    # a sub-SELECT's values (`carry`: var -> its leaf alias), passed through as c_<var>
+    carried = [f"{a}.c_{v}{suf} AS c_{v}{suf}" for v, a in sorted((carry or {}).items())
+               for suf in ("",) + COMPANION_SUFFIXES]
+    core_level = ("SELECT " + (", ".join([f"{r.bound[v]} AS b_{v}" for v in bind_vars] + carried) or "1 AS one")
                   + "\nFROM " + core + ("\nWHERE " + " AND ".join(where) if where else "") + ("\nOFFSET 0" if fence else ""))
-    cols = [f"{core_alias}.b_{v} AS k_{v}" for v in need]
+    cols = [f"{core_alias}.b_{v} AS k_{v}" for v in need] + [
+        f"{core_alias}.c_{v}{suf}" for v in sorted(carry or {}) for suf in ("",) + COMPANION_SUFFIXES]
     joins = []
     types = TypeRegistry(aliases=ctx.aliases)
     for i, v in enumerate(fvars):
@@ -1560,6 +1586,9 @@ class _Pos:
         # leaf alias -> the alias of the term sub-select its range/IN criterion
         # reads (`_name_sublink`), added to every advised set containing the leaf
         self.sublinks: Dict[str, List[str]] = {}
+        # leaf alias -> its sub-selects named INSIDE a compound constraint
+        # (`_name_embedded_sublinks`): for the advice only
+        self.embedded: Dict[str, List[str]] = {}
         # leaf alias -> [(sub-select alias, table, selected column, condition, the
         # leaf's column, the rendered IN filter)]: candidates to DRIVE a unit from
         self.sublink_parts: Dict[str, List[Tuple[str, str, str, str, str, str]]] = {}
@@ -1620,7 +1649,43 @@ def _pos_name_sublink(self, owner: str, sql: str) -> str:
         m = _SUBLINK.match(sql)
         self.sublink_parts.setdefault(owner, []).append(
             (alias, m.group(4), m.group(3), m.group(5), m.group(2), out))
-    return out
+        return out
+    return _name_embedded_sublinks(self, owner, sql)
+
+
+_EMBEDDED_IN = re.compile(r"(?<!NOT )\b(\w+)\.(\w+) IN \(SELECT (\w+) FROM (\w+) WHERE ")
+
+
+def _name_embedded_sublinks(pos: "_Pos", owner: str, sql: str) -> str:
+    """Every `owner.col IN (SELECT sel FROM tbl WHERE ...)` INSIDE a compound
+    constraint aliased too, for the advice only (not a driver candidate): the
+    generator writes `FILTER(?t != <iri>)` as `(q5.o NOT IN (...) AND (q5.o IN (SELECT
+    term_uuid FROM term WHERE <comparable type>)))`, PostgreSQL pulls the IN up into a
+    join after q5, and unnamed it was in no advised set: `size k6, method m2 NOT
+    APPLIED` on the document-segment listing. A NOT IN stays a SubPlan: not named."""
+    out, i = [], 0
+    for m in _EMBEDDED_IN.finditer(sql):
+        if m.group(1) != owner:
+            continue
+        # the sub-select's extent: from its "(SELECT" to the balancing ")"
+        start = sql.index("(SELECT", m.start())
+        depth, j = 0, start
+        while j < len(sql):
+            depth += {"(": 1, ")": -1}.get(sql[j], 0)
+            if depth == 0:
+                break
+            j += 1
+        taken = pos.sublinks.get(owner, [])
+        alias = f"r_{owner}" + (f"_{len(taken) + 1}" if taken else "")
+        pos.sublinks.setdefault(owner, []).append(alias)
+        pos.embedded.setdefault(owner, []).append(alias)
+        tbl = m.group(4)
+        head = sql[start:j]
+        named = head.replace(f"FROM {tbl} WHERE", f"FROM {tbl} AS {alias} WHERE", 1)
+        out.append(sql[i:start] + named)
+        i = j
+    out.append(sql[i:])
+    return "".join(out)
 
 
 _Pos._name_sublink = _pos_name_sublink
@@ -1922,15 +1987,19 @@ class _SubSql:
     methods: List[Tuple[str, List[str]]]
     poses: List["_Pos"]
     base_sizes: List[Tuple[float, List[str]]]
+    # a sub-SELECT's projected VALUES (computed, aggregate): var -> typed lane; carried
+    # as c_<var> and companions, not keys
+    lanes: Dict[str, Optional[str]] = field(default_factory=dict)
 
 
 def _render_subq(leaf: Leaf, ctx, term_table: str) -> _SubSql:
     if getattr(leaf, "general", False):
         s = render(leaf.sub, {}, ctx, keys_only=True)
         q = leaf.sub
-        if q.limit is None and not q.offset and not q.order and not q.distinct and q.group_vars is None:
-            # a plain projection is a simple sub-query PostgreSQL pulls up, and the advice
-            # naming it would match nothing (W3C sq09, sq13): kept one relation
+        if q.limit is None and not q.offset and not q.order and not q.distinct:
+            # a plain projection (or a grouping: only its aggregation survives) is a
+            # simple sub-query PostgreSQL pulls up, and the advice naming it would match
+            # nothing (W3C sq09, sq13; a grouped COUNT sub-SELECT): kept one relation
             s.sql = f"SELECT * FROM ({s.sql}) AS sf OFFSET 0"
         return s
     return _render_grouped_subq(leaf, ctx, term_table)
@@ -1999,6 +2068,8 @@ def _derived_tables(reg: Region, pos: "_Pos", ctx, subs: List["_SubSql"], poses:
                 pos.table[l.alias] = _vtable_sql(l)
             elif l.kind in ("subq", "union"):
                 s = (_render_subq if l.kind == "subq" else _render_union)(l, ctx, pos.term_table)
+                if getattr(l, "vals", None):
+                    l.vals = {v: s.lanes.get(v) for v in l.vals}
                 subs.append(s)
                 pos.table[l.alias] = f"({s.sql})"
                 poses += s.poses
@@ -2029,6 +2100,11 @@ def _render_union(leaf: Leaf, ctx, term_table: str) -> _SubSql:
         bq = Query(region=reg)
         bq.project = list(mine)
         s = render(bq, {}, ctx, keys_only=True)
+        if s.lanes:
+            # a branch's computed value (`BIND("outgoing" AS ?direction)`) has no key; the
+            # UNION carries keys only. Rendered as one, the branch read a k_ column it
+            # does not have and the kgtypes relationship listing came back empty.
+            raise Unsupported("a UNION branch exports a computed value (C3)")
         cols = [f"ub{i}.k_{v}" if v in mine else f"NULL::uuid AS k_{v}" for v in un.vars]
         sqls.append(f"SELECT {', '.join(cols)}\nFROM ({s.sql}) AS ub{i}")
         sizes += s.sizes
@@ -2481,9 +2557,28 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         else:
             computed.append((v, e))
     cvars = {v for v, _e in computed}
+    clanes: Dict[str, Optional[str]] = {}       # computed variable -> its typed lane (sorting)
+    # a sub-SELECT's projected values (computed, aggregate): carried as c_<var>, read
+    # only by the projection, ORDER BY and DISTINCT here
+    leafvals = {v: (l.alias, lane) for u in reg.units for l in u.leaves
+                if getattr(l, "vals", None) for v, lane in l.vals.items()}
+    if leafvals:
+        if late:
+            raise Unsupported("a sub-SELECT's values with OPTIONALs joined after the cut")
+        others = region_vars(reg) | set(reg.values)
+        for o in reg.optionals:
+            others |= _region_all_vars(o)
+        for a_ in reg.antis:
+            others |= _region_all_vars(a_.region) | set().union(*(_expr_vars(f) for f in a_.filters))
+        others |= set().union(*(_expr_vars(f) for f in reg.filters), *(_expr_vars(e) for _v, e in reg.binds))
+        if set(leafvals) & others:
+            raise Unsupported("a sub-SELECT's computed value is joined or read in the pattern")
+        mentioned |= set(leafvals)
+        cvars |= set(leafvals)
+        clanes.update({v: lane for v, (_a, lane) in leafvals.items()})
+    carry = {v: a for v, (a, _lane) in leafvals.items()}
     if cvars and q.group_vars is not None:
         raise Unsupported("GROUP BY with a computed BIND (C3)")
-    clanes: Dict[str, Optional[str]] = {}       # computed variable -> its typed lane (sorting)
     if q.project is None and q.group_vars is None:
         # SELECT * (no PROJECT in the algebra): every variable the pattern binds, in
         # the generator's order (`names` follows its var_map). Without this the
@@ -2535,6 +2630,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     general = False
     if q.group_vars is not None:
         general = any(a.name.upper() != "COUNT" for a in q.aggregates.values())
+        if keys_only and q.extend:
+            general = True          # its results leave as values (c_<var>), as the general group makes them
         if not general:
             try:
                 [_having_sql(h, q, {ph: "x" for ph in q.aggregates}) for h in q.having]
@@ -2542,7 +2639,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
                 general = True
     ainputs = sorted({a.expr.var for a in q.aggregates.values()
                       if a.expr is not None and a.name.upper() != "COUNT"}) if general else []
-    if final_filters or computed or ainputs:
+    if final_filters or computed or ainputs or (carry and q.sub_distinct):
         from dataclasses import replace as _replace
         # An aggregate's input level needs no fence (that is for FILTERs: `_value_level`),
         # and unfenced its term rows are read in the parallel workers (a06, SUM by type:
@@ -2551,14 +2648,20 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         agg_fence = bool(final_filters or computed) or any(v not in outer_vars_ for v in ainputs)
         inner = _value_level(_replace(reg, filters=final_filters), ctx, r, core, where, sorted(need),
                              q.sub_distinct, pos.term_table, computed, out_computed,
-                             expose=ainputs, prefix="ag", fence=agg_fence, lanes=clanes)
+                             expose=ainputs, prefix="ag", fence=agg_fence, lanes=clanes, carry=carry)
     else:
+        from .sql_type_generation import COMPANION_SUFFIXES as _CS
+        keys = keys + [f"{a}.c_{v}{suf} AS c_{v}{suf}" for v, a in sorted(carry.items()) for suf in ("",) + _CS]
         inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + ", ".join(keys) + "\nFROM " + core
                  + ("\nWHERE " + " AND ".join(where) if where else ""))
     level = inner
     out_keys = sorted(need) + out_computed
     if general:
-        level, gctx = _general_group(q, ctx, inner, sorted(need), ainputs, final_filters)
+        # the aggregation's alias, unique in the statement (a sub-SELECT's own GROUP is
+        # rendered into the same statement as the outer one's)
+        g1 = "g1" if not keys_only else "g1_" + min(
+            (l.alias for u in reg.units for l in u.leaves), default="x")
+        level, gctx = _general_group(q, ctx, inner, sorted(need), ainputs, final_filters, g1=g1)
         out_keys = list(q.group_vars)
         # The groups, sized (the keys' distinct values, at most the input rows): left to
         # PostgreSQL the decode read the whole term table to hash-join 7 groups (a06)
@@ -2630,7 +2733,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     if general and not late:
         # on the aggregation itself (`g1`, `_general_group`): the levels around it are
         # pulled up when nothing sorts them, so only it is sure to be a relation
-        sizes.append((float(group_rows), ["g1"]))
+        sizes.append((float(group_rows), [g1]))
     topsel = ["o.*"] + [f"{c} AS sk{i}" for i, (c, _d) in enumerate(sort_cols)]
     top = f"SELECT {', '.join(topsel)}\nFROM ({level}) AS o\n" + "\n".join(sort_joins)
     if sort_cols:
@@ -2660,14 +2763,21 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         if q.offset:
             top += f" OFFSET {q.offset}"
     if keys_only:
-        if [v for v in (q.project or []) if v not in out_keys or v in agg_vars or v in cvars]:
-            raise Unsupported("a sub-SELECT projects a variable its page does not carry as a key")
+        lanes: Dict[str, Optional[str]] = {}
+        for v in (q.project or []):
+            if v in agg_vars and general:
+                ainfo = gctx.types.get(agg_vars[v])
+                lanes[v] = None if ainfo is None or ainfo._sql_has_companions else ainfo.typed_lane
+            elif v in cvars and v in out_keys:
+                lanes[v] = clanes.get(v)
+            elif v not in out_keys or v in agg_vars:
+                raise Unsupported("a sub-SELECT projects a variable its page does not carry")
         for opt in reg.optionals:
             base_sizes += _base_sizes(opt)
         for anti in reg.antis:
             base_sizes += _base_sizes(anti.region)
         return _SubSql(sql=top, sizes=sizes, units_adv=units_adv, methods=methods, poses=poses,
-                       base_sizes=base_sizes)
+                       base_sizes=base_sizes, lanes=lanes)
     # decode, in the executor's column contract
     from .emit_bgp import (_BOOLEAN_DT, _DATETIME_DATATYPES, _NUMERIC_DATATYPES,
                            _NUMERIC_DT_SQL_LIST)
@@ -2755,10 +2865,29 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
                 if leaf in ps.driven or unique_alone:
                     joined.setdefault(leaf, []).append(ra)
 
+    # An embedded sub-select (`_name_embedded_sublinks`) sits in the ON clause of the
+    # join that adds its owner, so PostgreSQL joins it right AFTER that join: in every
+    # method set holding the owner but the smallest (the join adding it). Named, it is
+    # not transparent: left out of the later sets, `method m2 NOT APPLIED` on the
+    # document-segment listing.
+    embedded: Dict[str, List[str]] = {}
+    for ps in poses:
+        for k, v in ps.embedded.items():
+            embedded.setdefault(k, []).extend(x for x in v if x not in embedded.get(k, []))
+    first_with: Dict[str, int] = {}
+    for _how, al in methods:
+        for o in embedded:
+            if o in al and len(al) >= 2:
+                first_with[o] = min(first_with.get(o, len(al)), len(al))
+
     def mnamed(al: List[str]) -> List[str]:
         # a driver, or a sub-select on a unique column (reduced to an inner join): in
         # the join's set; a kept semi-join (non-unique): transparent to the extension
-        return al + [x for a in al for x in joined.get(a, []) if x not in al]
+        out = al + [x for a in al for x in joined.get(a, []) if x not in al]
+        for o, xs in embedded.items():
+            if o in al and len(al) > first_with.get(o, len(al)):
+                out += [x for x in xs if x not in out]
+        return out
     lines += [f"method m{i} {how} {' '.join(mnamed(al))}" for i, (how, al) in enumerate(methods) if len(al) >= 2]
     lines.append("*/")
     return Rendered(sql=outer, advice="\n".join(lines),
@@ -2912,7 +3041,7 @@ def _ph(ph: str) -> str:
 
 
 def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str],
-                   filters: List[Any]) -> Tuple[str, Any]:
+                   filters: List[Any], g1: str = "g1") -> Tuple[str, Any]:
     """GROUP BY with any aggregate, on the generator's translation: the aggregates
     and their companions by `emit_group.aggregate_columns` (one translator), each
     result then given its eight output columns as the generator's EXTEND gives them
@@ -2972,7 +3101,7 @@ def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str
             conds.append(f"({c})")
     if len(getattr(gctx, "_unresolved_vars", None) or []) > before:
         raise Unsupported("an aggregate or HAVING reads a variable the group does not provide")
-    level = (f"SELECT g1.*" + "".join(f", {c}" for c in res) + f"\nFROM ({level}) AS g1"
+    level = (f"SELECT {g1}.*" + "".join(f", {c}" for c in res) + f"\nFROM ({level}) AS {g1}"
              + ("\nWHERE " + " AND ".join(conds) if conds else ""))
     return level, gctx
 
