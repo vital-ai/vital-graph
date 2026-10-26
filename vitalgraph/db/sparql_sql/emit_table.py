@@ -9,7 +9,8 @@ from .collect import _esc
 from .sql_type_generation import TypeRegistry
 
 
-def _uuid_expr(ctx, term_text: str, term_type: str) -> str:
+def _uuid_expr(ctx, term_text: str, term_type: str, lang: str = None,
+               datatype: str = None) -> str:
     """The term's UUID as a constant token, or NULL if it cannot be registered.
 
     A VALUES row used to emit `NULL::uuid` here, and that NULL is the whole
@@ -31,7 +32,9 @@ def _uuid_expr(ctx, term_text: str, term_type: str) -> str:
     if aliases is None or not hasattr(aliases, "register_constant"):
         return "NULL::uuid"
     from .collect import _CONST_PREFIX, _CONST_SUFFIX
-    col = aliases.register_constant(term_text, term_type)
+    # the term's whole identity: on (text, type) alone a typed literal took the
+    # plain string of the same text, or nothing (issues/316)
+    col = aliases.register_constant(term_text, term_type, lang, datatype)
     return f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}"
 
 
@@ -119,7 +122,7 @@ def emit_table(plan: PlanV2, ctx: EmitContext) -> str:
                 dt_val = f"'{_esc(val.datatype)}'" if val.datatype else "NULL"
                 cols.append(f"'{_esc(val.value)}' AS {sn}")
                 cols.append(f"'L' AS {sn}__type")
-                cols.append(f"{_uuid_expr(ctx, val.value, 'L')} AS {sn}__uuid")
+                cols.append(f"{_uuid_expr(ctx, val.value, 'L', val.lang, val.datatype)} AS {sn}__uuid")
                 cols.append(f"{lang_val} AS {sn}__lang")
                 cols.append(f"{dt_val} AS {sn}__datatype")
                 cols.append(f"NULL::numeric AS {sn}__num")

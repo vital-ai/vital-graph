@@ -119,15 +119,24 @@ def substitute_constants(sql: str, aliases: AliasGenerator) -> str:
         if uuid_str:
             replacement = f"'{uuid_str}'::uuid"
         else:
-            # Fallback: inline scalar subquery
-            term_table = "_const"
-            replacement = (
-                f"(SELECT term_uuid FROM {term_table} "
-                f"WHERE term_text = '{_esc(text)}' AND term_type = '{ttype}')"
-            )
+            # Fallback: inline scalar subquery, on the term's whole identity. On
+            # (text, type) alone "3.0"^^xsd:decimal took "3.0"^^xsd:float, or two
+            # `_const` rows sharing a lexical form failed the statement (issues/316)
+            replacement = (f"(SELECT t.term_uuid FROM _const AS t WHERE "
+                           f"{_const_match((text, ttype, _lg, _dt), aliases)})")
         sql = sql.replace(token, replacement)
 
     return sql
+
+
+def _const_match(key, aliases: AliasGenerator) -> str:
+    """A term row `t` holding exactly this constant: text, type, lang and datatype."""
+    text, ttype, lang, dt = key
+    return ("(" + " AND ".join([
+        f"t.term_text = '{_esc(text)}'", f"t.term_type = '{ttype}'",
+        (f"t.lang IS NOT DISTINCT FROM '{_esc(lang)}'" if lang
+         else "t.lang IS NULL"),
+        _dt_predicate(dt, getattr(aliases, "dt_uri_to_id", None) or {})]) + ")")
 
 
 def build_constants_cte(aliases: AliasGenerator, term_table: str) -> str:
@@ -158,20 +167,10 @@ def build_constants_cte(aliases: AliasGenerator, term_table: str) -> str:
     # are NULL for a plain literal and `= NULL` matches nothing.
     # Same identity rule as `materialize_constants`, and the same id map, so
     # this fallback cannot disagree with the path that normally resolves.
-    uri_to_id = getattr(aliases, "dt_uri_to_id", None) or {}
-
-    def _one(key):
-        text, ttype, lang, dt = key
-        return ("(" + " AND ".join([
-            f"t.term_text = '{_esc(text)}'", f"t.term_type = '{ttype}'",
-            (f"t.lang IS NOT DISTINCT FROM '{_esc(lang)}'" if lang
-             else "t.lang IS NULL"),
-            _dt_predicate(dt, uri_to_id)]) + ")")
-
-    where = " OR ".join(_one(k) for k in pairs)
+    where = " OR ".join(_const_match(k, aliases) for k in pairs)
     return (
         f"WITH _const AS (\n"
-        f"  SELECT t.term_text, t.term_type, t.term_uuid FROM {term_table} AS t\n"
+        f"  SELECT t.term_text, t.term_type, t.lang, t.datatype_id, t.term_uuid FROM {term_table} AS t\n"
         f"  WHERE {where}\n"
         f")\n"
     )

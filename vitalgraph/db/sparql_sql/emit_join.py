@@ -101,6 +101,22 @@ def _boundness_col(alias: str, sql_name: str, info) -> str:
     return f"{alias}.{sql_name}"
 
 
+_XSD_STRING = "'http://www.w3.org/2001/XMLSchema#string'"
+
+
+def _same_term_kind(l_alias: str, l_sn: str, r_alias: str, r_sn: str) -> str:
+    """Beside equal text, the rest of RDF term equality: kind, language, datatype.
+
+    A plain literal's datatype is NULL or xsd:string by where it came from, and a
+    language-tagged one's is not compared (its tag is). Tags compare case-blind.
+    """
+    l, r = f"{l_alias}.{l_sn}", f"{r_alias}.{r_sn}"
+    return (f"{l}__type IS NOT DISTINCT FROM {r}__type"
+            f" AND LOWER({l}__lang) IS NOT DISTINCT FROM LOWER({r}__lang)"
+            f" AND ({l}__lang IS NOT NULL OR {l}__type IS DISTINCT FROM 'L'"
+            f" OR COALESCE({l}__datatype, {_XSD_STRING}) = COALESCE({r}__datatype, {_XSD_STRING}))")
+
+
 def emit_join(plan: PlanV2, ctx: EmitContext) -> str:
     """Emit SQL for an inner JOIN."""
     return _emit_join_impl(plan, ctx, is_left=False)
@@ -267,6 +283,15 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
                 cond = (
                     f"CAST({l_alias}.{l_sn} AS TEXT) = CAST({r_alias}.{r_sn} AS TEXT)"
                 )
+                if (left_is_table and right_info and right_info.from_triple) or \
+                        (right_is_table and left_info and left_info.from_triple):
+                    # A VALUES constant against a stored term: the same TERM, not
+                    # the same text. "3.0"^^xsd:decimal is not "3.0"^^xsd:float,
+                    # nor is the IRI <x> the literal "x" (issues/316). Both sides
+                    # carry exact companions here: the table its constants', the
+                    # triple the term table's. A plain literal's datatype reads
+                    # NULL or xsd:string by where it came from.
+                    cond += " AND " + _same_term_kind(l_alias, l_sn, r_alias, r_sn)
             # Rule 2: 3-part compatibility for joins (§10.5).
             # SPARQL compatible-mapping semantics: unbound (NULL) is
             # compatible with any value.  Apply to VALUES joins AND LEFT
