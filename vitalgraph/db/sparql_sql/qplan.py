@@ -160,11 +160,17 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
         # The one supported nesting: a projection (optionally DISTINCT) directly
         # below the outer GROUP, i.e. an aggregate over a sub-SELECT's rows.
         # (The algebra may put the DISTINCT above or below the sub-SELECT's PROJECT.)
-        if seen_group and p.kind == KIND_PROJECT and q.sub_project is None:
+        # A sub-SELECT that is the whole pattern, below the outer query's modifiers:
+        # its projection (and DISTINCT) applies to the pattern, and the outer GROUP,
+        # ORDER, LIMIT and projection to its rows. Under a GROUP, or under the outer
+        # projection (the KG list page: `SELECT ?e { { SELECT DISTINCT ?e ?k ?s
+        # { ... BIND ... } } } ORDER BY ?k ?s LIMIT n`).
+        inner = seen_group or q.project is not None
+        if inner and p.kind == KIND_PROJECT and q.sub_project is None:
             q.sub_project = list(p.project_vars or [])
             p = p.children[0]
             continue
-        if seen_group and p.kind in (KIND_DISTINCT, KIND_REDUCED) and not q.sub_distinct:
+        if inner and p.kind in (KIND_DISTINCT, KIND_REDUCED) and not q.sub_distinct and q.sub_project is None:
             q.sub_distinct = True
             p = p.children[0]
             continue
@@ -865,7 +871,8 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
                  out_computed: List[str], fence: bool = True,
                  outer_refs: Optional[Dict[str, str]] = None, extra_filters: Optional[List[Any]] = None,
                  top_where: Optional[List[str]] = None, expose: Optional[List[str]] = None,
-                 prefix: str = "fv", core_alias: str = "cq") -> str:
+                 prefix: str = "fv", core_alias: str = "cq",
+                 lanes: Optional[Dict[str, Optional[str]]] = None) -> str:
     """The region's rows with its BINDs computed and its FILTERs applied, as a level
     of keys (`k_<v>`, term uuids) plus the computed variables' companion columns
     (`c_<v>`, `c_<v>__type`, ...) for `out_computed`.
@@ -952,6 +959,8 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
         level = (f"SELECT lv{i}.*, " + ", ".join(typed.produce_companions(sn, sql_e))
                  + f"\nFROM ({level}) AS lv{i}")
         fctx.types.register_extend(v, typed, sn)
+        if lanes is not None:
+            lanes[v] = typed.typed_lane
         visible.add(v)
     # FILTERs (`emit_filter`'s way: the effective boolean value, scoped)
     conds = []
@@ -2342,7 +2351,27 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         present |= op
         sizes.append((rows, sorted(present)))
         if keyed:                                   # no equality, no hash join to advise
-            methods.append(("hash", sorted(present)))
+            # Scored like the late form: the OPTIONAL built once and hashed, against a
+            # probe per row with its join variables bound. Always hashed, 3 frames read
+            # all 120,000 hasKGFrameType rows to be extended (s03: 0.7 -> 9 ms).
+            corr = sorted(v for v in region_vars(opt) if v in r.bound)
+            set_cost = _hash_cost(Node("scan", frozenset(), 0.0, rows, {}), otree, rows)
+            opt.bound = {v: 1.0 for v in corr}
+            try:
+                probe_cost = rows * _search_bound(opt, corr).cost
+            except Unsupported:
+                probe_cost = float("inf")
+            opt.bound = {}
+            # Probing goes wrong by orders of magnitude when the rows are under-estimated,
+            # hashing only by a factor: probe only on a wide margin, and only when the
+            # rows come from sampled patterns (no sub-SELECT, UNION or VALUES table, whose
+            # sizes are not sampled). latest_per_deal (a grouped sub-SELECT joined in)
+            # probed on an estimate of 192: 63 -> 2,341 ms.
+            derived = any(l.kind in ("subq", "union", "vtable") for u in reg.units for l in u.leaves)
+            how = "nl" if probe_cost * 10 < set_cost and not derived else "hash"
+            methods.append((how, sorted(present)))
+            anti_notes.append(f"OPTIONAL {oi} {'probed' if how == 'nl' else 'hashed'} "
+                              f"(set {set_cost:,.0f} vs probe {probe_cost:,.0f})")
         for v, c in orr.bound.items():
             r.bound.setdefault(v, c)
     # NOT EXISTS bodies. Two forms, scored against each other:
@@ -2397,8 +2426,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     cvars = {v for v, _e in computed}
     if cvars and q.group_vars is not None:
         raise Unsupported("GROUP BY with a computed BIND (C3)")
-    if cvars & {v for v, _d in q.order}:
-        raise Unsupported("ORDER BY a computed BIND (C3)")
+    clanes: Dict[str, Optional[str]] = {}       # computed variable -> its typed lane (sorting)
     if q.project is None and q.group_vars is None:
         # SELECT * (no PROJECT in the algebra): every variable the pattern binds, in
         # the generator's order (`names` follows its var_map). Without this the
@@ -2434,7 +2462,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         for _s, jcols, _o, _p, _i in late_opts:
             need |= {c.rsplit("pg_late.k_", 1)[1] for c in jcols}
     need -= cvars
-    out_computed = [v for v in term_vars if v in cvars]
+    out_computed = [v for v in (q.sub_project if q.sub_project is not None else term_vars) if v in cvars]
+    out_computed += [v for v, _d in q.order if v in cvars and v not in out_computed]
     for v in need:
         if v not in r.bound:
             raise Unsupported(f"?{v} is not bound by the plan")
@@ -2465,7 +2494,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         agg_fence = bool(final_filters or computed) or any(v not in outer_vars_ for v in ainputs)
         inner = _value_level(_replace(reg, filters=final_filters), ctx, r, core, where, sorted(need),
                              q.sub_distinct, pos.term_table, computed, out_computed,
-                             expose=ainputs, prefix="ag", fence=agg_fence)
+                             expose=ainputs, prefix="ag", fence=agg_fence, lanes=clanes)
     else:
         inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + ", ".join(keys) + "\nFROM " + core
                  + ("\nWHERE " + " AND ".join(where) if where else ""))
@@ -2514,11 +2543,19 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         out_keys = sorted(set(out_keys) | set(late_vars))
     # ORDER BY / LIMIT on the keys, values decoded after
     sort_joins, sort_cols = [], []
+    from .emit_order import variable_order_keys
+    from .sql_type_generation import ColumnInfo as _CI
     for n, (v, d) in enumerate(q.order):
-        if v in agg_vars and general:
-            if q.aggregates[agg_vars[v]].name.upper() not in ("COUNT", "SUM", "AVG"):
-                raise Unsupported("ORDER BY a MIN / MAX / SAMPLE / GROUP_CONCAT result (C3)")
-            sort_cols.append((f"o.c_{v}__num", d))
+        if (v in agg_vars and general) or v in cvars:
+            # a computed value or an aggregate result: the generator's own keys over its
+            # companion columns (`variable_order_keys`), by its typed lane
+            if v in cvars:
+                lane = clanes.get(v)
+            else:
+                ainfo = gctx.types.get(agg_vars[v])
+                lane = None if ainfo is None or ainfo._sql_has_companions else ainfo.typed_lane
+            info = _CI.simple_output(v, f"c_{v}", typed_lane=lane)
+            sort_cols += [(k, d) for k in variable_order_keys("o", info, v, "ASC")]
         elif v in agg_vars:
             sort_cols.append((f"o.a_{_ph(agg_vars[v])}", d))
         elif q.synth_order:
@@ -2528,7 +2565,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         else:
             ts = f"s{n}"
             sort_joins.append(f"LEFT JOIN {pos.term_table} AS {ts} ON {ts}.term_uuid = o.k_{v}")
-            sort_cols += [(f"{ts}.dt_val", d), (f"{ts}.num_val", d), (f"{ts}.term_text", d)]
+            # the text under SPARQL's code-point order, as today's SQL pins it
+            # (`collation.collate`, issues/295): left to the database's collation, a
+            # page of names came back in another order (s01)
+            from .collation import collate
+            sort_cols += [(f"{ts}.dt_val", d), (f"{ts}.num_val", d), (collate(f"{ts}.term_text"), d)]
     if general and not late:
         # on the aggregation itself (`g1`, `_general_group`): the levels around it are
         # pulled up when nothing sorts them, so only it is sure to be a relation
