@@ -117,8 +117,58 @@ async def vg_client():
 
     client = VitalGraphClient()
     await client.open()
+    if os.environ.get("VG_TEST_BUILD_STATS", "1") != "0":
+        _build_stats_before_reads(client)
     yield client
     await client.close()
+
+
+def _build_stats_before_reads(client):
+    """Statistics for a space the suite has written, before it is read.
+
+    A space populated through the REST API has no statistics until the
+    maintenance job reaches it (`maintenance_job`, hourly per space); an import
+    or the bulk loader builds them at the end. These tests write and read within
+    seconds, so every query ran on a space without statistics: the qtree planner
+    declined nearly all of them ("a variable-predicate pattern on a space without
+    statistics", ~300 per run) and the suite exercised today's SQL with the
+    planner switched on. This builds them the way an operator would, through
+    `POST /api/admin/resync`, once per write-then-read, for the space written.
+
+    A write is a POST / PUT / DELETE naming a space that is not a query; a read is
+    a GET or a query / search POST. `VG_TEST_BUILD_STATS=0` turns it off."""
+    import re as _re
+    from urllib.parse import parse_qs, urlparse
+
+    real = client._make_authenticated_request
+    dirty: set = set()
+    reading = _re.compile(r"(quer(y|ies)|search)", _re.I)
+
+    def _space(url, kwargs):
+        sid = (kwargs.get("params") or {}).get("space_id")
+        if sid is None:
+            q = parse_qs(urlparse(str(url)).query).get("space_id")
+            sid = q[0] if q else None
+        return sid
+
+    async def wrapped(method, url, **kwargs):
+        path = urlparse(str(url)).path
+        if "/api/admin/" in path or path.rstrip("/").endswith("/api/spaces"):
+            return await real(method, url, **kwargs)
+        sid = _space(url, kwargs)
+        is_read = method.upper() == "GET" or bool(reading.search(path))
+        if sid and is_read and sid in dirty:
+            dirty.discard(sid)
+            try:
+                await client.admin.resync(sid)
+            except Exception:
+                pass            # a space being deleted: the read reports what it finds
+        resp = await real(method, url, **kwargs)
+        if sid and not is_read and method.upper() in ("POST", "PUT", "DELETE"):
+            dirty.add(sid)
+        return resp
+
+    client._make_authenticated_request = wrapped
 
 
 # ---------------------------------------------------------------------------
