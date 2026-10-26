@@ -676,6 +676,10 @@ class _Union:
     vars: List[str]                 # every variable a branch binds
     certain: Set[str]               # bound by every branch: the only ones it joins on
     branch_vars: List[Set[str]] = field(default_factory=list)   # per branch, its OPTIONALs' included
+    # variables some branch COMPUTES (a BIND not copying a key): values of the leaf,
+    # c_<var> and companions, never keys (`leaf.vals`); per branch, the ones it computes
+    vals: List[str] = field(default_factory=list)
+    branch_vals: List[Set[str]] = field(default_factory=list)
 
 
 def _union_leaf(p, ctx, aliases, parts, outer_vars) -> Leaf:
@@ -709,13 +713,30 @@ def _union_leaf(p, ctx, aliases, parts, outer_vars) -> Leaf:
     # `BIND(<frame> AS ?subject)` came back unbound: the frame-slot listing, empty)
     req = [region_vars(reg) | {v for v, _e in reg.binds} for reg in branches]
     ball = [r_ | set().union(*(_region_all_vars(o) for o in reg.optionals)) for r_, reg in zip(req, branches)]
-    all_vars = sorted(set().union(*ball))
-    certain = set.intersection(*req)
+    # a branch's computed values, as its render tells them apart: a BIND copying a
+    # bound key is that key, until the first computed one (`render`)
+    bvals = []
+    for reg in branches:
+        comp, rv = set(), region_vars(reg)
+        for v, e in reg.binds:
+            if comp or not (type(e).__name__ == "ExprVar" and e.var in rv):
+                comp.add(v)
+            else:
+                rv = rv | {v}
+        bvals.append(comp)
+    vals = sorted(set().union(*bvals))
+    if any(set(vals) & (b - c) for b, c in zip(ball, bvals)):
+        raise Unsupported("a UNION variable one branch computes and another binds by a pattern")
+    all_vars = sorted(set().union(*ball) - set(vals))
+    certain = set.intersection(*req) - set(vals)
     first = min(l.alias for reg in branches for u in reg.units for l in u.leaves)
     leaf = Leaf(alias=f"un_{first}", kind="union", pred=None, s_var=None, o_var=None,
                 s_const=None, o_const=None, scan=Est(None, "subq"), pred_rows=None,
                 pred_objects=None, o_vars=[(f"k_{v}", v) for v in all_vars])
-    leaf.sub = _Union(branches=branches, vars=all_vars, certain=certain, branch_vars=ball)
+    leaf.sub = _Union(branches=branches, vars=all_vars, certain=certain, branch_vars=ball,
+                      vals=vals, branch_vals=bvals)
+    if vals:
+        leaf.vals = {v: None for v in vals}
     _union_price(leaf)
     return leaf
 
@@ -886,6 +907,23 @@ def _build_region(parts, ctx, aliases) -> Region:
             # statistics yet): its rows per subject are unknown, never guessed
             raise Unsupported("a variable-predicate pattern on a space without statistics")
     values = parts["values"]
+    # `BIND(<iri> AS ?s)` joined by a pattern (`?s a haley:KGFrame`): one term,
+    # joined by term identity, so a pin of ?s, as a one-row VALUES is. An IRI's uuid
+    # is its identity (`_generate_term_uuid`); one absent from the term table matches
+    # nothing, as the join would. A literal's depends on its stored datatype: left
+    # a BIND (and declined below).
+    pattern_held = {v for l in leaves for v in [l.s_var] + [ov for _c, ov in l.o_vars] if v}
+    if parts.get("binds"):
+        from .sparql_sql_space_impl import _generate_term_uuid
+        kept = []
+        for v, e in parts["binds"]:
+            node = getattr(e, "node", None)
+            if (v in pattern_held and v not in values and type(e).__name__ == "ExprValue"
+                    and type(node).__name__ == "URINode"):
+                values[v] = [str(_generate_term_uuid(node.value, "U"))]
+                continue
+            kept.append((v, e))
+        parts["binds"] = kept
     # VALUES pins: a leaf whose object is the VALUES variable is restricted to
     # those terms, priced exactly from rdf_stats where the pairs are stored.
     a = aliases
@@ -2308,6 +2346,8 @@ def _derived_tables(reg: Region, pos: "_Pos", ctx, subs: List["_SubSql"], poses:
                 poses += s.poses
                 if l.kind == "union":
                     maybe |= set(l.sub.vars) - l.sub.certain
+                    # a value some branch leaves unbound: NULL, which sorts last
+                    maybe |= set(l.sub.vals) - set.intersection(*l.sub.branch_vals)
             else:
                 continue
             for c, v in l.o_vars:
@@ -2370,17 +2410,35 @@ def _render_union(leaf: Leaf, ctx, term_table: str) -> _SubSql:
     relations."""
     un = leaf.sub
     sqls, sizes, units_adv, methods, poses, base = [], [], [], [], [], []
+    rendered = []
     for i, reg in enumerate(un.branches):
         mine = sorted(v for v in un.vars if v in un.branch_vars[i])
         bq = Query(region=reg)
-        bq.project = list(mine)
+        bq.project = list(mine) + sorted(un.branch_vals[i])
         s = render(bq, {}, ctx, keys_only=True)
-        if s.lanes:
-            # a branch's computed value (`BIND("outgoing" AS ?direction)`) has no key; the
-            # UNION carries keys only. Rendered as one, the branch read a k_ column it
-            # does not have and the kgtypes relationship listing came back empty.
-            raise Unsupported("a UNION branch exports a computed value (C3)")
+        if set(s.lanes) - set(un.vals):
+            # a computed value has no key: carried as one, the branch read a k_ column it
+            # does not have (the kgtypes relationship listing came back empty)
+            raise Unsupported("a UNION branch exports a computed value it was not planned to")
+        rendered.append((mine, s))
+    # a computed value's typed lane, when every branch computing it agrees: its value
+    # column keeps that type (a number stays NUMERIC, as today's SQL carries it);
+    # otherwise text, so the branches' columns agree
+    lanes: Dict[str, Optional[str]] = {}
+    for v in un.vals:
+        ls = {s.lanes[v] for _m, s in rendered if v in s.lanes}
+        lanes[v] = ls.pop() if len(ls) == 1 else None
+    for i, (mine, s) in enumerate(rendered):
         cols = [f"ub{i}.k_{v}" if v in mine else f"NULL::uuid AS k_{v}" for v in un.vars]
+        # its computed values (`BIND("outgoing" AS ?direction)`); NULL (unbound) where
+        # it computes none
+        for v in un.vals:
+            for suf, typ in _VAL_TYPES:
+                if suf == "" and lanes[v] is not None:
+                    cols.append(f"ub{i}.c_{v} AS c_{v}" if v in s.lanes else f"NULL AS c_{v}")
+                else:
+                    cols.append(f"ub{i}.c_{v}{suf}::{typ} AS c_{v}{suf}" if v in s.lanes
+                                else f"NULL::{typ} AS c_{v}{suf}")
         sqls.append(f"SELECT {', '.join(cols)}\nFROM ({s.sql}) AS ub{i}")
         sizes += s.sizes
         units_adv += s.units_adv
@@ -2388,7 +2446,13 @@ def _render_union(leaf: Leaf, ctx, term_table: str) -> _SubSql:
         poses += s.poses
         base += s.base_sizes
     sql = "\nUNION ALL\n".join(f"({s})" for s in sqls)
-    return _SubSql(sql=sql, sizes=sizes, units_adv=units_adv, methods=methods, poses=poses, base_sizes=base)
+    return _SubSql(sql=sql, sizes=sizes, units_adv=units_adv, methods=methods, poses=poses, base_sizes=base,
+                   lanes=lanes)
+
+
+# a carried value's columns and the one type each takes across UNION branches
+_VAL_TYPES = (("", "text"), ("__type", "text"), ("__uuid", "uuid"), ("__lang", "text"),
+              ("__datatype", "text"), ("__num", "numeric"), ("__bool", "boolean"), ("__dt", "timestamp"))
 
 def _outer_values(core: str, where: List[str], r: "_R", vars_: List[str], term_table: str, ctx,
                   ocols: Dict[str, str], fence: bool = False) -> Tuple[str, List[str], str]:
@@ -2599,6 +2663,13 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             raise Unsupported("a BIND inside a NOT EXISTS / MINUS body")
         if a.region.optionals:
             raise Unsupported("OPTIONAL inside a NOT EXISTS / MINUS body")
+    if (not keys_only and len(reg.units) == 1 and len(reg.units[0].leaves) == 1
+            and reg.units[0].leaves[0].kind == "union" and reg.units[0].leaves[0].sub.vals
+            and q.limit is None and q.group_vars is None and not q.aggregates):
+        # nothing to order, and its rows decoded above the UNION ALL run serially where
+        # today's SQL decodes in each branch, in parallel workers (u17: 132 against 82
+        # ms); the decode is the slower list's (planning_planner/13)
+        raise Unsupported("a lone UNION carrying computed values, every row decoded")
     tree = main_tree or search(reg)
     base_sizes = _base_sizes(reg)
     r = _R(pos)
@@ -3017,8 +3088,13 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # An aggregate's input level needs no fence (that is for FILTERs: `_value_level`),
         # and unfenced its term rows are read in the parallel workers (a06, SUM by type:
         # 43,700 lookups serial above the Gather, 112 -> 180 ms); unfenced the term join
-        # is inner, so only when every aggregated variable is always bound.
-        agg_fence = bool(final_filters or computed) or any(v not in outer_vars_ for v in ainputs)
+        # is inner, so only when every aggregated variable is always bound. The same for
+        # a BIND's inputs: it adds no condition to turn a term join inner, and fenced it
+        # kept a UNION's branches out of the parallel workers (u15, two constant BINDs:
+        # 113 against today's 58 ms).
+        cin = set().union(*(_expr_vars(e) for _v, e in computed))
+        agg_fence = (any(_expr_vars(f) for f in final_filters)
+                     or any(v not in outer_vars_ for v in set(ainputs) | cin))
         inner = _value_level(_replace(reg, filters=final_filters), ctx, r, core, where, sorted(need),
                              q.sub_distinct, pos.term_table, computed, out_computed,
                              expose=ainputs, prefix="ag", fence=agg_fence, lanes=clanes, carry=carry)
