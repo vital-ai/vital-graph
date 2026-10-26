@@ -87,6 +87,9 @@ class Leaf:
     sub_cost: float = 0.0
     # distinct graphs (contexts) of its quad table, for a GRAPH ?g variable's column
     ctx_ndv: Optional[float] = None
+    # objects listed by an `object_uuid IN (...)` restriction: at most that many
+    # distinct objects (the generator's pushed-down IN / VALUES)
+    o_in: Optional[float] = None
 
     @property
     def constant(self) -> bool:
@@ -111,6 +114,8 @@ class Leaf:
         the distinct predicates for a variable predicate's column)."""
         if self.kind == "quad" and col == "context_uuid":
             return self.ctx_ndv
+        if self.kind == "quad" and col != "predicate_uuid" and self.o_in:
+            return min(self.o_in, self.pred_objects) if self.pred_objects else self.o_in
         if self.kind == "quad":
             return self.pred_ndv if col == "predicate_uuid" else self.pred_objects
         return self.col_ndv.get(col)
@@ -261,6 +266,7 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
         in_est = _in_list_rows(a, p_uuid, filters_by.get(a, []), ctx, st)
         if in_est is not None:
             scan = in_est
+        o_in = _in_list_count(a, filters_by.get(a, []), ctx)
         n_s = _subject_in_count(a, filters_by.get(a, []), ctx)
         if n_s and (scan.rows is None or n_s < scan.rows):
             scan = Est(float(n_s), "in")    # one value per listed subject
@@ -282,7 +288,7 @@ def _leaves(plan: PlanV2, ctx, st: _Stats) -> List[Leaf]:
                    + ([("predicate_uuid", var_at[(a, "predicate_uuid")])]
                       if p_term is None and (a, "predicate_uuid") in var_at else [])
                    + _graph_var(a, var_at),
-            ctx_ndv=_ctx_ndv(t)))
+            ctx_ndv=_ctx_ndv(t), o_in=o_in))
     return out
 
 
@@ -378,6 +384,18 @@ def _subject_in_count(alias: str, filters: List[str], ctx) -> Optional[int]:
             if items and all(re.fullmatch(r"'[0-9a-f-]{36}'::uuid", x) for x in items):
                 return len(items)
             return None
+    return None
+
+
+def _in_list_count(alias: str, filters: List[str], ctx) -> Optional[float]:
+    """How many objects an `alias.object_uuid IN (...)` restriction lists, or None."""
+    from .generator import substitute_constants
+    for f in filters:
+        m = re.match(rf"\s*{re.escape(alias)}\.object_uuid\s+IN\s*\((.*)\)\s*$",
+                     substitute_constants(f, ctx.aliases), re.S)
+        if m:
+            n = m.group(1).count("::uuid")
+            return float(n) if n else None
     return None
 
 

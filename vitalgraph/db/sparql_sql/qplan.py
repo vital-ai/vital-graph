@@ -1624,7 +1624,8 @@ def _cross(a: Node, b: Node, card: "_Card") -> Node:
     S = a.units | b.units
     rows = card(_mask(S))
     out = rows if COST_MODEL == "cout" else rows * W["join_out_row"]
-    return Node("cross", S, a.cost + b.cost + out, rows, {}, left=a, right=b)
+    # each side's variables keep their distinct values: a cross repeats them
+    return Node("cross", S, a.cost + b.cost + out, rows, {**a.ndv, **b.ndv}, left=a, right=b)
 
 
 def _cross_all(nodes: List[Node], card: "_Card") -> Node:
@@ -1876,6 +1877,11 @@ def _pick_driver(u: Unit, pos: "_Pos", aliases):
                 best = (l, part, info["rows"], ctx_eq, info["cols"])
     return best
 
+
+#: Decode a variable by its distinct keys (`render`) when the estimated rows are at
+#: least this many, and this many times its distinct values.
+DEDUP_DECODE_MIN_ROWS = 1000.0
+DEDUP_DECODE_RATIO = 4.0
 
 #: `unit_methods`: advise a nested loop into a constant leaf only when its own scan
 #: is at least this many times the rows probing it.
@@ -2438,6 +2444,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     units_adv = list(r.units_advice)
     methods = list(r.methods)
     rows = tree.rows
+    out_rows, out_ndv = tree.rows, dict(tree.ndv)     # for the decode (`_dedup_decode`)
     anti_notes: List[str] = []
     late = _late_optional_ok(q, reg, r)
     late_opts: List[Tuple[str, List[str], "_R", List[str], int]] = []   # (LATERAL sql, page join columns, its _R, its projected vars, index)
@@ -2557,6 +2564,9 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             lo = f"lo{oi}"
             conds = [f"{lo}.k_{v} = {r.bound[v]}" for v in okeys if v in r.bound]
             keyed = bool(conds)
+            out_ndv.update({k: n for k, n in otree.ndv.items() if k not in out_ndv})
+            if not keyed:
+                out_rows *= max(1.0, otree.rows)
             types = TypeRegistry(aliases=ctx.aliases)
             for v in expose:
                 types.register(ColumnInfo.simple_output(v, f"{pre}{fv_order.index(v)}", from_triple=True))
@@ -2594,6 +2604,9 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             if var in r.bound and var in orr.bound:
                 conds.append(f"{orr.bound[var]} = " + (f"pg_late.k_{var}" if late else r.bound[var]))
         keyed = bool(conds)
+        out_ndv.update({k: n for k, n in otree.ndv.items() if k not in out_ndv})
+        if not keyed:
+            out_rows *= max(1.0, otree.rows)    # every row pairs with each OPTIONAL row
         # sharing no variable: every row pairs with each OPTIONAL row, or stays alone
         core = f"({core}\n LEFT JOIN {osql} ON " + " AND ".join(conds + opend or ["TRUE"]) + ")"
         sizes += orr.sizes
@@ -2907,6 +2920,15 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     if missing:
         raise Unsupported(f"projected ?{', ?'.join(missing)} not produced by the plan's top level")
     cols, djoins = [], []
+    # Decode a variable's term rows by its DISTINCT keys when the rows far outnumber
+    # them (a cross product, an OPTIONAL sharing nothing); otherwise per row, as before
+    final_rows = float(q.limit) if q.limit is not None else out_rows
+    for v, uuids in reg.values.items():
+        # a VALUES / IN pin bounds the variable's distinct values exactly
+        out_ndv[v] = min(out_ndv.get(v, float(len(uuids))), float(len(uuids)))
+    dedup = {v for v in (q.project or []) if v not in agg_vars and v not in cvars and v not in unbound
+             and final_rows >= DEDUP_DECODE_MIN_ROWS and out_ndv.get(v)
+             and final_rows >= DEDUP_DECODE_RATIO * out_ndv[v]}
     for v in (q.project or []):
         if v in unbound:
             continue            # no column: the executor leaves an unbound variable out of the bindings
@@ -2930,7 +2952,14 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             cols += [f"top.c_{v}{suf} AS {sn}{suf}" for suf in ("",) + _CS]
             continue
         t = f"d_{v}"
-        djoins.append(f"LEFT JOIN {pos.term_table} AS {t} ON {t}.term_uuid = top.k_{v}")
+        if v in dedup:
+            # the term rows of its DISTINCT keys, once each: decoded per output row, a
+            # 3 x 10,000 cross product looked the same 3 terms up 30,000 times, with no
+            # estimate for PostgreSQL to memoize on (u11, o05)
+            djoins.append(f"LEFT JOIN (SELECT * FROM {pos.term_table} WHERE term_uuid IN "
+                          f"(SELECT k_{v} FROM top)) AS {t} ON {t}.term_uuid = top.k_{v}")
+        else:
+            djoins.append(f"LEFT JOIN {pos.term_table} AS {t} ON {t}.term_uuid = top.k_{v}")
         cols += [c.replace(f"top.{sn}__uuid", f"top.k_{v}") for c in TypeRegistry.term_table_columns(
             sn, t, "top", _NUMERIC_DT_SQL_LIST,
             dt_case_sql=ctx.dt_case_expr(t),
@@ -2938,7 +2967,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
             datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))]
     # (a pattern binding no variable, `SELECT * { GRAPH <g> {} }`: one placeholder)
-    outer = f"SELECT {', '.join(cols) or '1 AS one'}\nFROM ({top}) AS top\n" + "\n".join(djoins)
+    if dedup:
+        outer = (f"WITH top AS MATERIALIZED ({top})\nSELECT {', '.join(cols) or '1 AS one'}\nFROM top\n"
+                 + "\n".join(djoins))
+    else:
+        outer = f"SELECT {', '.join(cols) or '1 AS one'}\nFROM ({top}) AS top\n" + "\n".join(djoins)
     if sort_cols:
         outer += "\nORDER BY " + ", ".join(f"top.sk{i} {d}" for i, (_c, d) in enumerate(sort_cols))
     for opt in reg.optionals:
