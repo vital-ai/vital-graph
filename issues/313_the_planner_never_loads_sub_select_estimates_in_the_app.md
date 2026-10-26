@@ -1,6 +1,6 @@
 # 313 — In the app, the planner never loads its sub-select estimates (a json codec), so range and IN filters are never driven
 
-## Status: FIXED 2026-10-26 (qcard.load_sublinks). Open until verified in the app at scale.
+## Status: FIXED and VERIFIED in the app at scale, 2026-10-26 (45b83c43). Production picks it up with the next deploy.
 
 ## Defect
 
@@ -37,3 +37,17 @@ connections, which return the JSON as text. They never saw the failure.
 - Then compare `qtree_derived_stats` declines in the app log: there should be none.
 - At scale: a range-criterion KGQuery in the app (lead 100k) should show a driven unit
   (`bgp u0 steps(r_q… q…)`).
+
+## Verified 2026-10-26
+
+**API suite, with statistics built** (`12ee0eb1`):
+- 0 failures, 712 queries planned;
+- no `qtree_derived_stats` declines in the app log.
+
+**Through the app on lead 100k** (`high_rated_edge_count`, an MQLRating >= 65 criterion over
+the edge chain):
+- the slot unit is driven from the range sub-select: `bgp u0 steps(r_q16 q16 q15)`;
+- 690-920 ms warm (12.8 s on the first, cold run after a restart).
+
+The contract corpus measures the same query at 0.9-5.2 s planned against 13-22 s for today's
+SQL.
