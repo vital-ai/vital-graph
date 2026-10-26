@@ -88,8 +88,12 @@ def _merge_ctes(inner_cte: str, new_body: str) -> str:
     return f"WITH RECURSIVE {inner_body},\n{new_body}"
 
 
-def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
-    """Emit a property path pattern as SQL using WITH RECURSIVE CTEs."""
+def emit_path(plan: PlanV2, ctx: EmitContext, keys_only: bool = False) -> str:
+    """Emit a property path pattern as SQL using WITH RECURSIVE CTEs.
+
+    `keys_only`: each variable end as its term uuid only (`<sn>__uuid`), no
+    term-table JOINs: the qtree planner's path leaf (`qcard.load_paths`), which
+    decodes its keys once, at the top. The default path never sets it."""
     meta = plan.path_meta
     if meta is None:
         raise ValueError("path plan has no path_meta")
@@ -244,6 +248,11 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
         bindings.append((VarNode(name=graph_var), "ctx_uuid"))
 
     for node, uuid_col in bindings:
+        if isinstance(node, VarNode) and keys_only:
+            sn = ctx.types.allocate(node.name)
+            select_cols.append(f"{cte_alias}.{uuid_col} AS {sn}__uuid")
+            ctx.types._columns[node.name] = ColumnInfo.simple_output(node.name, sn, from_triple=True)
+            continue
         if isinstance(node, VarNode):
             sn = ctx.types.allocate(node.name)
             t_alias = f"t_{sn}"

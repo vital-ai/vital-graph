@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .ir import (KIND_BGP, KIND_DISTINCT, KIND_EXTEND, KIND_FILTER, KIND_GROUP,
                  KIND_JOIN, KIND_LEFT_JOIN, KIND_ORDER, KIND_PROJECT, KIND_REDUCED,
-                 KIND_SLICE, KIND_TABLE, KIND_UNION, KIND_MINUS)
+                 KIND_SLICE, KIND_TABLE, KIND_UNION, KIND_MINUS, KIND_PATH)
 from .qtree import Est, Leaf, Unit, _Stats, _leaves, _unit
 
 XSD_INTEGER = "http://www.w3.org/2001/XMLSchema#integer"
@@ -250,7 +250,7 @@ def _unique_aliases(q: Query) -> None:
                     while f"{l.alias}_{k}" in seen:
                         k += 1
                     new = f"{l.alias}_{k}"
-                    if l.kind not in ("subq", "union", "vtable"):
+                    if l.kind not in ("subq", "union", "vtable", "path"):
                         r.rename[l.alias] = new
                     l.alias = new
                 seen.add(l.alias)
@@ -298,7 +298,7 @@ def _analyze_subselect(p, ctx, exclude: frozenset) -> Query:
         raise Unsupported("sub-SELECT projects a variable that is neither a key nor an aggregate")
     q.region = _region(p.children[0], ctx, ctx.aliases, outer_vars=set(), exclude=exclude)
     if q.region.optionals or q.region.antis or any(
-            l.kind in ("subq", "union", "vtable") for u in q.region.units for l in u.leaves):
+            l.kind in ("subq", "union", "vtable", "path") for u in q.region.units for l in u.leaves):
         raise Unsupported("sub-SELECT with OPTIONAL, NOT EXISTS or a nested sub-SELECT")
     return q
 
@@ -585,6 +585,8 @@ def _collect(p, ctx, aliases, parts, outer_vars):
         parts["leaves"].append(_subsel_leaf(p, parts["ctx"], parts["exclude"]))
     elif p.kind == KIND_UNION:
         parts["leaves"].append(_union_leaf(p, ctx, aliases, parts, outer_vars))
+    elif p.kind == KIND_PATH:
+        parts["leaves"].append(_path_leaf(p, parts))
     else:
         raise Unsupported(f"{p.kind} inside the pattern")
 
@@ -683,6 +685,32 @@ def _exists_anti(e, outer_vars) -> "Anti":
         else:
             rest.append(f)
     return Anti(region=br, correlated=[], filters=rest, negated=bool(e.negated))
+
+
+def _path_leaf(p, parts) -> Leaf:
+    """A property path as a leaf: its table the generator's own SQL for it
+    (`emit_path`, loaded by `qcard.load_paths`: sequence, alternative, inverse,
+    `*` / `+` / `?` as recursive CTEs, negated sets), a key column per variable end,
+    sized at PostgreSQL's estimate of that SQL. A derived table: never probed into.
+    A recursive path whose variable end another pattern binds declines
+    (`_build_region`): the generator SEEDS that recursion from the binding pattern,
+    and unseeded it closes over the whole graph (issues/124: 26 ms vs 67 s)."""
+    meta = p.path_meta or {}
+    if meta.get("graph_var"):
+        raise Unsupported("a path inside GRAPH ?g (C4)")
+    info = (p.hints or {}).get("qplan_path")
+    if info is None:
+        raise Unsupported("a property path not priced (no connection)")
+    if info.get("absent_pin"):
+        raise Unsupported("a zero-length path to a constant the term table does not hold")
+    alias = f"pt_{meta.get('cte_alias', 'p')}"
+    leaf = Leaf(alias=alias, kind="path", pred=None, s_var=None, o_var=None, s_const=None,
+                o_const=None, scan=Est(max(1.0, info["rows"]), "subq"), pred_rows=None, pred_objects=None,
+                o_vars=[(col, v) for v, col in info["cols"].items()],
+                col_ndv={col: max(1.0, info["rows"]) for col in info["cols"].values()})
+    leaf.sub = info
+    leaf.sub_cost = max(1.0, info["rows"]) * W["scan_row"] * 10
+    return leaf
 
 
 def _vtable_leaf(p, aliases, parts, vars_=None, rows=None) -> Leaf:
@@ -785,7 +813,7 @@ def _build_region(parts, ctx, aliases) -> Region:
             if l.scan.rows is None or rows < l.scan.rows:
                 l.scan = Est(rows, "values")
         for l in holders:
-            if l.kind in ("union", "subq", "vtable") and l.scan.rows:
+            if l.kind in ("union", "subq", "vtable", "path") and l.scan.rows:
                 # a derived table: the pinned share of the column's distinct values
                 col = next(c for c, v in l.o_vars if v == var)
                 n = l.col_ndv.get(col) or l.scan.rows
@@ -845,6 +873,17 @@ def _build_region(parts, ctx, aliases) -> Region:
                 others |= _region_all_vars(o2)
         if (_region_all_vars(o) & others) - left:
             raise Unsupported("an OPTIONAL shares a variable its own group does not bind")
+    # A RECURSIVE path whose variable end another pattern binds: the generator seeds
+    # the recursion from that pattern; a path leaf cannot be (yet), and unseeded it
+    # closes over the whole graph (issues/124)
+    for l in leaves:
+        if l.kind == "path" and l.sub.get("recursive"):
+            ends = {v for _c, v in l.o_vars}
+            if len(ends) == len(l.o_vars) == 2:
+                bound = {v for x in leaves if x is not l for v in [x.s_var] + [ov for _c, ov in x.o_vars] if v}
+                bound |= set(values) | set(outer_vars_of(parts))
+                if ends & bound:
+                    raise Unsupported("a recursive path whose end another pattern binds (seeding: C4)")
     # A UNION variable some branch leaves unbound joins nothing by equality (unbound
     # is compatible with every value): read anywhere else in the region, decline.
     for l in leaves:
@@ -1072,6 +1111,25 @@ def _expr_has_exists(e) -> bool:
     if type(e).__name__ == "ExprExists":
         return True
     return any(_expr_has_exists(a) for a in (getattr(e, "args", None) or []))
+
+
+def _has_recursive_path(r: Region) -> bool:
+    """A recursive property path anywhere in the region's plan (sub-SELECTs,
+    UNION branches, OPTIONALs and negation bodies included)."""
+    for u in r.units:
+        for l in u.leaves:
+            if l.kind == "path" and l.sub.get("recursive"):
+                return True
+            if l.kind == "subq" and _has_recursive_path(l.sub.region):
+                return True
+            if l.kind == "union" and any(_has_recursive_path(b) for b in l.sub.branches):
+                return True
+    return any(_has_recursive_path(o) for o in r.optionals) or any(
+        _has_recursive_path(a.region) for a in r.antis)
+
+
+def outer_vars_of(parts) -> Set[str]:
+    return set(parts.get("outer_vars") or ())
 
 
 def _region_all_vars(r: Region) -> Set[str]:
@@ -1458,7 +1516,7 @@ def _unit_build(u: Unit) -> Tuple[float, List[Tuple[Leaf, str]]]:
 def _base(r: Region, i: int) -> Node:
     u = r.units[i]
     rr = u.rows.rows or 0.0
-    if u.anchor is not None and u.anchor.kind in ("subq", "vtable", "union"):
+    if u.anchor is not None and u.anchor.kind in ("subq", "vtable", "union", "path"):
         return Node("scan", frozenset([i]), u.anchor.sub_cost, rr, _unit_ndv(u, r.values, r.bound), unit=i)
     cost, _plan = _unit_build(u)
     return Node("scan", frozenset([i]), cost, rr, _unit_ndv(u, r.values, r.bound), unit=i)
@@ -1932,6 +1990,11 @@ class Rendered:
     advice: str
     plan: str
     cost: float
+    # pin the written join order (join_collapse_limit = 1)? Not with a recursive
+    # path: the generator's path SQL relies on PostgreSQL reordering its joins (a
+    # recursive step driven from the recursion's rows); pinned, an entity's
+    # descendants took 1,000 ms against 1.6 (path_shapes p02)
+    pin: bool = True
 
 
 def alternatives(r: Region, k: int = 6) -> List[Node]:
@@ -2066,6 +2129,10 @@ def _derived_tables(reg: Region, pos: "_Pos", ctx, subs: List["_SubSql"], poses:
         for l in u.leaves:
             if l.kind == "vtable":
                 pos.table[l.alias] = _vtable_sql(l)
+            elif l.kind == "path":
+                # fenced: its outer SELECT is a simple sub-query PostgreSQL pulls up,
+                # and the advice naming the path would match nothing
+                pos.table[l.alias] = f"(SELECT * FROM ({l.sub['sql']}) AS pf OFFSET 0)"
             elif l.kind in ("subq", "union"):
                 s = (_render_subq if l.kind == "subq" else _render_union)(l, ctx, pos.term_table)
                 if getattr(l, "vals", None):
@@ -2287,6 +2354,10 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         pos.term_table = next((_Pos(b.plans).term_table for u in reg.units for l in u.leaves
                                if l.kind == "union" for b in l.sub.branches if _Pos(b.plans).term_table), None)
     if pos.term_table is None:
+        # a property path's own (`path_meta`)
+        pos.term_table = next((l.sub.get("term_table") for u in reg.units for l in u.leaves
+                               if l.kind == "path" and l.sub.get("term_table")), None)
+    if pos.term_table is None:
         raise Unsupported("no term table")
     poses = [pos]
     # sub-SELECT, UNION and VALUES leaves: their SQL is the leaf's table
@@ -2500,7 +2571,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             # rows come from sampled patterns (no sub-SELECT, UNION or VALUES table, whose
             # sizes are not sampled). latest_per_deal (a grouped sub-SELECT joined in)
             # probed on an estimate of 192: 63 -> 2,341 ms.
-            derived = any(l.kind in ("subq", "union", "vtable") for u in reg.units for l in u.leaves)
+            derived = any(l.kind in ("subq", "union", "vtable", "path") for u in reg.units for l in u.leaves)
             how = "nl" if probe_cost * 10 < set_cost and not derived else "hash"
             methods.append((how, sorted(present)))
             anti_notes.append(f"OPTIONAL {oi} {'probed' if how == 'nl' else 'hashed'} "
@@ -2891,7 +2962,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     lines += [f"method m{i} {how} {' '.join(mnamed(al))}" for i, (how, al) in enumerate(methods) if len(al) >= 2]
     lines.append("*/")
     return Rendered(sql=outer, advice="\n".join(lines),
-                    plan=describe(tree, reg) + "".join(f"; {n}" for n in anti_notes), cost=tree.cost)
+                    plan=describe(tree, reg) + "".join(f"; {n}" for n in anti_notes), cost=tree.cost,
+                    pin=not _has_recursive_path(q.region))
 
 
 def _late_optional_ok(q: Query, reg: Region, r: "_R") -> bool:

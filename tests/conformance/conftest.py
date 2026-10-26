@@ -216,6 +216,7 @@ def _route_through_planner():
                 f.write(json.dumps({"test": os.environ.get("PYTEST_CURRENT_TEST", ""),
                                     "source": g.plan_source,
                                     "declined": (d.get("declined") or {}).get("qtree_plan"),
+                                    "derived_stats": (d.get("declined") or {}).get("qtree_derived_stats"),
                                     "ops": sorted(ops)}) + "\n")
         if g.ok and g.plan_advice:
             g.sql = g.plan_advice + "\n" + g.sql

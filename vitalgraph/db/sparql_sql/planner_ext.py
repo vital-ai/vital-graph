@@ -238,15 +238,25 @@ async def plan_with_qtree(plan, ctx, var_map: Dict[str, str], space_id: Optional
     from .plan_decisions import recorder_for
     rec = recorder_for(ctx.aliases)
     from . import qplan
-    if conn is not None:
-        # derived-table leaves (edge, frame_slot) are priced from PostgreSQL's
-        # own statistics and capped counts, loaded before analysis (`qcard`)
-        from . import qcard
-        try:
-            await qcard.load_derived(plan, ctx, conn)
-            await qcard.load_sublinks(plan, ctx, conn)
-        except Exception as exc:  # unpriced derived leaves: the planner declines them
-            rec.declined("qtree_derived_stats", f"{type(exc).__name__}: {exc}"[:300])
+    # derived-table leaves (edge, frame_slot), sub-select filters and property paths
+    # are priced from PostgreSQL's own statistics and estimates, loaded before
+    # analysis (`qcard`). Without a connection, from the pool, as the sampler does:
+    # the W3C harness passed none, so no path was ever priced there.
+    from . import qcard
+
+    async def _load(c):
+        await qcard.load_derived(plan, ctx, c)
+        await qcard.load_sublinks(plan, ctx, c)
+        await qcard.load_paths(plan, ctx, c)
+    try:
+        if conn is not None:
+            await _load(conn)
+        else:
+            from . import db_provider as _db
+            async with _db.get_pool().acquire() as _c:
+                await _load(_c)
+    except Exception as exc:  # unpriced derived leaves: the planner declines them
+        rec.declined("qtree_derived_stats", f"{type(exc).__name__}: {exc}"[:300])
     try:
         q = qplan.analyze(plan, ctx)
         # A LIMIT page: the generator may have chosen an EARLY-STOP plan (an

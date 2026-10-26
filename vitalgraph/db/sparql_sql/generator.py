@@ -2557,6 +2557,7 @@ async def _generate_sql(
         # above is today's, byte for byte).
         plan_source = None
         verdict_guard = None
+        qtree_pin = True
         if not provably_empty:
             from . import planner_ext as _pext
             _q = await _pext.plan_with_qtree(plan, ctx, var_map, space_id=space_id,
@@ -2565,6 +2566,7 @@ async def _generate_sql(
                 sql_str = prepend_ctes(substitute_constants(_q.sql, aliases), aliases, term_table)
                 plan_source = "qtree"
                 verdict_guard = getattr(_q, "verdict_guard", None)
+                qtree_pin = getattr(_q, "pin", True)
 
         # One structured line per query: which rewrites fired, which declined
         # and why. Always on — a diagnostic nobody enables is indistinguishable
@@ -2588,7 +2590,10 @@ async def _generate_sql(
             vector_requests=ctx.vector_requests,
             fuzzy_requests=ctx.fuzzy_requests,
             needs_ordered_scan=ctx.needs_ordered_scan and plan_source is None,
-            fixed_join_order=ctx.fixed_join_order or plan_source == "qtree",
+            # the planner's SQL is pinned to its written order unless it says not to
+            # (a recursive property path: `qplan.Rendered.pin`)
+            fixed_join_order=(plan_source == "qtree" and qtree_pin) or (
+                plan_source is None and ctx.fixed_join_order),
             traversal_decision=getattr(aliases, "traversal_decision", None),
             plan_source=plan_source,
             verdict_guard=verdict_guard,

@@ -93,6 +93,69 @@ def _sublinks(plan, aliases, out: set) -> None:
             _sublinks(e.prepared_plan, e.prepared_aliases, out)
 
 
+def _path_nodes(plan, out: list) -> None:
+    from .ir import KIND_PATH
+    if plan.kind == KIND_PATH:
+        out.append(plan)
+    for c in plan.children or []:
+        _path_nodes(c, out)
+
+
+async def load_paths(plan, ctx, conn) -> int:
+    """For each property path node: the generator's own SQL for it (`emit_path`),
+    PostgreSQL's row estimate of that SQL (EXPLAIN only), and the column holding
+    each variable end's term uuid, as `hints["qplan_path"]` for `qplan` to make a
+    leaf of. Emitted without the join's seed hint: that seed is the sibling's own
+    SQL, whose aliases the statement already holds."""
+    import copy
+    import json as _json
+    from .emit_path import emit_path
+    from .sql_type_generation import TypeRegistry
+    from ..jena_sparql.jena_types import VarNode, PathOneOrMore, PathZeroOrMore
+    nodes: list = []
+    _path_nodes(plan, nodes)
+    for node in nodes:
+        meta = node.path_meta or {}
+        if meta.get("graph_var") or "qplan_path" in (node.hints or {}):
+            continue
+        bare = copy.copy(node)
+        bare.hints = {k: v for k, v in (node.hints or {}).items() if k != "path_start_seed"}
+        pctx = ctx.child(types=TypeRegistry(aliases=ctx.aliases))
+        sql = emit_path(bare, pctx, keys_only=True)
+        async with conn.transaction():
+            v = await conn.fetchval("EXPLAIN (FORMAT JSON) " + sql)
+        p = v if isinstance(v, (list, dict)) else _json.loads(v)
+        cols = {}
+        for end in (meta.get("subject"), meta.get("object")):
+            if isinstance(end, VarNode):
+                info = pctx.types.get(end.name)
+                cols[end.name] = f"{info.sql_name}__uuid"
+
+        def recursive(e) -> bool:
+            if isinstance(e, (PathOneOrMore, PathZeroOrMore)):
+                return True
+            return any(recursive(getattr(e, a)) for a in ("sub", "left", "right", "path")
+                       if hasattr(e, a) and getattr(e, a) is not None and not isinstance(getattr(e, a), (str, list)))
+        # A zero-length-capable path (`*`, `?`) with a constant end answers that
+        # constant itself, which may not be a stored term: the generator spells it out
+        # (COALESCE, `emit_path` zero_pin); keys decoded through the term table lose it
+        from ..jena_sparql.jena_types import PathZeroOrOne, URINode
+        from .sparql_sql_space_impl import _generate_term_uuid
+        absent_pin = False
+        if isinstance(meta.get("path"), (PathZeroOrMore, PathZeroOrOne)) and not meta.get("graph_uri"):
+            for end in (meta.get("subject"), meta.get("object")):
+                if isinstance(end, URINode):
+                    stored = await conn.fetchval(
+                        f"SELECT 1 FROM {meta['term_table']} WHERE term_uuid = $1::uuid",
+                        _generate_term_uuid(end.value, "U"))
+                    absent_pin = absent_pin or stored is None
+        node.hints = dict(node.hints or {})
+        node.hints["qplan_path"] = {"sql": sql, "rows": float(p[0]["Plan"]["Plan Rows"]), "cols": cols,
+                                    "recursive": recursive(meta.get("path")),
+                                    "term_table": meta.get("term_table"), "absent_pin": absent_pin}
+    return len(nodes)
+
+
 async def load_sublinks(plan, ctx, conn) -> int:
     """For each leaf sub-select filter: PostgreSQL's row estimate (EXPLAIN only,
     no execution: the table's own statistics), the table's columns and its
@@ -203,7 +266,7 @@ def _question(reg, s: int, t: Optional[int], hits: bool = True) -> Optional[_Que
     u = reg.units[s]
     if not u.subject.startswith("?") or u.anchor is None or u.anchor.s_var is None:
         return None
-    if t is not None and any(l.kind in ("subq", "vtable", "union") for l in reg.units[t].leaves):
+    if t is not None and any(l.kind in ("subq", "vtable", "union", "path") for l in reg.units[t].leaves):
         return None              # a sub-SELECT: no table to join a sample into (its own region is sampled)
     var = u.subject[1:]
     s_sql, s_r, s_pend, pos = _unit_sql(reg, s)
@@ -377,7 +440,7 @@ async def walk_hit_rate(q, space_id: str, conn=None, conn_params=None) -> Option
     from .generator import substitute_constants
     reg = q.region
     drv = qplan.topk_driver(q, reg)
-    if drv is None or reg.antis or any(l.kind in ("subq", "vtable", "union") for u in reg.units for l in u.leaves):
+    if drv is None or reg.antis or any(l.kind in ("subq", "vtable", "union", "path") for u in reg.units for l in u.leaves):
         return None
     var, d = drv
     a = reg.units[d].anchor
@@ -505,7 +568,7 @@ async def annotate_paths(q, space_id: str, conn=None, conn_params=None) -> Dict[
     t0 = time.perf_counter()
     asked = failed = 0
     for reg in _regions(q):
-        if len(reg.units) < 3 or any(l.kind in ("subq", "vtable", "union") for u in reg.units for l in u.leaves):
+        if len(reg.units) < 3 or any(l.kind in ("subq", "vtable", "union", "path") for u in reg.units for l in u.leaves):
             continue
         for _round in range(PATH_ROUNDS):
             tree = qplan.search(reg)
