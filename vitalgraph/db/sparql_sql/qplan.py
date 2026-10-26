@@ -545,12 +545,31 @@ def _collect(p, ctx, aliases, parts, outer_vars):
         from .var_scope import compute_scope
         opt = _region(p.children[1], ctx, aliases, outer_vars)
         left = set(compute_scope(p.children[0]).all_visible)
-        for e in p.left_join_exprs or []:
-            if _expr_has_exists(e):
-                raise Unsupported("an OPTIONAL's FILTER with EXISTS")
-            if _expr_vars(e) - left - region_vars(opt):
+        own = region_vars(opt)
+        conj = [c for e in p.left_join_exprs or [] for c in _conjuncts(e)]
+        # the EXISTS ones first: one makes the OPTIONAL a query of its own, where a
+        # plain conjunct of its own variables is a filter too
+        conj.sort(key=lambda c: type(c).__name__ != "ExprExists")
+        for c in conj:
+            # A conjunct reading only variables the OPTIONAL always binds reads the
+            # same on its rows as on the joined ones (F(a u b) = F(b)): evaluated
+            # inside it. An EXISTS one is a negation of the OPTIONAL's own; with an
+            # inner OPTIONAL or negation, a filter of the query it renders as.
+            if type(c).__name__ == "ExprExists" and c.prepared_plan is not None:
+                anti = _exists_anti(c, outer_vars)
+                seen = _region_all_vars(anti.region) | set().union(*(_expr_vars(f) for f in anti.filters))
+                if seen & (left | _region_all_vars(opt)) - own:
+                    raise Unsupported("an OPTIONAL's FILTER EXISTS reads a variable the OPTIONAL may not bind")
+                opt.antis = opt.antis + [anti]
+                continue
+            if _expr_has_exists(c):
+                raise Unsupported("an OPTIONAL's FILTER with EXISTS inside an expression")
+            if _expr_vars(c) - left - _region_all_vars(opt):
                 raise Unsupported("an OPTIONAL's FILTER reads a variable neither side binds")
-            opt.lj_filters.extend(_conjuncts(e))
+            if (opt.optionals or opt.antis) and _expr_vars(c) <= own:
+                opt.filters = opt.filters + [c]
+                continue
+            opt.lj_filters.append(c)
         parts["optionals"].append(opt)
         parts["opt_left"].append(left)
     elif p.kind == KIND_FILTER:
@@ -2478,11 +2497,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     for o in reg.optionals:
         if o.binds:
             raise Unsupported("a BIND inside an OPTIONAL")
-        if o.optionals or o.antis:
-            # not rendered: an OPTIONAL's own OPTIONALs and negations would be dropped
-            # (W3C "Nested Optionals - 1": the inner OPTIONAL binds ?v, so the outer row
-            # is incompatible; dropped, the join found no shared variable)
-            raise Unsupported("an OPTIONAL with its own OPTIONAL or negation")
+        if (o.optionals or o.antis) and o.lj_filters:
+            raise Unsupported("an OPTIONAL with its own OPTIONAL or negation and a FILTER reading both sides")
         if o.undef_tables:
             raise Unsupported("VALUES with UNDEF inside an OPTIONAL")
     if reg.undef_tables and not reg.units:
@@ -2562,6 +2578,43 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         opos = _pos_of(opt)
         opos.term_table = opos.term_table or pos.term_table
         poses.append(opos)
+        if opt.optionals or opt.antis:
+            # An OPTIONAL with its own OPTIONALs or negations: planned and rendered as a
+            # query of its own up to its keys, as a UNION branch is, and left-joined. A
+            # variable only its inner OPTIONAL binds may be NULL there, compatible with
+            # any value (W3C "Nested Optionals - 1": the inner OPTIONAL binding ?v makes
+            # the outer row incompatible, its absence does not). Fenced: pulled up, its
+            # advice named relations no longer joined as one.
+            oq = Query(region=opt)
+            ovars = sorted(_region_all_vars(opt))
+            oq.project = list(ovars)
+            s_ = render(oq, {}, ctx, keys_only=True)
+            if s_.lanes:
+                raise Unsupported("a nested OPTIONAL exports a computed value")
+            first = min((l.alias for u in opt.units for l in u.leaves), default=f"x{oi}")
+            lo = f"on_{first}"
+            certain = region_vars(opt)
+            conds = []
+            for v in ovars:
+                if v not in r.bound:
+                    continue
+                conds.append(f"{lo}.k_{v} = {r.bound[v]}" if v in certain
+                             else f"({lo}.k_{v} IS NULL OR {lo}.k_{v} = {r.bound[v]})")
+            core = (f"({core}\n LEFT JOIN (SELECT * FROM ({s_.sql}) AS nf OFFSET 0) AS {lo} ON "
+                    + " AND ".join(conds or ["TRUE"]) + ")")
+            sizes += s_.sizes
+            units_adv += s_.units_adv
+            methods += s_.methods
+            base_sizes += s_.base_sizes
+            poses += s_.poses
+            otree = search(opt)
+            if not any(v in certain for v in ovars if v in r.bound):
+                out_rows *= max(1.0, otree.rows)
+            present = set(present) | {lo}
+            sizes.append((rows, sorted(present)))
+            for v in ovars:
+                r.bound.setdefault(v, f"{lo}.k_{v}")
+            continue
         if _derived_tables(opt, opos, ctx, subs, poses) & outer_vars_:
             raise Unsupported("an OPTIONAL joins on a variable a UNION branch leaves unbound")
         if late:
@@ -2769,7 +2822,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     # SQL (wordnet hub queries: the hub is a constant).
     mentioned = region_vars(reg)
     for o in reg.optionals:
-        mentioned |= region_vars(o)
+        mentioned |= _region_all_vars(o)
     # BINDs: a copy of a bound variable is an alias of its key (it keeps its term
     # identity); anything else is COMPUTED, carried as companion columns
     computed: List[Tuple[str, Any]] = []
@@ -3167,6 +3220,8 @@ def _late_optional_ok(q: Query, reg: Region, r: "_R") -> bool:
         return False                    # a FILTER or BIND may read an OPTIONAL's variables
     if any(o.filters or o.iri_ne or o.lj_filters for o in reg.optionals):
         return False                    # rendered as a value level (render), not cut late
+    if any(o.optionals or o.antis for o in reg.optionals):
+        return False                    # rendered as a query of its own (render)
     if q.group_vars is not None or q.sub_project is not None or q.having:
         return False
     if any(v in q.extend or v not in r.bound for v, _d in q.order):
