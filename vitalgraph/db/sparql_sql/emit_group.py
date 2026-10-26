@@ -8,7 +8,7 @@ so PG groups on compact UUID columns rather than resolved text.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Set
+from typing import List, Optional, Set
 
 from ..jena_sparql.jena_types import ExprVar, ExprAggregator, GroupVar
 
@@ -45,6 +45,133 @@ def emit_group(plan: PlanV2, ctx: EmitContext) -> str:
         ctx.text_needed_vars = original
         return result
     return _emit_group_impl(plan, ctx)
+
+
+def aggregate_columns(agg_var: str, agg_expr, g_alias: str, ctx: EmitContext, *,
+                      child_sql_names: list, grouped: bool) -> List[str]:
+    """The SELECT items of one aggregate over the rows aliased `g_alias`, and its
+    registration in `ctx.types`: the aggregate itself (`_aggregate_to_sql`), and for
+    MIN / MAX / SAMPLE the winning row's companions. `grouped`: under GROUP BY keys.
+
+    The ONE translation of an aggregate: the default path's GROUP and the qtree
+    planner's (`qplan`) both call it."""
+    from .sql_type_generation import COMPANION_SUFFIXES
+    agg_select: List[str] = []
+    if isinstance(agg_expr, ExprAggregator):
+        agg_sql = _aggregate_to_sql(agg_expr, g_alias, ctx,
+                                     child_sql_names=child_sql_names)
+        # Allocate opaque SQL name for the aggregate result
+        agg_sn = ctx.types.allocate(agg_var)
+        agg_select.append(f"{agg_sql} AS {agg_sn}")
+
+        # Register aggregate in TypeRegistry with opaque SQL name
+        agg_name = (agg_expr.name or "").upper()
+        input_var = None
+        if isinstance(agg_expr.expr, ExprVar):
+            input_var = agg_expr.expr.var
+
+        # SAMPLE: also aggregate companion columns so type metadata
+        # is preserved through GROUP BY.  SAMPLE → MAX, so we use
+        # MAX on every companion from the input variable.
+        if agg_name == "SAMPLE" and input_var:
+            inp_info = ctx.types.get(input_var)
+            if inp_info and inp_info.sql_name:
+                isrc = inp_info.sql_name
+                _SAMPLE_SKIP = {"__uuid", "__bool", "__dt"}
+                for suffix in COMPANION_SUFFIXES:
+                    if suffix in _SAMPLE_SKIP:
+                        _null = {"__uuid": "NULL",
+                                 "__bool": "NULL::boolean",
+                                 "__dt": "NULL::timestamp"}[suffix]
+                        agg_select.append(f"{_null} AS {agg_sn}{suffix}")
+                        continue
+                    src_col = f"{g_alias}.{isrc}{suffix}"
+                    agg_select.append(f"MAX({src_col}) AS {agg_sn}{suffix}")
+
+        # MIN/MAX: carry the winning row's companions, picked with the
+        # same ordering as the value so type metadata cannot come from a
+        # different row, plus a numerically-guarded __num lane.
+        _minmax_companions = False
+        keep_identity = False
+        if agg_name in ("MIN", "MAX") and input_var:
+            inp_info = ctx.types.get(input_var)
+            if inp_info and inp_info.sql_name:
+                isrc = inp_info.sql_name
+                key = sparql_order_key(
+                    g_alias, isrc, descending=(agg_name == "MAX"),
+                    collatable=not inp_info.typed_lane)
+                for suffix in ("__type", "__lang", "__datatype"):
+                    pick = _ordered_pick(g_alias, isrc,
+                                         f"{g_alias}.{isrc}{suffix}", key)
+                    agg_select.append(f"{pick} AS {agg_sn}{suffix}")
+                # SPARQL aggregate error semantics (§18.5): if any value
+                # in the group is non-numeric, a *numeric* use of the
+                # aggregate is an error. Without this, arithmetic over the
+                # result casts the winning text to NUMERIC and aborts the
+                # whole query on a blank node or string (issue 029).
+                agg_select.append(
+                    f"CASE WHEN COUNT(*) != COUNT({g_alias}.{isrc}__num) "
+                    f"THEN NULL ELSE {agg_name}({g_alias}.{isrc}__num) END "
+                    f"AS {agg_sn}__num")
+                # The winning row's TERM UUID, picked like the other companions:
+                # MIN/MAX return that term (§18.5.1), so the result keeps the
+                # input's term identity and a join on it compares terms. As a
+                # constant NULL it had none, and every join on a MIN/MAX fell back
+                # to comparing TEXT, matching terms that differ only in datatype
+                # or language (issue 307).
+                #
+                # Only with GROUP BY keys. A group then has at least one row, and
+                # the result is unbound only where the input is, which the join's
+                # structural check sees (`_all_required` over the group's input).
+                # An implicit group over NO rows yields one row with the result
+                # unbound, and nothing structural shows it: GROUP is not a gap to
+                # `_all_required`. Claiming identity there would also claim it
+                # always bound.
+                keep_identity = grouped and inp_info.has_term_identity()
+                for suffix in ("__uuid", "__bool", "__dt"):
+                    if suffix == "__uuid" and keep_identity:
+                        pick = _ordered_pick(g_alias, isrc,
+                                             f"{g_alias}.{isrc}__uuid", key)
+                        agg_select.append(f"{pick} AS {agg_sn}__uuid")
+                        continue
+                    _null = {"__uuid": "NULL::uuid",
+                             "__bool": "NULL::boolean",
+                             "__dt": "NULL::timestamp"}[suffix]
+                    agg_select.append(f"{_null} AS {agg_sn}{suffix}")
+                _minmax_companions = True
+
+        info = ctx.types.register_aggregate(agg_var, agg_name,
+                                             agg_sn, input_var)
+
+        if _minmax_companions:
+            info.type_col = f"{agg_sn}__type"
+            info.dt_col = f"{agg_sn}__datatype"
+            info.lang_col = f"{agg_sn}__lang"
+            info.num_col = f"{agg_sn}__num"
+            info._sql_has_companions = True
+        if keep_identity:
+            # A real term uuid, NULL exactly when the result is unbound: what
+            # `from_triple` means to every reader of it (joins, MINUS,
+            # DISTINCT, COUNT, deferred group keys).
+            inp_info = ctx.types.get(input_var)
+            info.uuid_col = f"{agg_sn}__uuid"
+            info.from_triple = True
+            info.text_materialized = inp_info.text_materialized
+
+        # For SAMPLE, override companions to reference aggregated cols
+        if agg_name == "SAMPLE" and input_var:
+            inp_info = ctx.types.get(input_var)
+            if inp_info and inp_info.sql_name:
+                info.type_col = f"{agg_sn}__type"
+                info.dt_col = f"{agg_sn}__datatype"
+                info.lang_col = f"{agg_sn}__lang"
+                info.num_col = f"{agg_sn}__num"
+                info._has_agg_companions = True
+                info._sql_has_companions = True
+
+        ctx.log("group", f"aggregate ?{agg_var} → {agg_sn} = "
+                f"{agg_name}({input_var}), lane={info.typed_lane}")
+    return agg_select
 
 
 def _emit_group_impl(plan: PlanV2, ctx: EmitContext) -> str:
@@ -123,120 +250,9 @@ def _emit_group_impl(plan: PlanV2, ctx: EmitContext) -> str:
     # Aggregate expressions
     agg_select = []
     for agg_var, agg_expr in (plan.aggregates or {}).items():
-        if isinstance(agg_expr, ExprAggregator):
-            agg_sql = _aggregate_to_sql(agg_expr, g_alias, ctx,
-                                         child_sql_names=child_sql_names)
-            # Allocate opaque SQL name for the aggregate result
-            agg_sn = ctx.types.allocate(agg_var)
-            agg_select.append(f"{agg_sql} AS {agg_sn}")
-
-            # Register aggregate in TypeRegistry with opaque SQL name
-            agg_name = (agg_expr.name or "").upper()
-            input_var = None
-            if isinstance(agg_expr.expr, ExprVar):
-                input_var = agg_expr.expr.var
-
-            # SAMPLE: also aggregate companion columns so type metadata
-            # is preserved through GROUP BY.  SAMPLE → MAX, so we use
-            # MAX on every companion from the input variable.
-            if agg_name == "SAMPLE" and input_var:
-                inp_info = ctx.types.get(input_var)
-                if inp_info and inp_info.sql_name:
-                    isrc = inp_info.sql_name
-                    _SAMPLE_SKIP = {"__uuid", "__bool", "__dt"}
-                    for suffix in COMPANION_SUFFIXES:
-                        if suffix in _SAMPLE_SKIP:
-                            _null = {"__uuid": "NULL",
-                                     "__bool": "NULL::boolean",
-                                     "__dt": "NULL::timestamp"}[suffix]
-                            agg_select.append(f"{_null} AS {agg_sn}{suffix}")
-                            continue
-                        src_col = f"{g_alias}.{isrc}{suffix}"
-                        agg_select.append(f"MAX({src_col}) AS {agg_sn}{suffix}")
-
-            # MIN/MAX: carry the winning row's companions, picked with the
-            # same ordering as the value so type metadata cannot come from a
-            # different row, plus a numerically-guarded __num lane.
-            _minmax_companions = False
-            keep_identity = False
-            if agg_name in ("MIN", "MAX") and input_var:
-                inp_info = ctx.types.get(input_var)
-                if inp_info and inp_info.sql_name:
-                    isrc = inp_info.sql_name
-                    key = sparql_order_key(
-                        g_alias, isrc, descending=(agg_name == "MAX"),
-                        collatable=not inp_info.typed_lane)
-                    for suffix in ("__type", "__lang", "__datatype"):
-                        pick = _ordered_pick(g_alias, isrc,
-                                             f"{g_alias}.{isrc}{suffix}", key)
-                        agg_select.append(f"{pick} AS {agg_sn}{suffix}")
-                    # SPARQL aggregate error semantics (§18.5): if any value
-                    # in the group is non-numeric, a *numeric* use of the
-                    # aggregate is an error. Without this, arithmetic over the
-                    # result casts the winning text to NUMERIC and aborts the
-                    # whole query on a blank node or string (issue 029).
-                    agg_select.append(
-                        f"CASE WHEN COUNT(*) != COUNT({g_alias}.{isrc}__num) "
-                        f"THEN NULL ELSE {agg_name}({g_alias}.{isrc}__num) END "
-                        f"AS {agg_sn}__num")
-                    # The winning row's TERM UUID, picked like the other companions:
-                    # MIN/MAX return that term (§18.5.1), so the result keeps the
-                    # input's term identity and a join on it compares terms. As a
-                    # constant NULL it had none, and every join on a MIN/MAX fell back
-                    # to comparing TEXT, matching terms that differ only in datatype
-                    # or language (issue 307).
-                    #
-                    # Only with GROUP BY keys. A group then has at least one row, and
-                    # the result is unbound only where the input is, which the join's
-                    # structural check sees (`_all_required` over the group's input).
-                    # An implicit group over NO rows yields one row with the result
-                    # unbound, and nothing structural shows it: GROUP is not a gap to
-                    # `_all_required`. Claiming identity there would also claim it
-                    # always bound.
-                    keep_identity = bool(plan.group_vars) and inp_info.has_term_identity()
-                    for suffix in ("__uuid", "__bool", "__dt"):
-                        if suffix == "__uuid" and keep_identity:
-                            pick = _ordered_pick(g_alias, isrc,
-                                                 f"{g_alias}.{isrc}__uuid", key)
-                            agg_select.append(f"{pick} AS {agg_sn}__uuid")
-                            continue
-                        _null = {"__uuid": "NULL::uuid",
-                                 "__bool": "NULL::boolean",
-                                 "__dt": "NULL::timestamp"}[suffix]
-                        agg_select.append(f"{_null} AS {agg_sn}{suffix}")
-                    _minmax_companions = True
-
-            info = ctx.types.register_aggregate(agg_var, agg_name,
-                                                 agg_sn, input_var)
-
-            if _minmax_companions:
-                info.type_col = f"{agg_sn}__type"
-                info.dt_col = f"{agg_sn}__datatype"
-                info.lang_col = f"{agg_sn}__lang"
-                info.num_col = f"{agg_sn}__num"
-                info._sql_has_companions = True
-            if keep_identity:
-                # A real term uuid, NULL exactly when the result is unbound: what
-                # `from_triple` means to every reader of it (joins, MINUS,
-                # DISTINCT, COUNT, deferred group keys).
-                inp_info = ctx.types.get(input_var)
-                info.uuid_col = f"{agg_sn}__uuid"
-                info.from_triple = True
-                info.text_materialized = inp_info.text_materialized
-
-            # For SAMPLE, override companions to reference aggregated cols
-            if agg_name == "SAMPLE" and input_var:
-                inp_info = ctx.types.get(input_var)
-                if inp_info and inp_info.sql_name:
-                    info.type_col = f"{agg_sn}__type"
-                    info.dt_col = f"{agg_sn}__datatype"
-                    info.lang_col = f"{agg_sn}__lang"
-                    info.num_col = f"{agg_sn}__num"
-                    info._has_agg_companions = True
-                    info._sql_has_companions = True
-
-            ctx.log("group", f"aggregate ?{agg_var} → {agg_sn} = "
-                    f"{agg_name}({input_var}), lane={info.typed_lane}")
+        agg_select.extend(aggregate_columns(agg_var, agg_expr, g_alias, ctx,
+                                            child_sql_names=child_sql_names,
+                                            grouped=bool(plan.group_vars)))
 
     all_select = gb_select + agg_select
     if not all_select:

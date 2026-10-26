@@ -201,8 +201,10 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
                 raise Unsupported("GROUP BY an expression")
             q.group_vars = [g.var for g in gv]
             for k, agg in (p.aggregates or {}).items():
-                if agg.name.upper() != "COUNT":
+                if agg.name.upper() not in ("COUNT", "SUM", "AVG", "MIN", "MAX", "SAMPLE", "GROUP_CONCAT"):
                     raise Unsupported(f"aggregate {agg.name}")
+                if agg.expr is not None and type(agg.expr).__name__ != "ExprVar":
+                    raise Unsupported("an aggregate over an expression (C3)")
                 q.aggregates[k] = agg
         elif p.kind == KIND_FILTER:
             q.having.extend(p.filter_exprs or [])
@@ -2441,16 +2443,48 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         if v not in r.bound:
             raise Unsupported(f"a FILTER reads ?{v}, which the plan does not bind")
         where.append(f"{r.bound[v]} <> '{u}'::uuid" if u else f"{r.bound[v]} IS NOT NULL")
-    if final_filters or computed:
+    # Aggregates other than COUNT, or a HAVING beyond `COUNT op integer`: the GROUP on
+    # the generator's own translation (`emit_group.aggregate_columns`), over a level
+    # exposing the value columns of every variable an aggregate reads
+    general = False
+    if q.group_vars is not None:
+        general = any(a.name.upper() != "COUNT" for a in q.aggregates.values())
+        if not general:
+            try:
+                [_having_sql(h, q, {ph: "x" for ph in q.aggregates}) for h in q.having]
+            except Unsupported:
+                general = True
+    ainputs = sorted({a.expr.var for a in q.aggregates.values()
+                      if a.expr is not None and a.name.upper() != "COUNT"}) if general else []
+    if final_filters or computed or ainputs:
         from dataclasses import replace as _replace
+        # An aggregate's input level needs no fence (that is for FILTERs: `_value_level`),
+        # and unfenced its term rows are read in the parallel workers (a06, SUM by type:
+        # 43,700 lookups serial above the Gather, 112 -> 180 ms); unfenced the term join
+        # is inner, so only when every aggregated variable is always bound.
+        agg_fence = bool(final_filters or computed) or any(v not in outer_vars_ for v in ainputs)
         inner = _value_level(_replace(reg, filters=final_filters), ctx, r, core, where, sorted(need),
-                             q.sub_distinct, pos.term_table, computed, out_computed)
+                             q.sub_distinct, pos.term_table, computed, out_computed,
+                             expose=ainputs, prefix="ag", fence=agg_fence)
     else:
         inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + ", ".join(keys) + "\nFROM " + core
                  + ("\nWHERE " + " AND ".join(where) if where else ""))
     level = inner
     out_keys = sorted(need) + out_computed
-    if q.group_vars is not None:
+    if general:
+        level, gctx = _general_group(q, ctx, inner, sorted(need), ainputs, final_filters)
+        out_keys = list(q.group_vars)
+        # The groups, sized (the keys' distinct values, at most the input rows): left to
+        # PostgreSQL the decode read the whole term table to hash-join 7 groups (a06)
+        ndv: Dict[str, float] = {}
+        for u in reg.units:
+            for v, n in _unit_ndv(u, reg.values, reg.bound).items():
+                ndv[v] = min(ndv.get(v, n), n)
+        groups = 1.0
+        for v in q.group_vars:
+            groups *= ndv.get(v, rows)
+        group_rows = max(1.0, min(groups, rows))
+    elif q.group_vars is not None:
         gk = [f"k_{v}" for v in q.group_vars]
         aggs = []
         for ph, agg in q.aggregates.items():
@@ -2481,7 +2515,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     # ORDER BY / LIMIT on the keys, values decoded after
     sort_joins, sort_cols = [], []
     for n, (v, d) in enumerate(q.order):
-        if v in agg_vars:
+        if v in agg_vars and general:
+            if q.aggregates[agg_vars[v]].name.upper() not in ("COUNT", "SUM", "AVG"):
+                raise Unsupported("ORDER BY a MIN / MAX / SAMPLE / GROUP_CONCAT result (C3)")
+            sort_cols.append((f"o.c_{v}__num", d))
+        elif v in agg_vars:
             sort_cols.append((f"o.a_{_ph(agg_vars[v])}", d))
         elif q.synth_order:
             # the generator's own stable-paging order is by the term's UUID: the same
@@ -2491,6 +2529,10 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             ts = f"s{n}"
             sort_joins.append(f"LEFT JOIN {pos.term_table} AS {ts} ON {ts}.term_uuid = o.k_{v}")
             sort_cols += [(f"{ts}.dt_val", d), (f"{ts}.num_val", d), (f"{ts}.term_text", d)]
+    if general and not late:
+        # on the aggregation itself (`g1`, `_general_group`): the levels around it are
+        # pulled up when nothing sorts them, so only it is sure to be a relation
+        sizes.append((float(group_rows), ["g1"]))
     topsel = ["o.*"] + [f"{c} AS sk{i}" for i, (c, _d) in enumerate(sort_cols)]
     top = f"SELECT {', '.join(topsel)}\nFROM ({level}) AS o\n" + "\n".join(sort_joins)
     if sort_cols:
@@ -2535,6 +2577,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         sn = names.get(v)
         if sn is None:
             raise Unsupported(f"no SQL name for ?{v}")
+        if v in agg_vars and general:
+            # the generator's companions for the aggregate result (`_general_group`)
+            from .sql_type_generation import COMPANION_SUFFIXES as _CS
+            cols += [f"top.c_{v}{suf} AS {sn}{suf}" for suf in ("",) + _CS]
+            continue
         if v in agg_vars:
             a = f"top.a_{_ph(agg_vars[v])}"
             cols += [f"{a} AS {sn}", f"'L' AS {sn}__type", f"NULL::uuid AS {sn}__uuid",
@@ -2755,6 +2802,72 @@ def _base_sizes(reg: Region) -> List[Tuple[float, List[str]]]:
 
 def _ph(ph: str) -> str:
     return ph.strip(".").replace(".", "_") or "0"
+
+
+def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str],
+                   filters: List[Any]) -> Tuple[str, Any]:
+    """GROUP BY with any aggregate, on the generator's translation: the aggregates
+    and their companions by `emit_group.aggregate_columns` (one translator), each
+    result then given its eight output columns as the generator's EXTEND gives them
+    (`infer_expr_type(?.n).produce_companions`), as `c_<var>`; HAVING by `ebv_sql`
+    over the same registry. COUNT stays on keys (`k_<var>`, a term uuid)."""
+    from types import SimpleNamespace
+    from ..jena_sparql.jena_types import ExprVar
+    from .emit_expressions import ebv_sql, expr_to_sql
+    from .emit_extend import _patch_concat_companions, _patch_strafter_strbefore_companions
+    from .emit_group import aggregate_columns
+    from .sql_type_generation import ColumnInfo, TypeRegistry, infer_expr_type
+    fv_order = sorted(set().union(*(_expr_vars(f) for f in filters)) | set(ainputs))
+    types = TypeRegistry(aliases=ctx.aliases)
+    for v in ainputs:
+        types.register(ColumnInfo.simple_output(v, f"ag{fv_order.index(v)}", from_triple=True))
+    gctx = ctx.child(types=types)
+    cols = [f"g0.k_{v} AS k_{v}" for v in q.group_vars]
+    for ph, agg in q.aggregates.items():
+        if agg.name.upper() == "COUNT":
+            sql_ = ("COUNT(*)" if agg.expr is None else
+                    f"COUNT({'DISTINCT ' if agg.distinct else ''}g0.k_{agg.expr.var})")
+            sn = types.allocate(ph)
+            cols.append(f"{sql_} AS {sn}")
+            types.register_aggregate(ph, "COUNT", sn, None)
+        else:
+            cols += aggregate_columns(ph, agg, "g0", gctx, child_sql_names=[f"k_{v}" for v in need],
+                                      grouped=bool(q.group_vars))
+    level = (f"SELECT {', '.join(cols)}\nFROM ({inner}) AS g0"
+             + (f"\nGROUP BY {', '.join(f'g0.k_{v}' for v in q.group_vars)}" if q.group_vars else ""))
+    before = len(getattr(gctx, "_unresolved_vars", None) or [])
+    scope = set(q.aggregates) | set(q.group_vars)
+    res = []
+    from .sql_type_generation import COMPANION_SUFFIXES
+    for v, ph in sorted(q.extend.items()):
+        e = ExprVar(var=ph)
+        info = gctx.types.get(ph)
+        if info is not None and info.sql_name and info._sql_has_companions:
+            # MIN / MAX / SAMPLE carry the winning row's companions: passed through, as
+            # emit_extend copies them (re-inferred, the type and __num were lost)
+            res += [f"{info.sql_name} AS c_{v}"] + [f"{info.sql_name}{s} AS c_{v}{s}" for s in COMPANION_SUFFIXES]
+            continue
+        with gctx.expression_scope(scope):
+            sql_e = expr_to_sql(e, gctx)
+        if not sql_e:
+            raise Unsupported(f"an aggregate result the translator does not support: {ph}")
+        typed = infer_expr_type(e, gctx.types)
+        ns = SimpleNamespace(extend_expr=e, extend_var=v)
+        _patch_strafter_strbefore_companions(ns, gctx, typed)
+        _patch_concat_companions(ns, gctx, typed)
+        res += typed.produce_companions(f"c_{v}", sql_e)
+    conds = []
+    with gctx.expression_scope(scope):
+        for h in q.having:
+            c = ebv_sql(h, gctx)
+            if not c:
+                raise Unsupported(f"a HAVING the translator does not support: {type(h).__name__}")
+            conds.append(f"({c})")
+    if len(getattr(gctx, "_unresolved_vars", None) or []) > before:
+        raise Unsupported("an aggregate or HAVING reads a variable the group does not provide")
+    level = (f"SELECT g1.*" + "".join(f", {c}" for c in res) + f"\nFROM ({level}) AS g1"
+             + ("\nWHERE " + " AND ".join(conds) if conds else ""))
+    return level, gctx
 
 
 def _having_sql(h, q: Query, agg_sql: Dict[str, str]) -> str:
