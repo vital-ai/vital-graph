@@ -303,6 +303,36 @@ def _analyze_subselect(p, ctx, exclude: frozenset) -> Query:
     return q
 
 
+def _grouped_subselect(p) -> bool:
+    """PROJECT, EXTENDs of aggregates, then GROUP: the grouped MIN / MAX form."""
+    p = p.children[0]
+    while p.kind == KIND_EXTEND:
+        p = p.children[0]
+    return p.kind == KIND_GROUP
+
+
+def _subsel_leaf(p, ctx, exclude: frozenset) -> Leaf:
+    """A sub-SELECT inside the pattern with its own modifiers (`{ SELECT DISTINCT ?s
+    ?k WHERE { ... } ORDER BY ?k LIMIT 50 } ?s ?p ?o`): its query analysed and
+    planned whole (`analyze`), rendered up to its page as KEYS (`render(...,
+    keys_only=True)`), a column k_<var> per projected variable. A leaf like a
+    grouped sub-SELECT (kind "subq": a derived table, never probed into, its size
+    not sampled), flagged `general`."""
+    inner = analyze(p, ctx, exclude)
+    if not inner.project:
+        raise Unsupported("a sub-SELECT * inside the pattern")
+    if set(inner.project) & (set(inner.extend) | {v for v, _e in inner.binds}):
+        raise Unsupported("a sub-SELECT projecting a computed value or an aggregate (C3)")
+    first = min((l.alias for u in inner.region.units for l in u.leaves), default="x")
+    leaf = Leaf(alias=f"ss_{first}", kind="subq", pred=None, s_var=None, o_var=None,
+                s_const=None, o_const=None, scan=Est(None, "subq"), pred_rows=None,
+                pred_objects=None, o_vars=[(f"k_{v}", v) for v in inner.project])
+    leaf.sub = inner
+    leaf.general = True
+    _subq_price(leaf)
+    return leaf
+
+
 def _subq_leaf(p, ctx, exclude: frozenset) -> Leaf:
     """The sub-SELECT as one leaf of the outer pattern: alias `sq_<first alias
     inside>` (unique in the statement), one row per group, a column k_<var> per
@@ -323,6 +353,14 @@ def _subq_price(leaf: Leaf) -> None:
     the inner plan plus hashing its rows into groups."""
     inner = leaf.sub
     tree = search(inner.region)
+    if getattr(leaf, "general", False):
+        # its page: the pattern's rows, at most the LIMIT; cost: the plan and the sort
+        rows = tree.rows if inner.limit is None else min(tree.rows, float(inner.limit))
+        rows = max(1.0, rows)
+        leaf.scan = Est(rows, "subq")
+        leaf.col_ndv = {c: rows for c, _v in leaf.o_vars}
+        leaf.sub_cost = tree.cost + (tree.rows * W["scan_row"] if inner.order else 0.0)
+        return
     ndv: Dict[str, float] = {}
     for u in inner.region.units:
         for v, n in _unit_ndv(u, inner.region.values, inner.region.bound).items():
@@ -517,9 +555,13 @@ def _collect(p, ctx, aliases, parts, outer_vars):
         if _expr_has_exists(p.extend_expr):
             raise Unsupported("BIND with EXISTS (C2)")
         parts["binds"].append((p.extend_var, p.extend_expr))
-    elif p.kind == KIND_PROJECT:
+    elif p.kind == KIND_PROJECT and _grouped_subselect(p):
         # a grouped sub-SELECT joined into the pattern: one leaf, its own plan
         parts["leaves"].append(_subq_leaf(p, parts["ctx"], parts["exclude"]))
+    elif p.kind in (KIND_PROJECT, KIND_SLICE, KIND_DISTINCT, KIND_REDUCED, KIND_ORDER):
+        # any other sub-SELECT (its own DISTINCT, ORDER, LIMIT): a leaf whose query is
+        # planned and rendered as a whole, up to its page, as keys (`_subsel_leaf`)
+        parts["leaves"].append(_subsel_leaf(p, parts["ctx"], parts["exclude"]))
     elif p.kind == KIND_UNION:
         parts["leaves"].append(_union_leaf(p, ctx, aliases, parts, outer_vars))
     else:
@@ -1869,6 +1911,18 @@ class _SubSql:
 
 
 def _render_subq(leaf: Leaf, ctx, term_table: str) -> _SubSql:
+    if getattr(leaf, "general", False):
+        s = render(leaf.sub, {}, ctx, keys_only=True)
+        q = leaf.sub
+        if q.limit is None and not q.offset and not q.order and not q.distinct and q.group_vars is None:
+            # a plain projection is a simple sub-query PostgreSQL pulls up, and the advice
+            # naming it would match nothing (W3C sq09, sq13): kept one relation
+            s.sql = f"SELECT * FROM ({s.sql}) AS sf OFFSET 0"
+        return s
+    return _render_grouped_subq(leaf, ctx, term_table)
+
+
+def _render_grouped_subq(leaf: Leaf, ctx, term_table: str) -> _SubSql:
     """A sub-SELECT leaf's own SQL, keys only: one row per group, a column
     k_<var> per projected variable (a term uuid). MIN / MAX pick the term that
     sorts first under SPARQL's ordering exactly as today's SQL does
@@ -2146,7 +2200,11 @@ def _negation_sql(anti: "Anti", outer: Dict[str, str], certain: Set[str], rows: 
     return f"{kw} ({bsql_full})"
 
 
-def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = None) -> Rendered:
+def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = None,
+           keys_only: bool = False):
+    """The query's SQL and advice. `keys_only`: a sub-SELECT inside a pattern, its
+    page as keys (k_<var>), with its advice items as a `_SubSql` for the outer query
+    to merge, no decode."""
     from .generator import substitute_constants
     reg = q.region
     pos = _pos_of(reg)
@@ -2602,6 +2660,15 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             top += f"\nLIMIT {q.limit}"
         if q.offset:
             top += f" OFFSET {q.offset}"
+    if keys_only:
+        if [v for v in (q.project or []) if v not in out_keys or v in agg_vars or v in cvars]:
+            raise Unsupported("a sub-SELECT projects a variable its page does not carry as a key")
+        for opt in reg.optionals:
+            base_sizes += _base_sizes(opt)
+        for anti in reg.antis:
+            base_sizes += _base_sizes(anti.region)
+        return _SubSql(sql=top, sizes=sizes, units_adv=units_adv, methods=methods, poses=poses,
+                       base_sizes=base_sizes)
     # decode, in the executor's column contract
     from .emit_bgp import (_BOOLEAN_DT, _DATETIME_DATATYPES, _NUMERIC_DATATYPES,
                            _NUMERIC_DT_SQL_LIST)
