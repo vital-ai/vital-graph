@@ -28,14 +28,13 @@ import pytest_asyncio
 
 from rdflib import URIRef
 
-from .conftest import skip_no_infra, TEST_SPACE_PREFIX
+from .conftest import skip_no_infra, TEST_SPACE_PREFIX, SIDECAR_URL as SIDECAR
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
 
 NEXT = "urn:rec:next"
 GRAPH = "urn:rec:g"
-SIDECAR = "http://localhost:7071"
 STAR = f'SELECT ?n WHERE {{ GRAPH <{GRAPH}> {{ <urn:rec:START> <{NEXT}>* ?n }} }}'
 
 

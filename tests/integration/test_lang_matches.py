@@ -32,13 +32,12 @@ import pytest_asyncio
 
 from rdflib import Literal, URIRef
 
-from .conftest import skip_no_infra, TEST_SPACE_PREFIX
+from .conftest import skip_no_infra, TEST_SPACE_PREFIX, SIDECAR_URL as SIDECAR
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
 
 G = "urn:lm:g"
-SIDECAR = "http://localhost:7071"
 
 
 async def _ask(space_impl, space, expr):

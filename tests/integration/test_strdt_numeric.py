@@ -28,12 +28,11 @@ import pytest_asyncio
 
 from rdflib import XSD
 
-from .conftest import skip_no_infra, TEST_SPACE_PREFIX
+from .conftest import skip_no_infra, TEST_SPACE_PREFIX, SIDECAR_URL as SIDECAR
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
 
-SIDECAR = "http://localhost:7071"
 INT = str(XSD.integer)
 DBL = str(XSD.double)
 STR = str(XSD.string)

@@ -24,14 +24,13 @@ from rdflib import Literal, URIRef
 
 from vitalgraph.db.sparql_sql.default_graph import DEFAULT_GRAPH_URI
 
-from .conftest import skip_no_infra, TEST_SPACE_PREFIX
+from .conftest import skip_no_infra, TEST_SPACE_PREFIX, SIDECAR_URL as SIDECAR
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
 
 NAMED = "urn:dg:named"
 P = "urn:dg:p"
-SIDECAR = "http://localhost:7071"
 
 
 @pytest_asyncio.fixture(loop_scope="session")

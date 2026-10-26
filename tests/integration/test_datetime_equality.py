@@ -31,14 +31,13 @@ import pytest_asyncio
 
 from rdflib import Literal, URIRef, XSD
 
-from .conftest import skip_no_infra, TEST_SPACE_PREFIX
+from .conftest import skip_no_infra, TEST_SPACE_PREFIX, SIDECAR_URL as SIDECAR
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
               pytest.mark.asyncio(loop_scope="session")]
 
 G = "urn:dtq:g"
 DT = str(XSD.dateTime)
-SIDECAR = "http://localhost:7071"
 
 
 @pytest_asyncio.fixture(loop_scope="session")
