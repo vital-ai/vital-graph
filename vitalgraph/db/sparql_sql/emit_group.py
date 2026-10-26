@@ -214,6 +214,14 @@ def _emit_group_impl(plan: PlanV2, ctx: EmitContext) -> str:
                 for suffix in COMPANION_SUFFIXES:
                     if suffix in typed._companion_overrides:
                         gb_cols.append(typed._companion_overrides[suffix])
+            # A language or datatype read from the input's column (SUBSTR, UCASE, ...
+            # keep their argument's language tag): grouped too, or PostgreSQL refuses
+            # the statement (`g0.v1__lang must appear in the GROUP BY`), and "a"@en
+            # and "a" are different terms, so different groups (issues/314).
+            if typed.lang_is_sql and typed.lang:
+                gb_cols.append(typed.lang)
+            if typed.datatype_is_sql and typed.datatype:
+                gb_cols.append(typed.datatype)
         else:
             # Simple variable group key: passthrough from child
             child_info = ctx.types.get(var)
