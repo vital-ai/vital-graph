@@ -93,6 +93,8 @@ class Region:
     # leaf alias as the IR names it -> as this region renders it: a UNION branch whose
     # patterns another branch also holds under the same aliases (`_union_leaf`)
     rename: Dict[str, str] = field(default_factory=dict)
+    # VALUES tables holding UNDEF, joined after the joins on compatibility (render)
+    undef_tables: List[Leaf] = field(default_factory=list)
     # an OPTIONAL's own FILTER: `A OPTIONAL { P FILTER(F) }` is LeftJoin(A, P, F), F
     # reading both sides, in the LEFT JOIN's condition (a row of A whose P rows all
     # fail F stays, unextended)
@@ -471,7 +473,7 @@ def _is_having(p, q) -> bool:
 
 def _region(p, ctx, aliases, outer_vars: Set[str], exclude: frozenset = frozenset()) -> Region:
     parts = {"leaves": [], "values": {}, "plans": [], "optionals": [], "antis": [], "exclude": exclude, "ctx": ctx,
-             "filters": [], "iri_ne": [], "binds": [], "opt_left": []}
+             "filters": [], "iri_ne": [], "binds": [], "opt_left": [], "undef_tables": []}
     _collect(p, ctx, aliases, parts, outer_vars)
     r = _build_region(parts, ctx, aliases)
     return r
@@ -502,6 +504,10 @@ def _collect(p, ctx, aliases, parts, outer_vars):
             _collect(c, ctx, aliases, parts, outer_vars)
     elif p.kind == KIND_TABLE and not p.values_vars and len(p.values_rows or []) == 1:
         pass                    # `{}`: one row binding nothing, the join's identity
+    elif p.kind == KIND_TABLE and _has_undef(p):
+        # VALUES with UNDEF: a cell compatible with any value. Joined after the
+        # pattern's joins on `(vt.k_v IS NULL OR vt.k_v = <v>)` (render), not a leaf
+        parts["undef_tables"].append(_vtable_leaf(p, aliases, parts, allow_undef=True))
     elif p.kind == KIND_TABLE and len(p.values_vars or []) > 1 and len(p.values_rows or []) == 1:
         # one row: a pin per variable. As a table PostgreSQL folds it into constants
         # and the joins the advice names are gone.
@@ -761,36 +767,49 @@ def _path_leaf(p, parts) -> Leaf:
     return leaf
 
 
-def _vtable_leaf(p, aliases, parts, vars_=None, rows=None) -> Leaf:
+def _has_undef(p) -> bool:
+    vs = p.values_vars or []
+    return any(row.get(v) is None for row in (p.values_rows or []) for v in vs)
+
+
+def _vtable_leaf(p, aliases, parts, vars_=None, rows=None, allow_undef: bool = False) -> Leaf:
     """VALUES with several variables (or one no pattern holds) as a leaf of its own:
     an inline table of term uuids, keys only, one column `k_<v>` per variable, its
     rows the VALUES rows and each column's distinct values exact. Never probed into
     (no index). A row with a term the term table does not hold matches nothing in
-    an inner join and is dropped; none left is the generator's empty path. UNDEF
-    (compatible with anything) is not modelled yet."""
+    an inner join and is dropped; none left is the generator's empty path.
+    `allow_undef`: an UNDEF cell is `_UNDEF` (NULL in the SQL), for a table render
+    joins on compatibility (`Region.undef_tables`); `vt_absent` names the variables
+    of the dropped rows."""
     vars_ = vars_ if vars_ is not None else list(p.values_vars or [])
     if not vars_:
         raise Unsupported("VALUES with no variable")
     cols = getattr(aliases, "constants", None) or {}
     resolved = getattr(aliases, "resolved_constants", None) or {}
     out = []
+    absent: Set[str] = set()        # variables of a row dropped for a term not stored
     for row in (rows if rows is not None else (p.values_rows or [])):
         vals = []
         for v in vars_:
             node = row.get(v) if isinstance(row, dict) else row[vars_.index(v)]
             if node is None:
-                raise Unsupported("VALUES with UNDEF")
+                if not allow_undef:
+                    raise Unsupported("VALUES with UNDEF")
+                vals.append(_UNDEF)
+                continue
             if isinstance(node, str):
                 vals.append(node)
                 continue
             col = cols.get(_term_key(node))
             vals.append(resolved.get(col) if col else None)
+            if vals[-1] is None:
+                absent.add(v)
         if all(u is not None for u in vals):
             out.append(vals)
     if not out:
         raise Unsupported("VALUES matches no stored term (today's provably-empty path handles it)")
     alias = "vt_" + "_".join(re.sub(r"\W", "", v) for v in vars_)[:30]
-    taken = {l.alias for l in parts["leaves"]}
+    taken = {l.alias for l in parts["leaves"]} | {l.alias for l in parts.get("undef_tables", [])}
     while alias in taken:
         alias += "x"
     leaf = Leaf(alias=alias, kind="vtable", pred=None, s_var=None, o_var=None, s_const=None,
@@ -799,12 +818,17 @@ def _vtable_leaf(p, aliases, parts, vars_=None, rows=None) -> Leaf:
                 col_ndv={f"k_{v}": float(len({r_[i] for r_ in out})) for i, v in enumerate(vars_)})
     leaf.sub = (vars_, out)
     leaf.sub_cost = 0.01 * len(out)
+    leaf.vt_absent = absent
     return leaf
+
+
+_UNDEF = "UNDEF"          # a VALUES cell left unbound (rendered NULL)
 
 
 def _vtable_sql(leaf: Leaf) -> str:
     vars_, rows = leaf.sub
-    body = ", ".join("(" + ", ".join(f"'{u}'::uuid" for u in r_) + ")" for r_ in rows)
+    body = ", ".join("(" + ", ".join("NULL::uuid" if u is _UNDEF else f"'{u}'::uuid" for u in r_) + ")"
+                     for r_ in rows)
     return f"(SELECT * FROM (VALUES {body}) AS v({', '.join(f'k_{v}' for v in vars_)}))"
 
 
@@ -965,7 +989,8 @@ def _build_region(parts, ctx, aliases) -> Region:
             raise Unsupported("a BIND's variable is joined by a pattern")
     return Region(units=units, edges=edges, values=values, plans=parts["plans"],
                   aliases=aliases, optionals=parts["optionals"], antis=parts["antis"],
-                  filters=parts.get("filters", []), iri_ne=parts.get("iri_ne", []), binds=binds)
+                  filters=parts.get("filters", []), iri_ne=parts.get("iri_ne", []), binds=binds,
+                  undef_tables=list(parts.get("undef_tables", [])))
 
 
 def _conjuncts(e) -> List[Any]:
@@ -2458,7 +2483,16 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             # (W3C "Nested Optionals - 1": the inner OPTIONAL binds ?v, so the outer row
             # is incompatible; dropped, the join found no shared variable)
             raise Unsupported("an OPTIONAL with its own OPTIONAL or negation")
+        if o.undef_tables:
+            raise Unsupported("VALUES with UNDEF inside an OPTIONAL")
+    if reg.undef_tables and not reg.units:
+        raise Unsupported("VALUES with UNDEF and no pattern to join it to")
+    if maybe_vars & {v for ut in reg.undef_tables for v in ut.sub[0]}:
+        # a NULL on the pattern's side is compatible too; `IS NULL OR =` reads only the table's
+        raise Unsupported("VALUES with UNDEF on a variable a UNION branch leaves unbound")
     for a in reg.antis:
+        if a.region.undef_tables:
+            raise Unsupported("VALUES with UNDEF inside a NOT EXISTS / MINUS body")
         if a.region.binds:
             raise Unsupported("a BIND inside a NOT EXISTS / MINUS body")
         if a.region.optionals:
@@ -2472,6 +2506,35 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     units_adv = list(r.units_advice)
     methods = list(r.methods)
     rows = tree.rows
+    # VALUES with UNDEF: joined now, after the joins, each shared variable compatible
+    # (`IS NULL OR =`): a solution compatible with two rows appears twice, as SPARQL
+    # joins it. A variable only the table binds is unbound where UNDEF: read anywhere
+    # but the projection, declined.
+    table_only: Set[str] = set()
+    for ut in reg.undef_tables:
+        conds = []
+        for v in ut.sub[0]:
+            if v in table_only:
+                # bound by an earlier table, maybe UNDEF there: compatible both ways
+                raise Unsupported("two VALUES with UNDEF share a variable no pattern binds")
+            if v in r.bound:
+                conds.append(f"({ut.alias}.k_{v} IS NULL OR {ut.alias}.k_{v} = {r.bound[v]})")
+            else:
+                reads = set(reg.values) | set().union(*(_expr_vars(f) for f in reg.filters),
+                                                       *(_expr_vars(e) for _v, e in reg.binds))
+                for o in reg.optionals:
+                    reads |= _region_all_vars(o)
+                for a_ in reg.antis:
+                    reads |= _region_all_vars(a_.region)
+                if v in reads or v in {x for x, _d in q.order}:
+                    raise Unsupported("a VALUES variable left UNDEF is read outside its table")
+                if v in getattr(ut, "vt_absent", ()):
+                    # a term not stored still binds a variable only the table binds:
+                    # the row is in the answer, not dropped
+                    raise Unsupported("VALUES binds a variable no pattern joins to a term not stored")
+                r.bound[v] = f"{ut.alias}.k_{v}"
+                table_only.add(v)
+        core = f"({core}\n JOIN {_vtable_sql(ut)} AS {ut.alias} ON " + " AND ".join(conds or ["TRUE"]) + ")"
     out_rows, out_ndv = tree.rows, dict(tree.ndv)     # for the decode (`_dedup_decode`)
     anti_notes: List[str] = []
     late = _late_optional_ok(q, reg, r)
