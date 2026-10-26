@@ -93,6 +93,10 @@ class Region:
     # leaf alias as the IR names it -> as this region renders it: a UNION branch whose
     # patterns another branch also holds under the same aliases (`_union_leaf`)
     rename: Dict[str, str] = field(default_factory=dict)
+    # an OPTIONAL's own FILTER: `A OPTIONAL { P FILTER(F) }` is LeftJoin(A, P, F), F
+    # reading both sides, in the LEFT JOIN's condition (a row of A whose P rows all
+    # fail F stays, unextended)
+    lj_filters: List[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -421,12 +425,18 @@ def _collect(p, ctx, aliases, parts, outer_vars):
             raise Unsupported(f"two VALUES pins on ?{v}")
         parts["values"][v] = uuids
     elif p.kind == KIND_LEFT_JOIN:
-        if p.left_join_exprs:
-            raise Unsupported("OPTIONAL with a FILTER inside")
         _collect(p.children[0], ctx, aliases, parts, outer_vars)
         from .var_scope import compute_scope
-        parts["optionals"].append(_region(p.children[1], ctx, aliases, outer_vars))
-        parts["opt_left"].append(set(compute_scope(p.children[0]).all_visible))
+        opt = _region(p.children[1], ctx, aliases, outer_vars)
+        left = set(compute_scope(p.children[0]).all_visible)
+        for e in p.left_join_exprs or []:
+            if _expr_has_exists(e):
+                raise Unsupported("an OPTIONAL's FILTER with EXISTS")
+            if _expr_vars(e) - left - region_vars(opt):
+                raise Unsupported("an OPTIONAL's FILTER reads a variable neither side binds")
+            opt.lj_filters.extend(_conjuncts(e))
+        parts["optionals"].append(opt)
+        parts["opt_left"].append(left)
     elif p.kind == KIND_FILTER:
         _collect(p.children[0], ctx, aliases, parts, outer_vars)
         for e in p.filter_exprs or []:
@@ -852,7 +862,8 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
                  distinct: bool, term_table: str, computed: List[Tuple[str, Any]],
                  out_computed: List[str], fence: bool = True,
                  outer_refs: Optional[Dict[str, str]] = None, extra_filters: Optional[List[Any]] = None,
-                 top_where: Optional[List[str]] = None) -> str:
+                 top_where: Optional[List[str]] = None, expose: Optional[List[str]] = None,
+                 prefix: str = "fv", core_alias: str = "cq") -> str:
     """The region's rows with its BINDs computed and its FILTERs applied, as a level
     of keys (`k_<v>`, term uuids) plus the computed variables' companion columns
     (`c_<v>`, `c_<v>__type`, ...) for `out_computed`.
@@ -891,37 +902,38 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
     cvars = {v for v, _e in computed}
     outer_refs = outer_refs or {}
     extra_filters = extra_filters or []
+    expose = list(expose or [])
     read = set().union(*(_expr_vars(e) for e in list(reg.filters) + extra_filters),
                        *(_expr_vars(e) for _v, e in computed)) - cvars - set(outer_refs)
-    fvars = sorted(read)
+    fvars = sorted(read | set(expose))
     for v in fvars:
         if v not in r.bound:
             raise Unsupported(f"an expression reads ?{v}, which the plan does not bind")
     bind_vars = sorted(set(need) | set(fvars))
     core_level = ("SELECT " + (", ".join(f"{r.bound[v]} AS b_{v}" for v in bind_vars) or "1 AS one")
                   + "\nFROM " + core + ("\nWHERE " + " AND ".join(where) if where else "") + ("\nOFFSET 0" if fence else ""))
-    cols = [f"cq.b_{v} AS k_{v}" for v in need]
+    cols = [f"{core_alias}.b_{v} AS k_{v}" for v in need]
     joins = []
     types = TypeRegistry(aliases=ctx.aliases)
     for i, v in enumerate(fvars):
-        sn, t = f"fv{i}", f"tf{i}"
+        sn, t = f"{prefix}{i}", f"t{prefix}{i}"
         # Unfenced (a negation body, where every variable is bound: bodies with an
         # OPTIONAL decline), an inner join: a FILTER's CASE is not strict, so a LEFT
         # JOIN stays one and PostgreSQL cannot memoize the lookup (n03: 10,000 term
         # probes against today's 3,494 memoized)
-        joins.append(f"{'LEFT JOIN' if fence else 'JOIN'} {term_table} AS {t} ON {t}.term_uuid = cq.b_{v}")
+        joins.append(f"{'LEFT JOIN' if fence else 'JOIN'} {term_table} AS {t} ON {t}.term_uuid = {core_alias}.b_{v}")
         tc = TypeRegistry.term_table_columns(
             sn, t, "FSUB", _NUMERIC_DT_SQL_LIST, dt_case_sql=ctx.dt_case_expr(t),
             numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
             boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
             datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))
-        cols += [c.replace(f"FSUB.{sn}__uuid", f"cq.b_{v}") for c in tc]
+        cols += [c.replace(f"FSUB.{sn}__uuid", f"{core_alias}.b_{v}") for c in tc]
         types.register(ColumnInfo.simple_output(v, sn, from_triple=True))
     for v, sn in sorted(outer_refs.items()):
         types.register(ColumnInfo.simple_output(v, sn, from_triple=True))
     fctx = ctx.child(types=types)
     before = len(getattr(fctx, "_unresolved_vars", None) or [])
-    level = ("SELECT " + (", ".join(cols) or "1 AS one") + f"\nFROM ({core_level}) AS cq"
+    level = ("SELECT " + (", ".join(cols) or "1 AS one") + f"\nFROM ({core_level}) AS {core_alias}"
              + ("\n" + "\n".join(joins) if joins else ""))
     # BINDs, in order: each a level adding its companion columns (a later one may read it)
     visible = set(fvars)
@@ -950,6 +962,7 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
     if len(getattr(fctx, "_unresolved_vars", None) or []) > before:
         raise Unsupported("an expression reads a variable the value columns do not provide")
     out = [f"k_{v}" for v in need] + [f"c_{v}{suf}" for v in out_computed for suf in ("",) + COMPANION_SUFFIXES]
+    out += [f"{prefix}{fvars.index(v)}{suf}" for v in expose for suf in ("",) + COMPANION_SUFFIXES]
     conds = list(top_where or []) + conds
     return ("SELECT " + ("DISTINCT " if distinct else "") + (", ".join(out) or "1 AS one")
             + f"\nFROM ({level}) AS fl" + ("\nWHERE " + " AND ".join(conds) if conds else ""))
@@ -1963,6 +1976,41 @@ def _render_union(leaf: Leaf, ctx, term_table: str) -> _SubSql:
     return _SubSql(sql=sql, sizes=sizes, units_adv=units_adv, methods=methods, poses=poses, base_sizes=base)
 
 
+def _outer_values(core: str, where: List[str], r: "_R", vars_: List[str], term_table: str, ctx,
+                  ocols: Dict[str, str], fence: bool = False) -> Tuple[str, List[str], str]:
+    """The joined rows as a level carrying, besides every bound variable's key, the
+    VALUE columns of `vars_` (their term rows, under the generator's companion names
+    `nv<i>`, recorded in `ocols`): what a negation body's or an OPTIONAL's FILTER
+    reads of the outer row by name. Re-points `r.bound` at the level's keys.
+    `fence` keeps the level one relation (PostgreSQL would pull it up), for advice
+    that names a join with it (an OPTIONAL's LEFT JOIN)."""
+    from .emit_bgp import _BOOLEAN_DT, _DATETIME_DATATYPES, _NUMERIC_DATATYPES, _NUMERIC_DT_SQL_LIST
+    from .sql_type_generation import TypeRegistry
+    lvl = f"nx{len(ocols)}"
+    sel = [f"{c} AS b_{v}" for v, c in sorted(r.bound.items())]
+    tj = []
+    for v in vars_:
+        j = len(ocols)
+        sn, t = f"nv{j}", f"nt{j}"
+        tj.append(f"LEFT JOIN {term_table} AS {t} ON {t}.term_uuid = {r.bound[v]}")
+        sel += [c.replace(f"NSUB.{sn}__uuid", f"{t}.term_uuid") for c in TypeRegistry.term_table_columns(
+            sn, t, "NSUB", _NUMERIC_DT_SQL_LIST, dt_case_sql=ctx.dt_case_expr(t),
+            numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
+            boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
+            datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))]
+        ocols[v] = sn
+    # the earlier levels' value columns ride along
+    for v, sn in sorted(ocols.items()):
+        if v not in vars_:
+            from .sql_type_generation import COMPANION_SUFFIXES
+            sel += [f"{sn}{suf}" for suf in ("",) + COMPANION_SUFFIXES]
+    core = (f"(SELECT {', '.join(sel)}\nFROM {core}\n" + "\n".join(tj)
+            + ("\nWHERE " + " AND ".join(where) if where else "") + ("\nOFFSET 0" if fence else "")
+            + f") AS {lvl}")
+    r.bound = {v: f"{lvl}.b_{v}" for v in r.bound}
+    return core, [], lvl
+
+
 def _needs_outer_values(anti: "Anti", outer: Set[str], iri: Set[str]) -> bool:
     """Whether a (NOT) EXISTS FILTER reading the outer row needs VALUES (anything but
     an IRI equality, which keys answer)."""
@@ -2105,9 +2153,15 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # unbound sorts first in SPARQL; a NULL key sorts last here
         raise Unsupported("ORDER BY a variable a UNION branch leaves unbound")
     outer_vars_ = region_vars(reg)
+    ocols: Dict[str, str] = {}          # outer variable -> its value columns' name (`_outer_values`)
     for o in reg.optionals:
-        if o.filters or o.iri_ne or o.binds:
-            raise Unsupported("a FILTER or BIND inside an OPTIONAL (C2)")
+        if o.binds:
+            raise Unsupported("a BIND inside an OPTIONAL")
+        if o.optionals or o.antis:
+            # not rendered: an OPTIONAL's own OPTIONALs and negations would be dropped
+            # (W3C "Nested Optionals - 1": the inner OPTIONAL binds ?v, so the outer row
+            # is incompatible; dropped, the join found no shared variable)
+            raise Unsupported("an OPTIONAL with its own OPTIONAL or negation")
     for a in reg.antis:
         if a.region.binds:
             raise Unsupported("a BIND inside a NOT EXISTS / MINUS body")
@@ -2125,6 +2179,24 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     anti_notes: List[str] = []
     late = _late_optional_ok(q, reg, r)
     late_opts: List[Tuple[str, List[str], "_R", List[str], int]] = []   # (LATERAL sql, page join columns, its _R, its projected vars, index)
+    # A FILTER reading only variables the required part always binds commutes with the
+    # LEFT JOINs (Filter(LeftJoin(A, B), F) = LeftJoin(Filter(A, F), B)): applied
+    # before the OPTIONALs, on the required rows only. After them it read every row's
+    # value columns first: o02 (a name prefix, then an OPTIONAL) 31 -> 40 ms.
+    final_filters = list(reg.filters)
+    early = [f for f in reg.filters if _expr_vars(f) <= (outer_vars_ | set(reg.values))]
+    if reg.optionals and early and not late:
+        from dataclasses import replace as _replace
+        keep = sorted(r.bound)
+        nfv = len(set().union(*(_expr_vars(f) for f in early)))
+        lvl = _value_level(_replace(reg, filters=early), ctx, r, core, where, keep, False, pos.term_table,
+                           [], [], prefix="pf", core_alias="cqp")
+        core, where = f"({lvl}) AS fx", []
+        r.bound = {v: f"fx.k_{v}" for v in keep}
+        # the relations PostgreSQL joins after pulling the level up: the fenced core
+        # and the FILTERs' term rows
+        present = {"cqp"} | {f"tpf{i}" for i in range(nfv)}
+        final_filters = [f for f in reg.filters if not any(f is e for e in early)]
     # OPTIONAL blocks, each planned on its own, left-joined on the shared vars
     for oi, opt in enumerate(reg.optionals):
         opos = _pos_of(opt)
@@ -2174,6 +2246,84 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             units_adv += orr.units_advice
             methods += orr.methods
             continue
+        if opt.filters or opt.iri_ne or opt.lj_filters:
+            # LeftJoin(A, P, F): P a level of its own (its inner FILTERs applied there),
+            # exposing the value columns F reads; A's, from `_outer_values`; F the
+            # generator's EBV in the ON clause, so a row whose P rows all fail it (or
+            # raise an error) stays unextended. Neither level fenced: PostgreSQL pulls
+            # them up and can drive P from the rows it extends (fenced, P was built in
+            # full first: o01 47 -> 81 ms); the advice names the LEFT JOIN by the
+            # relations under it, the levels' term tables included.
+            from .emit_expressions import ebv_sql
+            from .sql_type_generation import ColumnInfo, TypeRegistry
+            ovars_all = region_vars(opt)
+            # an IRI (in)equality is answered on keys (`_expr_sql`), no term rows
+            iri = _iri_vars(reg) | _iri_vars(opt)
+            lj_keys, lj_vals = [], []
+            for f in opt.lj_filters:
+                try:
+                    _expr_sql(f, {v: "x" for v in _expr_vars(f)}, iri)
+                    lj_keys.append(f)
+                except Unsupported:
+                    lj_vals.append(f)
+            ljv = set().union(*(_expr_vars(f) for f in lj_vals))
+            for f in lj_keys:
+                if _expr_vars(f) - ovars_all - set(r.bound):
+                    raise Unsupported("an OPTIONAL's FILTER reads a variable the pattern does not bind")
+            outs = sorted(v for v in ljv if v not in ovars_all and v in r.bound and v not in ocols)
+            if outs or ljv - ovars_all - set(ocols):
+                if ljv - ovars_all - set(r.bound) - set(ocols):
+                    raise Unsupported("an OPTIONAL's FILTER reads a variable the pattern does not bind")
+                n0 = len(ocols)
+                core, where, lvl = _outer_values(core, where, r, outs, pos.term_table, ctx, ocols)
+                present = set(present) | {f"nt{j}" for j in range(n0, len(ocols))}
+            otree = search(opt)
+            orr = _R(opos)
+            osql, op, opend = _render_node(otree, opt, orr)
+            ow = list(opend)
+            for v, u_ in opt.iri_ne:
+                if v not in orr.bound:
+                    raise Unsupported(f"a FILTER reads ?{v}, which the OPTIONAL does not bind")
+                ow.append(f"{orr.bound[v]} <> '{u_}'::uuid" if u_ else f"{orr.bound[v]} IS NOT NULL")
+            okeys = sorted(v for v in ovars_all if v in orr.bound)
+            expose = sorted(v for v in ljv if v in ovars_all)
+            pre = f"lv{oi}_"
+            inner = _value_level(opt, ctx, orr, osql, ow, okeys, False, pos.term_table, [], [],
+                                 expose=expose, prefix=pre, fence=False)
+            fv_order = sorted(set().union(*(_expr_vars(e) for e in opt.filters)) | set(expose))
+            op = set(op) | {f"t{pre}{i}" for i in range(len(fv_order))}
+            lo = f"lo{oi}"
+            conds = [f"{lo}.k_{v} = {r.bound[v]}" for v in okeys if v in r.bound]
+            keyed = bool(conds)
+            types = TypeRegistry(aliases=ctx.aliases)
+            for v in expose:
+                types.register(ColumnInfo.simple_output(v, f"{pre}{fv_order.index(v)}", from_triple=True))
+            for v in ljv - ovars_all:
+                types.register(ColumnInfo.simple_output(v, ocols[v], from_triple=True))
+            fctx = ctx.child(types=types)
+            before = len(getattr(fctx, "_unresolved_vars", None) or [])
+            kmap = {**{v: r.bound[v] for v in r.bound}, **{v: f"{lo}.k_{v}" for v in okeys}}
+            for f in lj_keys:
+                conds.append(_expr_sql(f, kmap, iri))
+            with fctx.expression_scope(set(ljv)):
+                for e in lj_vals:
+                    c = ebv_sql(e, fctx)
+                    if not c:
+                        raise Unsupported(f"an OPTIONAL FILTER the translator does not support: {type(e).__name__}")
+                    conds.append(f"({c})")
+            if len(getattr(fctx, "_unresolved_vars", None) or []) > before:
+                raise Unsupported("an OPTIONAL's FILTER reads a variable the value columns do not provide")
+            core = f"({core}\n LEFT JOIN ({inner}) AS {lo} ON " + " AND ".join(conds or ["TRUE"]) + ")"
+            sizes += orr.sizes
+            units_adv += orr.units_advice
+            methods += orr.methods
+            present = set(present) | op
+            sizes.append((rows, sorted(present)))
+            if keyed:                               # no equality, no hash join to advise
+                methods.append(("hash", sorted(present)))
+            for v in okeys:
+                r.bound.setdefault(v, f"{lo}.k_{v}")
+            continue
         otree = search(opt)
         orr = _R(opos)
         osql, op, opend = _render_node(otree, opt, orr)
@@ -2181,15 +2331,16 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         for var in sorted(region_vars(opt)):
             if var in r.bound and var in orr.bound:
                 conds.append(f"{orr.bound[var]} = " + (f"pg_late.k_{var}" if late else r.bound[var]))
-        if not conds:
-            raise Unsupported("OPTIONAL shares no variable with the pattern")
-        core = f"({core}\n LEFT JOIN {osql} ON " + " AND ".join(conds + opend) + ")"
+        keyed = bool(conds)
+        # sharing no variable: every row pairs with each OPTIONAL row, or stays alone
+        core = f"({core}\n LEFT JOIN {osql} ON " + " AND ".join(conds + opend or ["TRUE"]) + ")"
         sizes += orr.sizes
         units_adv += orr.units_advice
         methods += orr.methods
         present |= op
         sizes.append((rows, sorted(present)))
-        methods.append(("hash", sorted(present)))
+        if keyed:                                   # no equality, no hash join to advise
+            methods.append(("hash", sorted(present)))
         for v, c in orr.bound.items():
             r.bound.setdefault(v, c)
     # NOT EXISTS bodies. Two forms, scored against each other:
@@ -2205,25 +2356,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     ovars = sorted({v for a in reg.antis if _needs_outer_values(a, set(r.bound), _iri_vars(reg))
                     for f in a.filters for v in _expr_vars(f)
                     if v in r.bound and v not in region_vars(a.region)})
-    ocols: Dict[str, str] = {}
-    if ovars:
-        from .emit_bgp import (_BOOLEAN_DT as _BD, _DATETIME_DATATYPES as _DD,
-                               _NUMERIC_DATATYPES as _ND, _NUMERIC_DT_SQL_LIST as _NL)
-        from .sql_type_generation import TypeRegistry as _TR
-        sel = [f"{c} AS b_{v}" for v, c in sorted(r.bound.items())]
-        tj = []
-        for j, v in enumerate(ovars):
-            sn, t = f"nv{j}", f"nt{j}"
-            tj.append(f"LEFT JOIN {pos.term_table} AS {t} ON {t}.term_uuid = {r.bound[v]}")
-            sel += [c.replace(f"NSUB.{sn}__uuid", f"{t}.term_uuid") for c in _TR.term_table_columns(
-                sn, t, "NSUB", _NL, dt_case_sql=ctx.dt_case_expr(t),
-                numeric_dt_id_list=ctx.dt_ids_for_uris(_ND), boolean_dt_id=ctx.dt_ids_for_uris([_BD]),
-                datetime_dt_id_list=ctx.dt_ids_for_uris(_DD))]
-            ocols[v] = sn
-        core = (f"(SELECT {', '.join(sel)}\nFROM {core}\n" + "\n".join(tj)
-                + ("\nWHERE " + " AND ".join(where) if where else "") + ") AS nx")
-        where = []
-        r.bound = {v: f"nx.b_{v}" for v in r.bound}
+    if [v for v in ovars if v not in ocols]:
+        core, where, _l = _outer_values(core, where, r, [v for v in ovars if v not in ocols], pos.term_table, ctx, ocols)
     for anti in reg.antis:
         where.append(_negation_sql(anti, dict(r.bound), outer_vars_ | set(reg.values), rows, ctx,
                                    pos.term_table, subs, poses, acc, anti_notes, _iri_vars(reg), ocols))
@@ -2307,9 +2441,10 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         if v not in r.bound:
             raise Unsupported(f"a FILTER reads ?{v}, which the plan does not bind")
         where.append(f"{r.bound[v]} <> '{u}'::uuid" if u else f"{r.bound[v]} IS NOT NULL")
-    if reg.filters or computed:
-        inner = _value_level(reg, ctx, r, core, where, sorted(need), q.sub_distinct, pos.term_table,
-                             computed, out_computed)
+    if final_filters or computed:
+        from dataclasses import replace as _replace
+        inner = _value_level(_replace(reg, filters=final_filters), ctx, r, core, where, sorted(need),
+                             q.sub_distinct, pos.term_table, computed, out_computed)
     else:
         inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + ", ".join(keys) + "\nFROM " + core
                  + ("\nWHERE " + " AND ".join(where) if where else ""))
@@ -2490,6 +2625,8 @@ def _late_optional_ok(q: Query, reg: Region, r: "_R") -> bool:
         return False
     if reg.filters or reg.iri_ne or reg.binds:
         return False                    # a FILTER or BIND may read an OPTIONAL's variables
+    if any(o.filters or o.iri_ne or o.lj_filters for o in reg.optionals):
+        return False                    # rendered as a value level (render), not cut late
     if q.group_vars is not None or q.sub_project is not None or q.having:
         return False
     if any(v in q.extend or v not in r.bound for v, _d in q.order):
