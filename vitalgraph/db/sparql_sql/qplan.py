@@ -257,13 +257,18 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
         # evaluated innermost first: the loop above met them outermost first
         from .var_scope import compute_scope
         visible = set(compute_scope(p).all_visible)
+        binds = []
         for v, e in reversed(q.binds):
             if _expr_vars(e) - visible:
-                raise Unsupported("a BIND reads a variable not bound below it")
+                if _expr_has_exists(e):
+                    raise Unsupported("a BIND with EXISTS reads a variable not bound below it")
+                e = _unbind(e, _expr_vars(e) - visible)
             if v in visible:
                 raise Unsupported(f"BIND to ?{v}, already bound")
             visible.add(v)
-        q.region.binds = q.region.binds + list(reversed(q.binds))
+            binds.append((v, e))
+        q.binds = list(reversed(binds))
+        q.region.binds = q.region.binds + binds
     _unique_aliases(q)
     refresh_subqueries(q)
     return q
@@ -565,7 +570,7 @@ def _collect(p, ctx, aliases, parts, outer_vars):
             if _expr_has_exists(c):
                 raise Unsupported("an OPTIONAL's FILTER with EXISTS inside an expression")
             if _expr_vars(c) - left - _region_all_vars(opt):
-                raise Unsupported("an OPTIONAL's FILTER reads a variable neither side binds")
+                c = _unbind(c, _expr_vars(c) - left - _region_all_vars(opt))
             if (opt.optionals or opt.antis) and _expr_vars(c) <= own:
                 opt.filters = opt.filters + [c]
                 continue
@@ -584,10 +589,10 @@ def _collect(p, ctx, aliases, parts, outer_vars):
                 # unbound inside (an error, so false), and joining first would bind it.
                 from .var_scope import compute_scope
                 visible = compute_scope(p.children[0]).all_visible
-                if _expr_vars(e) - set(visible):
-                    raise Unsupported("a FILTER reads a variable its group does not bind")
                 if _expr_has_exists(e):
                     raise Unsupported("FILTER with EXISTS inside an expression (C2)")
+                if _expr_vars(e) - set(visible):
+                    e = _unbind(e, _expr_vars(e) - set(visible))
                 for c in _conjuncts(e):
                     ne = _iri_exclusion(c, aliases)
                     if ne is not None:
@@ -639,11 +644,12 @@ def _collect(p, ctx, aliases, parts, outer_vars):
         visible = set(compute_scope(p.children[0]).all_visible)
         if p.extend_var in visible:
             raise Unsupported(f"BIND to ?{p.extend_var}, already bound")
-        if _expr_vars(p.extend_expr) - visible:
-            raise Unsupported("a BIND reads a variable its group has not bound before it")
         if _expr_has_exists(p.extend_expr):
             raise Unsupported("BIND with EXISTS (C2)")
-        parts["binds"].append((p.extend_var, p.extend_expr))
+        ex = p.extend_expr
+        if _expr_vars(ex) - visible:
+            ex = _unbind(ex, _expr_vars(ex) - visible)
+        parts["binds"].append((p.extend_var, ex))
     elif p.kind == KIND_PROJECT and _grouped_subselect(p):
         # a grouped sub-SELECT joined into the pattern: one leaf, its own plan. The
         # MIN / MAX form keeps the picked TERM (a key, joinable); any other grouping is
@@ -1186,14 +1192,42 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
             + f"\nFROM ({level}) AS fl" + ("\nWHERE " + " AND ".join(conds) if conds else ""))
 
 
+_UNBOUND = "_ub."          # `.` is not in a SPARQL variable name: never bound
+
+
+def _unbind(e, vs: Set[str]):
+    """The expression with each of `vs` read as UNBOUND: renamed to a name nothing
+    binds, which the translator compiles to NULL, as today's SQL does for a variable
+    out of scope (SPARQL 1.1 18.2: a FILTER or BIND reads its own group only). The
+    planner flattens groups, so read as itself it would see another group's
+    binding."""
+    import copy
+    e = copy.deepcopy(e)
+
+    def walk(x):
+        t = type(x).__name__
+        if t == "ExprVar" and x.var in vs:
+            x.var = _UNBOUND + x.var
+        if t == "ExprExists":
+            return
+        for a in getattr(x, "args", None) or []:
+            walk(a)
+        if getattr(x, "expr", None) is not None and t != "ExprVar":
+            walk(x.expr)
+    walk(e)
+    return e
+
+
 def _expr_vars(e) -> Set[str]:
-    """The variables an expression reads (an EXISTS body's own are its own)."""
+    """The variables an expression reads (an EXISTS body's own are its own; one
+    read as unbound, `_unbind`, is no variable)."""
     out: Set[str] = set()
 
     def walk(x):
         t = type(x).__name__
         if t == "ExprVar":
-            out.add(x.var)
+            if not x.var.startswith(_UNBOUND):
+                out.add(x.var)
         elif t == "ExprExists":
             return
         for a in getattr(x, "args", None) or []:
@@ -2549,6 +2583,10 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             raise Unsupported("an OPTIONAL with its own OPTIONAL or negation and a FILTER reading both sides")
         if o.undef_tables:
             raise Unsupported("VALUES with UNDEF inside an OPTIONAL")
+        if any(not _expr_vars(f) for f in o.filters + o.lj_filters):
+            # constant (one reading only unbound variables): PostgreSQL folds the LEFT
+            # JOIN away, and the advice names a join it never formed (W3C expr-5)
+            raise Unsupported("an OPTIONAL's FILTER reads no variable")
     if reg.undef_tables and not reg.units:
         raise Unsupported("VALUES with UNDEF and no pattern to join it to")
     if maybe_vars & {v for ut in reg.undef_tables for v in ut.sub[0]}:
