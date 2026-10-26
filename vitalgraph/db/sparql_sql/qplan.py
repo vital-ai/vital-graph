@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .ir import (KIND_BGP, KIND_DISTINCT, KIND_EXTEND, KIND_FILTER, KIND_GROUP,
                  KIND_JOIN, KIND_LEFT_JOIN, KIND_ORDER, KIND_PROJECT, KIND_REDUCED,
-                 KIND_SLICE, KIND_TABLE, KIND_UNION)
+                 KIND_SLICE, KIND_TABLE, KIND_UNION, KIND_MINUS)
 from .qtree import Est, Leaf, Unit, _Stats, _leaves, _unit
 
 XSD_INTEGER = "http://www.w3.org/2001/XMLSchema#integer"
@@ -100,6 +100,11 @@ class Anti:
     region: Region
     correlated: List[str]
     filters: List[Any]
+    # MINUS: `correlated` is fixed, the variables both sides certainly bind; the
+    # body is evaluated on its own (its FILTERs read its own variables only)
+    minus: bool = False
+    # FILTER EXISTS: the same body, kept when it matches (a semi-join)
+    negated: bool = True
 
 
 @dataclass
@@ -210,8 +215,45 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
                 raise Unsupported(f"BIND to ?{v}, already bound")
             visible.add(v)
         q.region.binds = q.region.binds + list(reversed(q.binds))
+    _unique_aliases(q)
     refresh_subqueries(q)
     return q
+
+
+def _unique_aliases(q: Query) -> None:
+    """Every leaf alias unique across the statement. SQL needs an alias unique only
+    within its SELECT, and the IR reuses them: `rewrite_distribute_union` copies the
+    pattern joined to a UNION into every branch under the same aliases, and each
+    EXISTS body has its own alias generator (two bodies both hold `ex_q0`). The
+    advice names each relation once in the whole statement. A colliding leaf is
+    renamed; its region's `rename` applies the same to its BGPs' tables, constraints
+    and positions (`_Pos`), so everything that renders or samples it agrees."""
+    seen: Set[str] = set()
+
+    def walk(r: Region):
+        for u in r.units:
+            for l in u.leaves:
+                if l.alias in seen:
+                    k = 1
+                    while f"{l.alias}_{k}" in seen:
+                        k += 1
+                    new = f"{l.alias}_{k}"
+                    if l.kind not in ("subq", "union", "vtable"):
+                        r.rename[l.alias] = new
+                    l.alias = new
+                seen.add(l.alias)
+        for u in r.units:
+            for l in u.leaves:
+                if l.kind == "subq":
+                    walk(l.sub.region)
+                elif l.kind == "union":
+                    for b in l.sub.branches:
+                        walk(b)
+        for o in r.optionals:
+            walk(o)
+        for a in r.antis:
+            walk(a.region)
+    walk(q.region)
 
 
 def _analyze_subselect(p, ctx, exclude: frozenset) -> Query:
@@ -388,17 +430,10 @@ def _collect(p, ctx, aliases, parts, outer_vars):
     elif p.kind == KIND_FILTER:
         _collect(p.children[0], ctx, aliases, parts, outer_vars)
         for e in p.filter_exprs or []:
-            if type(e).__name__ == "ExprExists" and e.negated and e.prepared_plan is not None:
-                body = e.prepared_plan
-                filters = []
-                while body.kind == KIND_FILTER:
-                    filters.extend(body.filter_exprs or [])
-                    body = body.children[0]
-                shim = _Shim(e.prepared_aliases)
-                br = _region(body, shim, e.prepared_aliases, outer_vars)
-                parts["antis"].append(Anti(region=br, correlated=[], filters=filters))
+            if type(e).__name__ == "ExprExists" and e.prepared_plan is not None:
+                parts["antis"].append(_exists_anti(e, outer_vars))
             elif type(e).__name__ == "ExprExists":
-                raise Unsupported("FILTER EXISTS (planning_planner/13, C2)")
+                raise Unsupported("FILTER EXISTS without a prepared body")
             else:
                 # A FILTER reads only its own group: a variable bound only OUTSIDE it is
                 # unbound inside (an error, so false), and joining first would bind it.
@@ -430,6 +465,28 @@ def _collect(p, ctx, aliases, parts, outer_vars):
                     if not uuids:
                         raise Unsupported("a FILTER restricts to terms absent from the term table (the generator's empty path)")
                     parts["values"][v] = uuids
+    elif p.kind == KIND_MINUS:
+        # A MINUS B: removes the rows of A COMPATIBLE with a row of B and sharing a
+        # variable with it. With every shared variable certainly bound on both sides
+        # that is NOT EXISTS (B, equal on the shared variables), B on its own; sharing
+        # none, it removes nothing. A variable maybe bound on either side is per-row
+        # domain logic (`emit_minus`): declined.
+        from .var_scope import compute_scope
+        _collect(p.children[0], ctx, aliases, parts, outer_vars)
+        left, right = compute_scope(p.children[0]), compute_scope(p.children[1])
+        shared = set(left.all_visible) & set(right.all_visible)
+        if any(v.startswith(".") for v in shared):
+            raise Unsupported("MINUS sharing a generated variable")
+        if not shared:
+            return
+        if shared & (set(left.maybe) | set(right.maybe)):
+            raise Unsupported("MINUS sharing a variable one side may leave unbound")
+        # its FILTERs are its own group's (`_collect` checks their scope): the body
+        # region's, on value columns
+        br = _region(p.children[1], ctx, aliases, outer_vars)
+        if br.optionals or br.binds:
+            raise Unsupported("a MINUS body with OPTIONAL or BIND")
+        parts["antis"].append(Anti(region=br, correlated=sorted(shared), filters=[], minus=True))
     elif p.kind == KIND_EXTEND:
         # BIND(expr AS ?v) inside a group: sees only what its group bound BEFORE it
         _collect(p.children[0], ctx, aliases, parts, outer_vars)
@@ -485,22 +542,7 @@ def _union_leaf(p, ctx, aliases, parts, outer_vars) -> Leaf:
         if any(l.kind in ("subq", "union") for u in reg.units for l in u.leaves):
             raise Unsupported("a UNION branch with a sub-SELECT or a nested UNION")
         branches.append(reg)
-    # `rewrite_distribute_union` copies the pattern joined to a UNION into every branch
-    # under the SAME aliases (unique per SELECT, which is all SQL needs). The advice
-    # names each relation once in the statement: a branch's colliding leaves are
-    # renamed, the region's `rename` applying it to its BGPs' tables, constraints and
-    # positions (`_Pos`), so everything that renders or samples it agrees.
-    seen: Set[str] = set()
-    for i, reg in enumerate(branches):
-        for u in reg.units:
-            for l in u.leaves:
-                if l.alias in seen:
-                    new = f"{l.alias}_{i}"
-                    while new in seen:
-                        new += "x"
-                    reg.rename[l.alias] = new
-                    l.alias = new
-                seen.add(l.alias)
+    # (branches repeating a pattern's aliases are renamed by `_unique_aliases`)
     bvars = [region_vars(reg) for reg in branches]
     all_vars = sorted(set().union(*bvars))
     certain = set.intersection(*bvars)
@@ -532,6 +574,31 @@ def _union_price(leaf: Leaf) -> None:
     leaf.scan = Est(rows, "subq")
     leaf.col_ndv = {f"k_{v}": max(1.0, min(n, rows)) for v, n in ndv.items()}
     leaf.sub_cost = cost
+
+
+def _exists_anti(e, outer_vars) -> "Anti":
+    """FILTER [NOT] EXISTS { body }: the body a region of its own (its own aliases).
+    A body FILTER that is itself a [NOT] EXISTS is a nested negation; one reading only
+    the body's own variables is evaluated in the body, on value columns (a correlated
+    variable's body binding equals the outer one); one reading an outer variable stays
+    a condition of the (NOT) EXISTS on keys."""
+    body = e.prepared_plan
+    filters = []
+    while body.kind == KIND_FILTER:
+        for f in body.filter_exprs or []:
+            filters.extend(_conjuncts(f))
+        body = body.children[0]
+    shim = _Shim(e.prepared_aliases)
+    br = _region(body, shim, e.prepared_aliases, outer_vars)
+    rest = []
+    for f in filters:
+        if type(f).__name__ == "ExprExists" and f.prepared_plan is not None:
+            br.antis = br.antis + [_exists_anti(f, outer_vars)]
+        elif _expr_vars(f) <= region_vars(br) and not _expr_has_exists(f):
+            br.filters = br.filters + [f]
+        else:
+            rest.append(f)
+    return Anti(region=br, correlated=[], filters=rest, negated=bool(e.negated))
 
 
 def _vtable_leaf(p, aliases, parts, vars_=None, rows=None) -> Leaf:
@@ -783,7 +850,9 @@ def _iri_restriction(e, aliases) -> Optional[Tuple[str, List[str]]]:
 
 def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: List[str],
                  distinct: bool, term_table: str, computed: List[Tuple[str, Any]],
-                 out_computed: List[str]) -> str:
+                 out_computed: List[str], fence: bool = True,
+                 outer_refs: Optional[Dict[str, str]] = None, extra_filters: Optional[List[Any]] = None,
+                 top_where: Optional[List[str]] = None) -> str:
     """The region's rows with its BINDs computed and its FILTERs applied, as a level
     of keys (`k_<v>`, term uuids) plus the computed variables' companion columns
     (`c_<v>`, `c_<v>__type`, ...) for `out_computed`.
@@ -799,7 +868,20 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
     The core joins are their own level, fenced (OFFSET 0), and the term rows join to
     ITS rows: flattened, a FILTER's condition on a term column made the term join
     inner and PostgreSQL drove from the whole term table (`?s ?p ?o FILTER(?s IN
-    (...) && ?p != ...)`: 2.1 s, today's SQL 1 ms). The advice applies inside the fence."""
+    (...) && ?p != ...)`: 2.1 s, today's SQL 1 ms). The advice applies inside the fence.
+
+    `fence=False` for a (NOT) EXISTS body: there the fence keeps PostgreSQL from
+    pulling the sub-link up into a semi- or anti-join, and the body is driven by the
+    outer rows anyway (n09 NOT EXISTS with a numeric body filter: a SubPlan per row,
+    90 ms, against today's parallel anti-join, 60).
+
+    A (NOT) EXISTS body's FILTER that reads the OUTER row (`extra_filters`): each
+    outer variable's value columns are the outer query's (`outer_refs`: variable ->
+    their SQL name, a level `render` adds above its joins), referenced by name from
+    here and resolved outward; the correlation is in the top WHERE (`top_where`).
+    Every outer reference in the top WHERE, PostgreSQL can still turn the sub-link
+    into a join (it cannot when one sits in a FROM item; an uncorrelated term-table
+    sub-query there timed out on only_cause)."""
     from types import SimpleNamespace
     from .emit_bgp import (_BOOLEAN_DT, _DATETIME_DATATYPES, _NUMERIC_DATATYPES,
                            _NUMERIC_DT_SQL_LIST)
@@ -807,26 +889,35 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
     from .emit_extend import _patch_concat_companions, _patch_strafter_strbefore_companions
     from .sql_type_generation import COMPANION_SUFFIXES, ColumnInfo, TypeRegistry, infer_expr_type
     cvars = {v for v, _e in computed}
-    read = set().union(*(_expr_vars(e) for e in reg.filters), *(_expr_vars(e) for _v, e in computed)) - cvars
+    outer_refs = outer_refs or {}
+    extra_filters = extra_filters or []
+    read = set().union(*(_expr_vars(e) for e in list(reg.filters) + extra_filters),
+                       *(_expr_vars(e) for _v, e in computed)) - cvars - set(outer_refs)
     fvars = sorted(read)
     for v in fvars:
         if v not in r.bound:
             raise Unsupported(f"an expression reads ?{v}, which the plan does not bind")
     bind_vars = sorted(set(need) | set(fvars))
     core_level = ("SELECT " + (", ".join(f"{r.bound[v]} AS b_{v}" for v in bind_vars) or "1 AS one")
-                  + "\nFROM " + core + ("\nWHERE " + " AND ".join(where) if where else "") + "\nOFFSET 0")
+                  + "\nFROM " + core + ("\nWHERE " + " AND ".join(where) if where else "") + ("\nOFFSET 0" if fence else ""))
     cols = [f"cq.b_{v} AS k_{v}" for v in need]
     joins = []
     types = TypeRegistry(aliases=ctx.aliases)
     for i, v in enumerate(fvars):
         sn, t = f"fv{i}", f"tf{i}"
-        joins.append(f"LEFT JOIN {term_table} AS {t} ON {t}.term_uuid = cq.b_{v}")
+        # Unfenced (a negation body, where every variable is bound: bodies with an
+        # OPTIONAL decline), an inner join: a FILTER's CASE is not strict, so a LEFT
+        # JOIN stays one and PostgreSQL cannot memoize the lookup (n03: 10,000 term
+        # probes against today's 3,494 memoized)
+        joins.append(f"{'LEFT JOIN' if fence else 'JOIN'} {term_table} AS {t} ON {t}.term_uuid = cq.b_{v}")
         tc = TypeRegistry.term_table_columns(
             sn, t, "FSUB", _NUMERIC_DT_SQL_LIST, dt_case_sql=ctx.dt_case_expr(t),
             numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
             boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
             datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))
         cols += [c.replace(f"FSUB.{sn}__uuid", f"cq.b_{v}") for c in tc]
+        types.register(ColumnInfo.simple_output(v, sn, from_triple=True))
+    for v, sn in sorted(outer_refs.items()):
         types.register(ColumnInfo.simple_output(v, sn, from_triple=True))
     fctx = ctx.child(types=types)
     before = len(getattr(fctx, "_unresolved_vars", None) or [])
@@ -850,8 +941,8 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
         visible.add(v)
     # FILTERs (`emit_filter`'s way: the effective boolean value, scoped)
     conds = []
-    with fctx.expression_scope(set(visible)):
-        for e in reg.filters:
+    with fctx.expression_scope(set(visible) | set(outer_refs)):
+        for e in list(reg.filters) + extra_filters:
             c = ebv_sql(e, fctx)
             if not c:
                 raise Unsupported(f"a FILTER expression the translator does not support: {type(e).__name__}")
@@ -859,6 +950,7 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
     if len(getattr(fctx, "_unresolved_vars", None) or []) > before:
         raise Unsupported("an expression reads a variable the value columns do not provide")
     out = [f"k_{v}" for v in need] + [f"c_{v}{suf}" for v in out_computed for suf in ("",) + COMPANION_SUFFIXES]
+    conds = list(top_where or []) + conds
     return ("SELECT " + ("DISTINCT " if distinct else "") + (", ".join(out) or "1 AS one")
             + f"\nFROM ({level}) AS fl" + ("\nWHERE " + " AND ".join(conds) if conds else ""))
 
@@ -1658,7 +1750,23 @@ def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[st
     return sql, present, lpend
 
 
-def _expr_sql(e, bound: Dict[str, str]) -> str:
+def _iri_vars(r: Region) -> Set[str]:
+    """Variables a region's patterns bind to an IRI or blank node: subjects and
+    predicates (an object may be a literal)."""
+    out = set()
+    for u in r.units:
+        for l in u.leaves:
+            if l.kind == "quad":
+                if l.s_var:
+                    out.add(l.s_var)
+                out |= {v for c, v in l.o_vars if c == "predicate_uuid"}
+    return out
+
+
+def _expr_sql(e, bound: Dict[str, str], iri: Set[str]) -> str:
+    """A condition on KEYS (term uuids). `=` / `!=` between variables only when both
+    are IRIs (`iri`): there equality is term identity. Between literals SPARQL `=`
+    compares VALUES (`1 = 1.0` holds across two terms), which keys cannot."""
     t = type(e).__name__
     if t == "ExprVar":
         if e.var not in bound:
@@ -1666,8 +1774,10 @@ def _expr_sql(e, bound: Dict[str, str]) -> str:
         return bound[e.var]
     if t == "ExprFunction" and e.name in ("ne", "eq") and len(e.args) == 2 \
             and all(type(a).__name__ == "ExprVar" for a in e.args):
+        if any(a.var not in iri for a in e.args):
+            raise Unsupported("= / != on a variable that may be a literal (value equality, not term identity)")
         op = "<>" if e.name == "ne" else "="
-        return f"({_expr_sql(e.args[0], bound)} {op} {_expr_sql(e.args[1], bound)})"
+        return f"({_expr_sql(e.args[0], bound, iri)} {op} {_expr_sql(e.args[1], bound, iri)})"
     raise Unsupported(f"filter expression {t} {getattr(e, 'name', '')}")
 
 
@@ -1853,6 +1963,130 @@ def _render_union(leaf: Leaf, ctx, term_table: str) -> _SubSql:
     return _SubSql(sql=sql, sizes=sizes, units_adv=units_adv, methods=methods, poses=poses, base_sizes=base)
 
 
+def _needs_outer_values(anti: "Anti", outer: Set[str], iri: Set[str]) -> bool:
+    """Whether a (NOT) EXISTS FILTER reading the outer row needs VALUES (anything but
+    an IRI equality, which keys answer)."""
+    iri = iri | _iri_vars(anti.region)
+    probe = {v: "x" for v in outer | region_vars(anti.region)}
+    try:
+        for f in anti.filters:
+            _expr_sql(f, probe, iri)
+        return False
+    except Unsupported:
+        return True
+
+
+def _negation_sql(anti: "Anti", outer: Dict[str, str], certain: Set[str], rows: float, ctx,
+                  term_table: str, subs: List["_SubSql"], poses: List["_Pos"], acc: Dict[str, list],
+                  notes: List[str], outer_iri: Set[str], outer_values_cols: Optional[Dict[str, str]] = None) -> str:
+    """`[NOT] EXISTS (...)` for a NOT EXISTS, EXISTS or MINUS body, as a condition on
+    the rows whose columns `outer` names (`certain`: the variables they always bind).
+    Two forms, scored against each other:
+      correlated    a SubPlan per outer row: outer rows x the body's cost when its
+                    correlated variables are bound (one row);
+      decorrelated  the body as a set, its correlation conditions in its WHERE, which
+                    PostgreSQL turns into an anti-join (it does not when they sit in
+                    the body's ON clauses).
+    The body's own FILTERs are evaluated on value columns (`_value_level`); its own
+    negations recursively, with the outer columns still in reach (EXISTS substitutes
+    the outer solution into the whole body, nested patterns included)."""
+    from .generator import substitute_constants
+    body = anti.region
+    iri = outer_iri | _iri_vars(body)
+    fvars: Set[str] = set().union(*(_expr_vars(f) for f in anti.filters))
+    corr = list(anti.correlated) if anti.minus else sorted((region_vars(body) | fvars) & set(outer))
+    if set(corr) - certain:
+        # bound outside only by an OPTIONAL (or not at all): unbound on some rows,
+        # where the body's variable is free; an equality to NULL would never hold
+        raise Unsupported("a NOT EXISTS / MINUS correlates a variable the pattern may leave unbound")
+    bpos = _pos_of(body)
+    bpos.term_table = bpos.term_table or term_table
+    poses.append(bpos)
+    if _derived_tables(body, bpos, ctx, subs, poses) & (certain | fvars):
+        raise Unsupported("a NOT EXISTS reads a variable a UNION branch leaves unbound")
+    bvars_all = region_vars(body)
+    set_tree = search(body)
+    # decorrelated: the body built once, hashed, the outer rows probing it
+    dec_cost = _hash_cost(Node("scan", frozenset(), 0.0, rows, {}), set_tree, rows)
+    body.bound = {v: 1.0 for v in corr}
+    # bound per outer row: the correlated variables the body's PATTERNS hold (one read
+    # only by a body FILTER binds nothing to start from)
+    row_tree = _search_bound(body, [v for v in corr if v in bvars_all])
+    cor_cost = rows * row_tree.cost
+    if body.filters:
+        # each body row's value columns: a term row per variable the FILTERs read
+        per = len(set().union(*(_expr_vars(f) for f in body.filters))) * (W["idx_lookup"] + W["idx_row"])
+        dec_cost += set_tree.rows * per
+        cor_cost += rows * row_tree.rows * per
+    bvars = region_vars(body)
+    # A FILTER reading the outer row: on keys when it can be (an IRI equality), else
+    # on value columns with the outer variables' term rows (`_value_level`)
+    outer_values = _needs_outer_values(anti, set(outer), iri)
+    if outer_values:
+        dec_cost = min(dec_cost, cor_cost)        # the set form (see below)
+    if body.filters and not anti.filters:
+        # A body with FILTERs is a level of value columns over its core. Correlated,
+        # the outer row is read inside a FROM sub-query, which keeps PostgreSQL from
+        # turning the sub-link into a semi- or anti-join (it pulls sub-links up before
+        # it flattens FROM sub-queries): a SubPlan per row (n09: 90 ms against today's
+        # anti-join, 60). As a set, its correlation in the top WHERE, PostgreSQL makes
+        # the join itself and chooses its method, a parameterized nested loop included.
+        dec_cost = min(dec_cost, cor_cost)
+    if dec_cost <= cor_cost:
+        br = _R(bpos)
+        bsql, bp, bpend = _render_node(set_tree, body, br)
+        form = "decorrelated"
+    else:
+        br = _R(bpos, outer={v: outer[v] for v in corr})
+        bsql, bp, bpend = _render_node(row_tree, body, br)
+        form = "correlated"
+    bconds = list(bpend)
+    for v, u_ in body.iri_ne:
+        if v not in br.bound:
+            raise Unsupported(f"a FILTER reads ?{v}, which the body does not bind")
+        bconds.append(f"{br.bound[v]} <> '{u_}'::uuid" if u_ else f"{br.bound[v]} IS NOT NULL")
+    for nested in body.antis:
+        inner_outer = {**outer, **br.bound}
+        bconds.append(_negation_sql(nested, inner_outer, (certain & set(outer)) | bvars | set(body.values),
+                                    max(1.0, set_tree.rows if form == "decorrelated" else row_tree.rows),
+                                    ctx, term_table, subs, poses, acc, notes, iri))
+    if outer_values:
+        ocols = outer_values_cols or {}
+        oref = {v: ocols[v] for v in fvars - bvars if v in ocols}
+        if fvars - bvars - set(oref):
+            raise Unsupported("a NOT EXISTS FILTER reads an outer variable without value columns (a nested body)")
+        keep = sorted(v for v in corr if v in bvars)
+        top = [f"fl.k_{v} = {outer[v]}" for v in keep]
+        bsql_full = _value_level(body, ctx, br, bsql, bconds, keep, False, term_table, [], [], fence=False,
+                                 outer_refs=oref, extra_filters=list(anti.filters), top_where=top)
+    elif body.filters:
+        # the body a level of keys (unfenced, see `_value_level`), its correlation at the top
+        nb = f"nb{len(notes)}"
+        keep = sorted(v for v in bvars if v in br.bound and v not in br.outer
+                      and (v in corr or v in fvars))
+        inner = _value_level(body, ctx, br, bsql, bconds, keep, False, term_table, [], [], fence=False)
+        col = {v: f"{nb}.k_{v}" for v in keep}
+        conds = ([f"{col[v]} = {outer[v]}" for v in corr if v in col] if form == "decorrelated" else [])
+        fmap = {**{v: outer[v] for v in corr}, **col}
+        conds += [_expr_sql(f, fmap, iri) for f in anti.filters]
+        bsql_full = f"SELECT 1 FROM ({inner}) AS {nb}" + (" WHERE " + " AND ".join(conds) if conds else "")
+    elif form == "decorrelated":
+        both = {**{v: outer[v] for v in corr}, **{k: v for k, v in br.bound.items() if k in bvars}}
+        corr_eq = [f"{br.bound[v]} = {outer[v]}" for v in corr if v in br.bound and v in bvars]
+        bconds = bconds + corr_eq + [_expr_sql(f, both, iri) for f in anti.filters]
+        bsql_full = f"SELECT 1 FROM {bsql}" + (" WHERE " + " AND ".join(bconds) if bconds else "")
+    else:
+        bconds = bconds + [_expr_sql(f, br.bound, iri) for f in anti.filters]
+        bsql_full = f"SELECT 1 FROM {bsql}" + (" WHERE " + " AND ".join(bconds) if bconds else "")
+    bsql_full = substitute_constants(bsql_full, body.aliases)
+    kw = "NOT EXISTS" if anti.negated else "EXISTS"
+    acc["units_adv"] += br.units_advice
+    acc["sizes"] += br.sizes
+    acc["methods"] += br.methods
+    notes.append(f"{'MINUS' if anti.minus else kw} {form} (decorrelated {dec_cost:,.0f} vs correlated {cor_cost:,.0f})")
+    return f"{kw} ({bsql_full})"
+
+
 def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = None) -> Rendered:
     from .generator import substitute_constants
     reg = q.region
@@ -1871,9 +2105,14 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # unbound sorts first in SPARQL; a NULL key sorts last here
         raise Unsupported("ORDER BY a variable a UNION branch leaves unbound")
     outer_vars_ = region_vars(reg)
-    for o in list(reg.optionals) + [a.region for a in reg.antis]:
+    for o in reg.optionals:
         if o.filters or o.iri_ne or o.binds:
-            raise Unsupported("a FILTER or BIND inside an OPTIONAL or NOT EXISTS body (C2)")
+            raise Unsupported("a FILTER or BIND inside an OPTIONAL (C2)")
+    for a in reg.antis:
+        if a.region.binds:
+            raise Unsupported("a BIND inside a NOT EXISTS / MINUS body")
+        if a.region.optionals:
+            raise Unsupported("OPTIONAL inside a NOT EXISTS / MINUS body")
     tree = main_tree or search(reg)
     base_sizes = _base_sizes(reg)
     r = _R(pos)
@@ -1959,47 +2198,35 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     #   decorrelated  the body as a set, its correlation conditions in its
     #                 WHERE, which PostgreSQL turns into an anti-join (it does
     #                 not when they sit in the body's ON clauses).
+    acc = {"sizes": sizes, "units_adv": units_adv, "methods": methods}
+    # Outer variables a negation's FILTER reads by VALUE: their term rows' columns at
+    # a level above the joins (`nx`), named so the body's expression reads them from
+    # inside the sub-link (`_value_level`, outer_refs)
+    ovars = sorted({v for a in reg.antis if _needs_outer_values(a, set(r.bound), _iri_vars(reg))
+                    for f in a.filters for v in _expr_vars(f)
+                    if v in r.bound and v not in region_vars(a.region)})
+    ocols: Dict[str, str] = {}
+    if ovars:
+        from .emit_bgp import (_BOOLEAN_DT as _BD, _DATETIME_DATATYPES as _DD,
+                               _NUMERIC_DATATYPES as _ND, _NUMERIC_DT_SQL_LIST as _NL)
+        from .sql_type_generation import TypeRegistry as _TR
+        sel = [f"{c} AS b_{v}" for v, c in sorted(r.bound.items())]
+        tj = []
+        for j, v in enumerate(ovars):
+            sn, t = f"nv{j}", f"nt{j}"
+            tj.append(f"LEFT JOIN {pos.term_table} AS {t} ON {t}.term_uuid = {r.bound[v]}")
+            sel += [c.replace(f"NSUB.{sn}__uuid", f"{t}.term_uuid") for c in _TR.term_table_columns(
+                sn, t, "NSUB", _NL, dt_case_sql=ctx.dt_case_expr(t),
+                numeric_dt_id_list=ctx.dt_ids_for_uris(_ND), boolean_dt_id=ctx.dt_ids_for_uris([_BD]),
+                datetime_dt_id_list=ctx.dt_ids_for_uris(_DD))]
+            ocols[v] = sn
+        core = (f"(SELECT {', '.join(sel)}\nFROM {core}\n" + "\n".join(tj)
+                + ("\nWHERE " + " AND ".join(where) if where else "") + ") AS nx")
+        where = []
+        r.bound = {v: f"nx.b_{v}" for v in r.bound}
     for anti in reg.antis:
-        body = anti.region
-        fvars = set()
-        def _fv(e):
-            if type(e).__name__ == "ExprVar":
-                fvars.add(e.var)
-            for a in getattr(e, "args", None) or []:
-                _fv(a)
-        for f in anti.filters:
-            _fv(f)
-        corr = sorted((region_vars(body) | fvars) & set(r.bound))
-        bpos = _pos_of(body)
-        bpos.term_table = bpos.term_table or pos.term_table
-        poses.append(bpos)
-        if _derived_tables(body, bpos, ctx, subs, poses) & (outer_vars_ | set().union(*(_expr_vars(f) for f in anti.filters))):
-            raise Unsupported("a NOT EXISTS reads a variable a UNION branch leaves unbound")
-        set_tree = search(body)
-        dec_cost = set_tree.cost + rows
-        body.bound = {v: 1.0 for v in corr}
-        row_tree = _search_bound(body, corr)
-        cor_cost = rows * row_tree.cost
-        if dec_cost <= cor_cost:
-            br = _R(bpos)
-            bsql, bp, bpend = _render_node(set_tree, body, br)
-            outer_map = {v: r.bound[v] for v in corr}
-            both = {**outer_map, **{k: v for k, v in br.bound.items() if k in region_vars(body)}}
-            corr_eq = [f"{br.bound[v]} = {r.bound[v]}" for v in corr if v in br.bound and v in region_vars(body)]
-            bconds = bpend + corr_eq + [_expr_sql(f, both) for f in anti.filters]
-            form = "decorrelated"
-        else:
-            br = _R(bpos, outer={v: r.bound[v] for v in corr})
-            bsql, bp, bpend = _render_node(row_tree, body, br)
-            bconds = bpend + [_expr_sql(f, br.bound) for f in anti.filters]
-            form = "correlated"
-        bsql_full = f"SELECT 1 FROM {bsql}" + (" WHERE " + " AND ".join(bconds) if bconds else "")
-        bsql_full = substitute_constants(bsql_full, body.aliases)
-        where.append(f"NOT EXISTS ({bsql_full})")
-        units_adv += br.units_advice
-        sizes += br.sizes
-        methods += br.methods
-        anti_notes.append(f"NOT EXISTS {form} (decorrelated {dec_cost:,.0f} vs correlated {cor_cost:,.0f})")
+        where.append(_negation_sql(anti, dict(r.bound), outer_vars_ | set(reg.values), rows, ctx,
+                                   pos.term_table, subs, poses, acc, anti_notes, _iri_vars(reg), ocols))
     # the derived leaves' own advice (the OPTIONALs' and NOT EXISTS bodies' included)
     for s in subs:
         sizes += s.sizes
@@ -2197,8 +2424,13 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         outer += "\nORDER BY " + ", ".join(f"top.sk{i} {d}" for i, (_c, d) in enumerate(sort_cols))
     for opt in reg.optionals:
         base_sizes += _base_sizes(opt)
+    def _anti_bases(a):
+        out = _base_sizes(a.region)
+        for n in a.region.antis:
+            out += _anti_bases(n)
+        return out
     for anti in reg.antis:
-        base_sizes += _base_sizes(anti.region)
+        base_sizes += _anti_bases(anti)
     # No base size for a leaf restricted by a sub-select filter (driving or not): alone,
     # its scan is NOT restricted (the filter applies when the sub-select's relation is
     # joined), and sizing it at the filtered rows made PostgreSQL hash a 437,000-row
@@ -2420,8 +2652,7 @@ def _search_bound(r: Region, corr: List[str]) -> Node:
     rr = Region(units=units, edges=edges, values=r.values, plans=r.plans, aliases=r.aliases)
     best = {frozenset([n]): Node("scan", frozenset([n]), 0.0, 1.0, {v: 1.0 for v in corr}, unit=n)}
     for i, u in enumerate(r.units):
-        best[frozenset([i])] = Node("scan", frozenset([i]), (u.rows.rows or 0) * len(u.leaves),
-                                    u.rows.rows or 0, _unit_ndv(u, r.values, {}), unit=i)
+        best[frozenset([i])] = _base(r, i)
     allu = list(range(n + 1))
     for size in range(2, n + 2):
         for combo in itertools.combinations(allu, size):
@@ -2448,11 +2679,15 @@ def _search_bound(r: Region, corr: List[str]) -> Node:
                                 fan = _probe_fan(e, t)
                             if fan is None:
                                 continue
-                            c = a.cost + a.rows * fan + rows * max(0, len(r.units[t].leaves) - 1)
+                            # the same cost model as `search` (calib): a cout
+                            # leftover here priced a probe at 1 per row against the
+                            # set form's measured weights (EXISTS with a body FILTER
+                            # went correlated: 26 -> 57 ms)
+                            c = _probe_cost(a, fan, rows, len(r.units[t].leaves))
                             if cand is None or c < cand.cost:
                                 cand = Node("probe", S, c, rows, ndv, left=a, unit=t, edge=e)
                     if n not in s1 and n not in s2 and min(s1) < min(s2):
-                        c = a.cost + b.cost + rows
+                        c = _hash_cost(a, b, rows)
                         if cand is None or c < cand.cost:
                             cand = Node("hash", S, c, rows, ndv, left=a, right=b)
             if cand is not None:
