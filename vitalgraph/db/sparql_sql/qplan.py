@@ -134,6 +134,10 @@ class Query:
     synth_order: bool = False
     # top-level BIND / SELECT (expr AS ?v) above the pattern, outermost first
     binds: List[Tuple[str, Any]] = field(default_factory=list)
+    # hidden variables standing for ORDER BY expressions (never projected)
+    order_hidden: Set[str] = field(default_factory=set)
+    # GROUP BY (expr AS ?v): evaluated before the grouping, as BINDs
+    group_binds: List[Tuple[str, Any]] = field(default_factory=list)
 
 
 class _Shim:
@@ -189,7 +193,16 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
                 q.synth_order = True
             for expr, d in (p.order_conditions or []):
                 if not isinstance(expr, str):
-                    raise Unsupported(f"ORDER BY an expression: {expr}")
+                    # ORDER BY an expression: a hidden computed variable (a top-level
+                    # BIND, evaluated over the pattern's rows) sorted like any computed
+                    # value, by the generator's keys for its typed lane
+                    if any(v.startswith(".") for v in _expr_vars(expr)) or _expr_has_exists(expr):
+                        raise Unsupported(f"ORDER BY an expression over aggregates: {expr}")
+                    hv = f"_qord{len(q.order)}"
+                    q.binds.append((hv, expr))
+                    q.order_hidden.add(hv)
+                    q.order.append((hv, "DESC" if str(d).upper().startswith("DESC") else "ASC"))
+                    continue
                 q.order.append((expr.lstrip("?"), "DESC" if str(d).upper().startswith("DESC") else "ASC"))
         elif p.kind == KIND_EXTEND:
             e = p.extend_expr
@@ -210,19 +223,34 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
         elif p.kind == KIND_GROUP:
             seen_group = True
             gv = p.group_vars or []
-            if any(g.expr is not None for g in gv):
-                raise Unsupported("GROUP BY an expression")
+            for g in gv:
+                if g.expr is not None:
+                    # GROUP BY (expr AS ?v): a computed BIND before the grouping, the
+                    # group keyed on its value columns (`_general_group`)
+                    if _expr_has_exists(g.expr) or any(v.startswith(".") for v in _expr_vars(g.expr)):
+                        raise Unsupported("GROUP BY an expression over aggregates or EXISTS")
+                    q.group_binds.append((g.var, g.expr))
             q.group_vars = [g.var for g in gv]
             for k, agg in (p.aggregates or {}).items():
                 if agg.name.upper() not in ("COUNT", "SUM", "AVG", "MIN", "MAX", "SAMPLE", "GROUP_CONCAT"):
                     raise Unsupported(f"aggregate {agg.name}")
-                if agg.expr is not None and type(agg.expr).__name__ != "ExprVar":
-                    raise Unsupported("an aggregate over an expression (C3)")
+                if agg.expr is not None and _expr_has_exists(agg.expr):
+                    raise Unsupported("an aggregate over an EXISTS")
                 q.aggregates[k] = agg
         elif p.kind == KIND_FILTER:
             q.having.extend(p.filter_exprs or [])
         p = p.children[0]
     q.region = _region(p, ctx, ctx.aliases, outer_vars=set(), exclude=exclude)
+    if q.group_binds:
+        from .var_scope import compute_scope
+        visible = set(compute_scope(p).all_visible)
+        for v, e in q.group_binds:
+            if _expr_vars(e) - visible:
+                raise Unsupported("a GROUP BY expression reads a variable not bound below it")
+        q.region.binds = q.region.binds + list(q.group_binds)
+    if q.order_hidden and (q.group_vars is not None or q.distinct or q.sub_distinct):
+        # over groups, or past a DISTINCT that would drop its column: not yet
+        raise Unsupported("ORDER BY an expression with GROUP BY or DISTINCT")
     if q.binds:
         # evaluated innermost first: the loop above met them outermost first
         from .var_scope import compute_scope
@@ -2709,15 +2737,18 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         cvars |= set(leafvals)
         clanes.update({v: lane for v, (_a, lane) in leafvals.items()})
     carry = {v: a for v, (a, _lane) in leafvals.items()}
-    if cvars and q.group_vars is not None:
-        raise Unsupported("GROUP BY with a computed BIND (C3)")
+    if q.group_vars is not None and (cvars - set(q.group_vars)):
+        # a computed value under GROUP BY that is not a group key (a key is grouped on
+        # its value columns: `_general_group`)
+        raise Unsupported("GROUP BY with a computed BIND that is not a key")
     if q.project is None and q.group_vars is None:
         # SELECT * (no PROJECT in the algebra): every variable the pattern binds, in
         # the generator's order (`names` follows its var_map). Without this the
         # select list was EMPTY: PostgreSQL accepts `SELECT FROM ...`, so the
         # planner returned the right number of rows with no bindings in them (DAWG
         # open-world/date-3, open-eq-02; no query in the dashboard corpus is SELECT *).
-        q.project = [v for v in names if v in mentioned] + sorted(v for v in mentioned if v not in names)
+        shown = mentioned - q.order_hidden          # an ORDER BY expression's hidden variable is not shown
+        q.project = [v for v in names if v in shown] + sorted(v for v in shown if v not in names)
     unbound = {v for v in (q.project or []) if v not in agg_vars and v not in mentioned
                and v not in (q.group_vars or [])}
     q.order = [(v, d) for v, d in q.order if v not in unbound]
@@ -2725,7 +2756,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     need = set(term_vars) | set(q.group_vars or [])
     for ph, agg in q.aggregates.items():
         if agg.expr is not None:
-            need.add(agg.expr.var)
+            need |= _expr_vars(agg.expr)
     for v, _d in q.order:
         if v not in agg_vars:
             need.add(v)
@@ -2747,6 +2778,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             need |= {c.rsplit("pg_late.k_", 1)[1] for c in jcols}
     need -= cvars
     out_computed = [v for v in (q.sub_project if q.sub_project is not None else term_vars) if v in cvars]
+    out_computed += [v for v in (q.group_vars or []) if v in cvars and v not in out_computed]
     out_computed += [v for v, _d in q.order if v in cvars and v not in out_computed]
     for v in need:
         if v not in r.bound:
@@ -2761,16 +2793,23 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     # exposing the value columns of every variable an aggregate reads
     general = False
     if q.group_vars is not None:
-        general = any(a.name.upper() != "COUNT" for a in q.aggregates.values())
+        # (an aggregate over an expression, `SUM(?x * 2)`, `COUNT(?a + ?b)`: the general
+        # group, its expression the generator's over the exposed value columns)
+        general = any(a.name.upper() != "COUNT" or (a.expr is not None and type(a.expr).__name__ != "ExprVar")
+                      for a in q.aggregates.values())
         if keys_only and q.extend:
             general = True          # its results leave as values (c_<var>), as the general group makes them
+        if set(q.group_vars) & cvars:
+            general = True          # a computed group key: grouped on its value columns
         if not general:
             try:
                 [_having_sql(h, q, {ph: "x" for ph in q.aggregates}) for h in q.having]
             except Unsupported:
                 general = True
-    ainputs = sorted({a.expr.var for a in q.aggregates.values()
-                      if a.expr is not None and a.name.upper() != "COUNT"}) if general else []
+    ainputs = sorted(set().union(*(_expr_vars(a.expr) for a in q.aggregates.values()
+                                   if a.expr is not None and (a.name.upper() != "COUNT"
+                                                              or type(a.expr).__name__ != "ExprVar")))
+                     ) if general else []
     if final_filters or computed or ainputs or (carry and q.sub_distinct):
         from dataclasses import replace as _replace
         # An aggregate's input level needs no fence (that is for FILTERs: `_value_level`),
@@ -2793,7 +2832,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # rendered into the same statement as the outer one's)
         g1 = "g1" if not keys_only else "g1_" + min(
             (l.alias for u in reg.units for l in u.leaves), default="x")
-        level, gctx = _general_group(q, ctx, inner, sorted(need), ainputs, final_filters, g1=g1)
+        level, gctx = _general_group(q, ctx, inner, sorted(need), ainputs, final_filters, g1=g1,
+                                     computed_keys=set(q.group_vars) & cvars)
         out_keys = list(q.group_vars)
         # The groups, sized (the keys' distinct values, at most the input rows): left to
         # PostgreSQL the decode read the whole term table to hash-join 7 groups (a06)
@@ -3195,7 +3235,7 @@ def _ph(ph: str) -> str:
 
 
 def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str],
-                   filters: List[Any], g1: str = "g1") -> Tuple[str, Any]:
+                   filters: List[Any], g1: str = "g1", computed_keys=None) -> Tuple[str, Any]:
     """GROUP BY with any aggregate, on the generator's translation: the aggregates
     and their companions by `emit_group.aggregate_columns` (one translator), each
     result then given its eight output columns as the generator's EXTEND gives them
@@ -3212,9 +3252,19 @@ def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str
     for v in ainputs:
         types.register(ColumnInfo.simple_output(v, f"ag{fv_order.index(v)}", from_triple=True))
     gctx = ctx.child(types=types)
-    cols = [f"g0.k_{v} AS k_{v}" for v in q.group_vars]
+    from .sql_type_generation import COMPANION_SUFFIXES as _CS
+    ckeys = set(computed_keys or ())
+    cols = []
+    gb = []
+    for v in q.group_vars:
+        if v in ckeys:
+            cols += [f"g0.c_{v}{suf} AS c_{v}{suf}" for suf in ("",) + _CS]
+            gb += [f"g0.c_{v}{suf}" for suf in ("",) + _CS]
+        else:
+            cols.append(f"g0.k_{v} AS k_{v}")
+            gb.append(f"g0.k_{v}")
     for ph, agg in q.aggregates.items():
-        if agg.name.upper() == "COUNT":
+        if agg.name.upper() == "COUNT" and (agg.expr is None or type(agg.expr).__name__ == "ExprVar"):
             sql_ = ("COUNT(*)" if agg.expr is None else
                     f"COUNT({'DISTINCT ' if agg.distinct else ''}g0.k_{agg.expr.var})")
             sn = types.allocate(ph)
@@ -3224,7 +3274,7 @@ def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str
             cols += aggregate_columns(ph, agg, "g0", gctx, child_sql_names=[f"k_{v}" for v in need],
                                       grouped=bool(q.group_vars))
     level = (f"SELECT {', '.join(cols)}\nFROM ({inner}) AS g0"
-             + (f"\nGROUP BY {', '.join(f'g0.k_{v}' for v in q.group_vars)}" if q.group_vars else ""))
+             + (f"\nGROUP BY {', '.join(gb)}" if gb else ""))
     before = len(getattr(gctx, "_unresolved_vars", None) or [])
     scope = set(q.aggregates) | set(q.group_vars)
     res = []
