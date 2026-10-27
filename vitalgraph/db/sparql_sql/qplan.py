@@ -215,6 +215,14 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
             if q.sub_project is not None or q.sub_distinct:
                 # part of it already read as the supported nesting
                 raise Unsupported(f"sub-SELECT ({p.kind} below the outer query's modifiers)")
+            if (seen_group and not q.group_vars and not q.having and not q.agg_exprs and q.aggregates
+                    and all(a.name.upper() == "COUNT" and a.expr is None for a in q.aggregates.values())):
+                # Only COUNT(*) over it: the count of its first n rows is min(rows, n)
+                # whichever rows come first, so its ORDER is not part of the answer and
+                # is dropped. Kept, every distinct entity was decoded and sorted on its
+                # text to count 101 of them (the KGQuery capped count: 650 against
+                # today's 498 ms; its ORDER is only there to steer today's SQL).
+                p = _without_order(p)
             break
         if p.kind == KIND_SLICE:
             q.limit = p.limit if p.limit >= 0 else None
@@ -388,6 +396,19 @@ def _analyze_subselect(p, ctx, exclude: frozenset) -> Query:
             l.kind in ("subq", "union", "vtable", "path") for u in q.region.units for l in u.leaves):
         raise Unsupported("sub-SELECT with OPTIONAL, NOT EXISTS or a nested sub-SELECT")
     return q
+
+
+def _without_order(p):
+    """A sub-SELECT's modifier chain (SLICE / DISTINCT / PROJECT / ORDER) with its
+    ORDER left out, the plan nodes copied, not changed."""
+    import copy
+    if p.kind == KIND_ORDER:
+        return p.children[0]
+    if p.kind in (KIND_SLICE, KIND_DISTINCT, KIND_REDUCED, KIND_PROJECT) and p.children:
+        q = copy.copy(p)
+        q.children = [_without_order(p.children[0])]
+        return q
+    return p
 
 
 def _grouped_subselect(p) -> bool:
