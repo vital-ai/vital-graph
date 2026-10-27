@@ -1,6 +1,6 @@
 # 320 — only_cause on the default path scans its NOT EXISTS body's CTE once per outer row
 
-## Status: (1) FIXED 2026-10-27 on the default path; verified on the vg test stack rebuilt for the fix (unit, DAWG conformance, integration and API suites, 0 failures). OPEN for (2): not reproduced locally; to be re-read on production (read-only EXPLAIN) once (1) is deployed, since the plan around it changes.
+## Status: RESOLVED 2026-10-27. (1) fixed on the default path and verified on the vg test stack rebuilt for the fix (unit, DAWG conformance, integration and API suites, 0 failures); (1) and (2) verified on production with the fixed generator, read-only, before deploy.
 
 ## What
 
@@ -71,3 +71,16 @@ EXISTS inside the lifted FILTER.
 
 `issues/310`'s production check: `test_scripts_internal/kg_uw_decision_reasons/prod_explain_ab.py`,
 a per-node breakdown of the last plan (`/tmp/claude/vg310/after_only_cause_plan.json`).
+
+## Production check (2026-10-27, read-only, before deploy)
+
+`prod_explain_ab.py`, the generator at 265e40d4 (before) and 875e375d (after), `cardiff_uw`,
+three EXPLAIN ANALYZE runs each, the executor's pin, all buffers hit:
+
+| | exec ms (median) | rows | plan |
+|---|---|---|---|
+| before | 4,890 | 27 | NOT EXISTS a SubPlan run 7,098 times; the term table (`t_v2`) sequentially scanned whole, 2,257,309 rows, 452 ms |
+| after | 497 | 27 | one Hash Anti Join; no full term-table scan |
+
+(2) went with (1): the 8-row estimate was the join under the per-row SubPlan's filter, and
+that join is gone. Live on production once 875e375d is deployed.
