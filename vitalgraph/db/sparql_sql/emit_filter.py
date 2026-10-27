@@ -17,8 +17,22 @@ def emit_filter(plan: PlanV2, ctx: EmitContext) -> str:
     Text-based filters (CONTAINS, REGEX, etc.) are pushed down into
     the child BGP as semi-join constraints before emission.
     """
+    child_sql, where_parts, f_alias = filter_parts(plan, ctx, level_alias=True)
+    if not where_parts:
+        return child_sql
+    return (
+        f"SELECT * FROM ({child_sql}) AS {f_alias}\n"
+        f"WHERE {' AND '.join(where_parts)}"
+    )
+
+
+def filter_parts(plan: PlanV2, ctx: EmitContext, level_alias: bool = False):
+    """A FILTER's child SQL, its conditions and (`level_alias`) the alias of the
+    level wrapping them, apart: `emit_filter` wraps them in that level; an EXISTS
+    body puts the conditions in its sub-link's own WHERE (`emit_expressions`,
+    issues/320). The alias is allocated where it always was, after the child and
+    before the conditions (which may allocate their own)."""
     from .emit import emit
-    from .emit_expressions import expr_to_sql
     from .filter_pushdown import push_filters
 
     # Push text and numeric-range filters into the child BGP before emitting
@@ -27,9 +41,9 @@ def emit_filter(plan: PlanV2, ctx: EmitContext) -> str:
     child_sql = emit(plan.child, ctx)
 
     if not plan.filter_exprs:
-        return child_sql
+        return child_sql, [], None
 
-    f_alias = ctx.aliases.next("f")
+    f_alias = ctx.aliases.next("f") if level_alias else None
     where_parts = []
     # A FILTER's expressions see exactly the variables its child pattern binds
     # (SPARQL §18.2.1). Declaring that lets an unresolvable reference be told
@@ -46,12 +60,6 @@ def emit_filter(plan: PlanV2, ctx: EmitContext) -> str:
             if sql_expr:
                 where_parts.append(sql_expr)
 
-    if not where_parts:
-        return child_sql
-
-    ctx.log("filter", f"WHERE: {' AND '.join(p[:60] for p in where_parts)}")
-
-    return (
-        f"SELECT * FROM ({child_sql}) AS {f_alias}\n"
-        f"WHERE {' AND '.join(where_parts)}"
-    )
+    if where_parts:
+        ctx.log("filter", f"WHERE: {' AND '.join(p[:60] for p in where_parts)}")
+    return child_sql, where_parts, f_alias

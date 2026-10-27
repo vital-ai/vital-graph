@@ -1,6 +1,6 @@
 # 320 — only_cause on the default path scans its NOT EXISTS body's CTE once per outer row
 
-## Status: OPEN 2026-10-27. Measured on production, read-only; not yet reproduced or fixed locally.
+## Status: (1) FIXED 2026-10-27 on the default path; verified on the vg test stack rebuilt for the fix (unit, DAWG conformance, integration and API suites, 0 failures). OPEN for (2): not reproduced locally; to be re-read on production (read-only EXPLAIN) once (1) is deployed, since the plan around it changes.
 
 ## What
 
@@ -28,6 +28,44 @@ two nodes the 310 fix does not touch:
   every negation; on `uw_prodshape2` it runs only_cause in about 150 ms against today's 700.
 - For (2): the estimate for the join under the anti-join filter; probing the term table by key
   needs no estimate to be cheap.
+
+## Reproduced locally
+
+`uw_prodshape2`, under the executor's own setting (`join_collapse_limit = 1`): 673 ms, the
+body's `bgp_sg_ex_q0_cte` scanned 3,475 times (one per outer row), each filtering ~1,625 rows.
+
+## Cause of (1)
+
+The sub-link was `NOT EXISTS (SELECT 1 FROM (SELECT * FROM (<body>) AS ex_f0 WHERE <FILTER>)
+AS _ex0 WHERE <correlation>)`. PostgreSQL pulls a sub-link up into an anti- or semi-join only
+when its outer references are all in the sub-link's own WHERE; the body's
+`FILTER(?f2 != ?f)` reads the outer `?f` from inside the derived table, so it stayed a SubPlan
+re-run per outer row. Measured by hand-editing the generated SQL:
+
+| variant | ms |
+|---|---|
+| as generated | 673 |
+| the body's CTE moved to the statement's WITH, FILTER left where it was | 693 |
+| the FILTER moved to the sub-link's WHERE, CTE left where it was | 153 (Merge Anti Join) |
+
+The MATERIALIZED CTE is not the obstacle; the FILTER's place is.
+
+## Fix
+
+`emit_expressions` (the EXISTS emitter): a body whose top is a FILTER has its conditions put
+in the sub-link's own WHERE beside the correlation (`emit_filter.filter_parts`), the same rows
+and conditions. Only when the body shares a variable with the outer row, so the pulled-up join
+has an equality to hash or merge on: with the FILTER the only correlation
+(`{ ?x :name ?n2 FILTER(?n2 = ?n && ?x != ?e) }`, the n07 shape), pulled up it became a
+nested-loop semi-join testing every body row per outer row, 1.4 -> 4.8 s.
+
+Old vs new generated SQL, the executor's settings, rows identical in every case:
+only_cause 717 -> 157 ms (0.22x); the other eight UW dashboard queries generate the same SQL;
+negation corpus n03 0.94x, n06 0.90x, n09 0.90x, n07 and the rest the same SQL.
+
+`tests/integration/test_exists_body_filter_reads_the_outer_row.py`: NOT EXISTS / EXISTS with a
+body FILTER reading the outer row, one reading only the body's, a constant one, and a nested
+EXISTS inside the lifted FILTER.
 
 ## How it was found
 

@@ -2155,7 +2155,24 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
     # substituted, so outer variables are in scope throughout it — even
     # inside a nested FILTER that declares its own pattern's scope.
     inner_ctx.correlated_scope = frozenset(outer_vars)
-    inner_sql = emit(inner_plan, inner_ctx)
+    # A body whose top is a FILTER: its conditions go in the sub-link's OWN WHERE,
+    # beside the correlation, not in a level of the derived table. Same rows, same
+    # conditions; but PostgreSQL pulls a sub-link up into a (hashed, merged) anti-
+    # or semi-join only when its outer references are all in that WHERE. A FILTER
+    # reading the outer row (`FILTER(?f2 != ?f)`) inside the derived table kept it a
+    # SubPlan re-run per outer row, scanning the body each time: only_cause, 3,475
+    # runs over a 3,475-row body, 673 ms against 153 lifted (issues/320).
+    # Only beside an equality correlation (a variable the body shares with the outer
+    # row), which the join hashes or merges on. With the FILTER the only correlation
+    # (`{ ?x :name ?n2 FILTER(?n2 = ?n && ?x != ?e) }`), pulled up it is a nested-loop
+    # semi-join testing every body row per outer row (n07: 1.4 -> 4.8 s).
+    from .ir import KIND_FILTER
+    lifted: list = []
+    if inner_plan.kind == KIND_FILTER and (outer_vars | set(outer_uuid_overrides or {})) & inner_vars:
+        from .emit_filter import filter_parts
+        inner_sql, lifted, _ = filter_parts(inner_plan, inner_ctx)
+    else:
+        inner_sql = emit(inner_plan, inner_ctx)
 
     # Substitute inner constants with direct term table lookups
     # (inner aliases' constants are NOT in the outer CTE)
@@ -2180,6 +2197,7 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
                 f"WHERE term_text = '{_esc(text)}' AND term_type = '{ttype}' LIMIT 1)"
             )
         inner_sql = inner_sql.replace(token, replacement)
+        lifted = [p.replace(token, replacement) for p in lifted]
 
     # Variables the inner pattern binds itself correlate through an explicit
     # predicate below; the filter-only ones were bound to outer columns above.
@@ -2203,9 +2221,9 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
         elif o_info and o_info.sql_name:
             corr_parts.append(f"{o_info.sql_name}__uuid = {i_uuid}")
 
-    if corr_parts:
-        corr_where = " AND ".join(corr_parts)
-        subquery = f"SELECT 1 FROM ({inner_sql}) AS {ex_alias} WHERE {corr_where}"
+    where = corr_parts + lifted
+    if where:
+        subquery = f"SELECT 1 FROM ({inner_sql}) AS {ex_alias} WHERE {' AND '.join(where)}"
     else:
         subquery = f"SELECT 1 FROM ({inner_sql}) AS {ex_alias}"
 
