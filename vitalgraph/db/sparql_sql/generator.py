@@ -2487,6 +2487,16 @@ async def _generate_sql(
             aliases.values_bound_vars = {}      # a statistic must never fail a query
         with _decisions.stage("emit"):
             sql_str = emit(plan, ctx)
+            # `SELECT DISTINCT … ORDER BY` with no LIMIT: the DISTINCT is the root and
+            # the ORDER is below it, where deduplicating loses it; a LIMIT's slice
+            # applies it again (`emit_slice`), and with none nothing did: the rows came
+            # back in hash order, or ascending for a DESC (issues/323).
+            from .ir import KIND_DISTINCT as _KD, KIND_REDUCED as _KR
+            if plan.kind in (_KD, _KR):
+                from .emit_slice import reorder_over_distinct
+                _ordered = reorder_over_distinct(plan, ctx, sql_str, require_projected=True)
+                if _ordered is not None:
+                    sql_str = _ordered
 
         # Issue 028: any variable an expression could not resolve compiled to
         # NULL. Harmless when the variable is legitimately unbound, and a

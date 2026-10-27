@@ -43,6 +43,49 @@ def _find_buried_order_with_tiebreak(plan: PlanV2, depth: int = 0) -> list:
     return []
 
 
+def reorder_over_distinct(distinct: PlanV2, ctx: EmitContext, child_sql: str,
+                          require_projected: bool = False) -> Optional[str]:
+    """The DISTINCT's rows (`child_sql`) in the ORDER buried below it, or None.
+
+    Jena's algebra puts ORDER inside PROJECT inside DISTINCT, and deduplicating
+    does not keep an order: the ORDER BY written inside came back in hash order,
+    or ascending for a DESC (issues/323). So the order is applied again above the
+    DISTINCT, with the generator's own keys (`variable_order_keys`: the value,
+    then the date, then the collated text, issues/295), as an ORDER BY written
+    over the same variable elsewhere sorts. A key the DISTINCT does not project
+    has no column above it: `require_projected` returns None for one (the
+    statement's root, which never re-ordered); otherwise it keeps its old text
+    key, as `emit_slice` always wrote it."""
+    from .emit_expressions import expr_to_sql
+    from .emit_order import variable_order_keys
+    buried = _find_buried_order_with_tiebreak(distinct)
+    if not buried:
+        return None
+    proj = _find_project(distinct)
+    projected = set(proj.project_vars) if proj is not None and proj.project_vars else None
+    s_alias = ctx.aliases.next("s")
+    ob_parts = []
+    for key, direction in buried:
+        suffix = " DESC" if direction == "DESC" else ""
+        if isinstance(key, str):
+            info = ctx.types.get(key)
+            if info is not None and info.sql_name and (projected is None or key in projected):
+                ob_parts += variable_order_keys(s_alias, info, key, direction)
+                continue
+            if require_projected:
+                return None
+            sn = info.sql_name if info else key
+            ob_parts.append(f"{s_alias}.{sn}{suffix}")
+        else:
+            col = expr_to_sql(key, ctx)
+            if not col:
+                continue
+            ob_parts.append(f"{col}{suffix}")
+    if not ob_parts:
+        return None
+    return f"SELECT * FROM ({child_sql}) AS {s_alias}\nORDER BY {', '.join(ob_parts)}"
+
+
 def _buried_order_is_synthesized(plan: PlanV2, depth: int = 0) -> bool:
     """Was the ORDER `_find_buried_order` will return one WE imposed?
 
@@ -869,29 +912,9 @@ def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
     # (SPARQL: order after distinct, Jena algebra: order inside distinct)
     reorder_parts = []
     if plan.child and plan.child.kind in (KIND_DISTINCT, KIND_REDUCED):
-        buried = _find_buried_order_with_tiebreak(plan.child)
-        if buried:
-            from .ir import TiebreakVar
-            s_alias = ctx.aliases.next("s")
-            ob_parts = []
-            for key, direction in buried:
-                if isinstance(key, str):
-                    info = ctx.types.get(key)
-                    sn = info.sql_name if info else key
-                    col = f"{s_alias}.{sn}"
-                    if isinstance(key, TiebreakVar) and info is not None and info.has_term_identity():
-                        col = f"{s_alias}.{sn}__uuid"       # the page's tiebreak (issues/312)
-                else:
-                    col = expr_to_sql(key, ctx)
-                    if not col:
-                        continue
-                suffix = " DESC" if direction == "DESC" else ""
-                ob_parts.append(f"{col}{suffix}")
-            if ob_parts:
-                reorder_parts = [
-                    f"SELECT * FROM ({child_sql}) AS {s_alias}",
-                    f"ORDER BY {', '.join(ob_parts)}",
-                ]
+        reordered = reorder_over_distinct(plan.child, ctx, child_sql)
+        if reordered is not None:
+            reorder_parts = [reordered]
 
     if reorder_parts:
         parts = reorder_parts

@@ -55,7 +55,12 @@ def emit_distinct(plan: PlanV2, ctx: EmitContext) -> str:
 # Push-down helpers
 # ---------------------------------------------------------------------------
 
-_SAFE_MODIFIER_KINDS = frozenset({KIND_PROJECT, KIND_ORDER, KIND_SLICE, KIND_REDUCED})
+# Not SLICE: a LIMIT below the DISTINCT is a sub-SELECT's own (the statement's is
+# above it), and it decides which rows exist. Skipped here, `SELECT DISTINCT ?t
+# { { SELECT ?t … ORDER BY ?v LIMIT 20 } }` deduplicated every row (issues/323).
+# ORDER is skipped safely: it only orders, and the order is applied again above the
+# DISTINCT (`emit_slice.reorder_over_distinct`).
+_SAFE_MODIFIER_KINDS = frozenset({KIND_PROJECT, KIND_ORDER, KIND_REDUCED})
 _LEAF_KINDS = frozenset({KIND_BGP, KIND_TABLE, KIND_NULL, KIND_PATH})
 
 
