@@ -437,6 +437,62 @@ class TestFrameSorting:
 
         assert seen == expected, f"paged {seen} != unpaged {expected}"
 
+    async def test_parent_scoped_sorted_listing_counts_its_children(
+        self, vg_client, test_space, test_graph
+    ):
+        """A sorted listing of one parent's children: those children, in order, and
+        their count as the total, not the graph's (issues/322: the index path's count
+        dropped `parent_uri`; the path itself never ran, so it never showed)."""
+        ns = f"{NS}par_{_uid()}/"
+        parent = KGFrame()
+        parent.URI = f"{ns}parent"
+        parent.name = "Parent"
+        cr = await vg_client.kgframes.create_kgframes(
+            space_id=test_space, graph_id=test_graph, objects=[parent])
+        assert cr.is_success, cr.error_message
+        kids = []
+        for i, n in enumerate(["Mike", "Kilo", "Lima"], 1):
+            f = KGFrame()
+            f.URI = f"{ns}c{i:02d}"
+            f.name = n
+            kids.append(f)
+        cr = await vg_client.kgframes.create_kgframes(
+            space_id=test_space, graph_id=test_graph, objects=kids, parent_uri=parent.URI)
+        assert cr.is_success, cr.error_message
+        await self._seed(vg_client, test_space, test_graph)       # frames that are not its children
+
+        lr = await vg_client.kgframes.list_kgframes(
+            space_id=test_space, graph_id=test_graph, page_size=1000,
+            parent_uri=parent.URI, sort_by=self.NAME_PROP, sort_order="asc")
+        assert lr.is_success
+        got = [str(o.URI).rsplit("/", 1)[-1] for o in (lr.objects or [])]
+        assert got == ["c02", "c03", "c01"], got                  # Kilo, Lima, Mike
+        assert lr.total_count == 3, lr.total_count
+
+    async def test_sorted_listing_excludes_a_status(
+        self, vg_client, test_space, test_graph
+    ):
+        """`exclude_status` with a sort: the excluded frames are left out (the index
+        path has no term for it and must decline, not ignore it)."""
+        ns = f"{NS}excl_{_uid()}/"
+        drop = "http://vital.ai/ontology/vital-aimp#ObjectStatusType_DELETED"
+        keep = "http://vital.ai/ontology/vital-aimp#ObjectStatusType_ACTIVE"
+        objs = []
+        for i, (n, st) in enumerate([("Echo", drop), ("Delta", keep), ("Golf", drop),
+                                     ("Foxtrot", None)], 1):
+            f = KGFrame()
+            f.URI = f"{ns}f{i:02d}"
+            f.name = n
+            if st:
+                f.objectStatusType = st
+            objs.append(f)
+        cr = await vg_client.kgframes.create_kgframes(
+            space_id=test_space, graph_id=test_graph, objects=objs)
+        assert cr.is_success, cr.error_message
+        got = await self._list(vg_client, test_space, test_graph, ns, sort_by=self.NAME_PROP,
+                               sort_order="asc", exclude_status=drop)
+        assert got == ["f02", "f04"], got                         # Delta, Foxtrot
+
 
 class TestFrameQuery:
     """POST /kgframes/query — criteria-based frame search."""

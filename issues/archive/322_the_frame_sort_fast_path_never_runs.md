@@ -1,6 +1,6 @@
 # 322 — The frame listing's sort / filter fast path never runs
 
-## Status: OPEN 2026-10-27. Found, not yet fixed or measured on production.
+## Status: RESOLVED 2026-10-27. Verified on the vg test stack rebuilt for the fix: unit, DAWG conformance, integration and API suites, 0 failures; the fast path served every sorted / filtered frame listing of the API suite (no AttributeError, no decline).
 
 ## Defect
 
@@ -29,7 +29,21 @@ The API suite against the planner stack: 28 tracebacks per run (c35-c37 gates), 
 `tests/api/test_kgframes_api.py` (frame sorting, sorted paging). It surfaced when a planner
 change made the fallback SPARQL fail, and the sorted listings came back empty.
 
-## To do
+## Fix
+
+`kgframes_endpoint` passes `_resolve_space_impl(backend)`, as the entity path does. Two
+latent defects of the path, which had never served a request, fixed with it:
+
+- `exclude_status` was neither passed to the table query nor a reason to decline: served
+  there, it would have been ignored. It now declines to SPARQL.
+- the total for a parent-scoped listing was counted without `parent_uri`: the graph's
+  frame count, not the parent's children. It now passes `parent_uri`, as the SPARQL path does.
+
+`tests/api/test_kgframes_api.py`: a parent-scoped sorted listing (its children, in order,
+counted as 3) and a sorted listing excluding a status; the existing sort / paging tests now
+run on the fast path.
+
+## Was to do
 
 - Pass the resolved storage impl (`_resolve_space_impl`), as the entity path does.
 - Then the fast path serves these listings for the first time: run the frame sort and

@@ -766,14 +766,20 @@ class KGFramesEndpoint:
             # type in a column, so the two can actually meet. While that table
             # was Assertion-only it could only answer traversals whose results
             # happened to be Assertions.
-            if not search and (
+            # `exclude_status` declines: the table query has no term for it, and
+            # served here it would be ignored. The storage impl, not the space
+            # record: passed `space_impl`, every call raised on `.db_impl` and fell
+            # back to SPARQL (issues/322).
+            from ..kg_impl.kg_backend_utils import _resolve_space_impl
+            fp_impl = _resolve_space_impl(backend)
+            if fp_impl is not None and not search and not exclude_status and (
                     sort_by or frame_type_uri or status or parent_uri
                     or form_type
                     or created_after or created_before
                     or modified_after or modified_before):
                 from ..db.sparql_sql.fast_frame_prop_sort import fast_frame_prop_page
                 fp_uris = await fast_frame_prop_page(
-                    space_impl, space_id, graph_id, page_size, offset,
+                    fp_impl, space_id, graph_id, page_size, offset,
                     form_type=form_type, frame_type_uri=frame_type_uri,
                     filters={"status": status, "created_after": created_after,
                              "created_before": created_before,
@@ -802,6 +808,7 @@ class KGFramesEndpoint:
                         status=status, exclude_status=exclude_status,
                         created_after=created_after, created_before=created_before,
                         modified_after=modified_after, modified_before=modified_before,
+                        parent_uri=parent_uri,
                     )
                     _ch = _count_cache.query_hash(_cq)
                     total_count = _count_cache.get(space_id, graph_id, _ch)
