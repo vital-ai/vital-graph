@@ -308,6 +308,19 @@ vgp_problem_begin(PlannerInfo *root, List *initial_rels, VgpAdvice *advice)
 			if (sj->jointype == JOIN_SEMI)
 				p->transparent = bms_add_members(p->transparent, sj->syn_righthand);
 		}
+		/*
+		 * An early decode's term row (alias `vgd_<var>`, qplan's render): LEFT
+		 * JOINed inside the unit that binds the variable, it is in every join
+		 * above it, which the advice names without it.
+		 */
+		for (int rti = 1; rti < root->simple_rel_array_size; rti++)
+		{
+			RangeTblEntry *rte = root->simple_rte_array[rti];
+
+			if (rte && rte->rtekind == RTE_RELATION && rte->eref &&
+				strncmp(rte->eref->aliasname, "vgd_", 4) == 0)
+				p->transparent = bms_add_member(p->transparent, rti);
+		}
 		p->transparent = bms_del_members(p->transparent, named);
 		while ((x = bms_next_member(p->transparent, x)) >= 0)
 		{

@@ -307,3 +307,18 @@ size k0 2000 a
    AND EXISTS (SELECT 1 FROM q10 x WHERE x.s = a.s AND x.p = 4 AND x.o < 20);
 SELECT vg_planner_last_report();
 DROP TABLE q10;
+-- An early decode's term row (alias vgd_<var>) is transparent: LEFT JOINed inside the
+-- unit that binds the variable, the join the advice names (a b) holds it too.
+CREATE TABLE q11 (s int, p int, o int);
+INSERT INTO q11 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+CREATE TABLE t11 (u int PRIMARY KEY, txt text);
+INSERT INTO t11 SELECT g, 'x' || g FROM generate_series(0, 1100) g;
+ANALYZE q11; ANALYZE t11;
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+size k0 1846 a b
+method m0 hash a b
+*/ SELECT * FROM (q11 a LEFT JOIN t11 vgd_s ON vgd_s.u = a.s)
+   JOIN q11 b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
+SELECT vg_planner_last_report();
+DROP TABLE q11; DROP TABLE t11;

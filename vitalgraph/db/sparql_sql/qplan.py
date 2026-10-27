@@ -2017,6 +2017,12 @@ class _R:
         self.sizes: List[Tuple[float, List[str]]] = []
         self.units_advice: List[str] = []
         self.methods: List[Tuple[str, List[str]]] = []   # the plan's join choices
+        # Early decode (`render`): projected variables whose term rows may be joined in
+        # the unit binding them when it has at most 1/EARLY_DECODE_RATIO of the output's
+        # rows; `early_done`: variable -> its term row's alias (`vgd_<var>`)
+        self.early: Set[str] = set()
+        self.early_rows: float = 0.0
+        self.early_done: Dict[str, str] = {}
 
     def bind(self, alias):
         for var, poss in self.pos.positions.items():
@@ -2088,6 +2094,20 @@ def _pick_driver(u: Unit, pos: "_Pos", aliases):
     return best
 
 
+def _early_cols(v: str, sn: str, r: "_R", ctx) -> List[str]:
+    """The executor's columns for ?v from its early-decoded term row (`vgd_<var>`), as
+    the output names them (`<sn>`, `<sn>__type`, ...), selected at the keys level."""
+    from .emit_bgp import (_BOOLEAN_DT, _DATETIME_DATATYPES, _NUMERIC_DATATYPES,
+                           _NUMERIC_DT_SQL_LIST)
+    from .sql_type_generation import TypeRegistry
+    t = r.early_done[v]
+    return [c.replace(f"ESUB.{sn}__uuid", r.bound[v]) for c in TypeRegistry.term_table_columns(
+        sn, t, "ESUB", _NUMERIC_DT_SQL_LIST, dt_case_sql=ctx.dt_case_expr(t),
+        numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
+        boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
+        datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))]
+
+
 def _optional_rows(rows: float, otree: "Node", jvars: List[str]) -> float:
     """Rows after LEFT-JOINING an OPTIONAL to `rows`: each row extended by its matches
     (the OPTIONAL's rows per distinct join key), or kept alone; sharing no variable,
@@ -2107,6 +2127,9 @@ def _optional_rows(rows: float, otree: "Node", jvars: List[str]) -> float:
 #: (15-run minimums; 1.01x at twenty). A 3-value cross product (u11, o05) is far above.
 DEDUP_DECODE_MIN_ROWS = 1000.0
 DEDUP_DECODE_RATIO = 20.0
+#: Early decode (`render`): a variable's term row joined in the unit binding it when the
+#: output has at least this many times the unit's rows.
+EARLY_DECODE_RATIO = 2.0
 
 #: `unit_methods`: advise a nested loop into a constant leaf only when its own scan
 #: is at least this many times the rows probing it.
@@ -2191,6 +2214,18 @@ def _render_node(node: Node, reg: Region, r: _R) -> Tuple[str, Set[str], List[st
                 steps = [drv[1][0]] + steps
             r.units_advice.append(f"steps({' '.join(steps)}) rows({' '.join(rows_items)})")
             sql = f"({sql})" if pend == [] else sql
+        # Early decode: a variable this unit binds, decoded here when the unit has far
+        # fewer rows than the output (joined later, each row's term row was looked up
+        # once per output row: u11, ?b 10,000 values over 30,000 rows). Its alias is
+        # `vgd_`: transparent to the advice (vg_planner advice_state.c), so the advised
+        # relation sets do not change.
+        if r.early and (u.rows.rows or 0.0) * EARLY_DECODE_RATIO <= r.early_rows:
+            for v in sorted(r.early):
+                if v in r.early_done or v not in r.bound or r.bound[v].split(".")[0] not in present:
+                    continue
+                t = f"vgd_{re.sub(chr(92) + 'W', '', v)}"
+                sql = f"({sql}\n LEFT JOIN {r.pos.term_table} AS {t} ON {t}.term_uuid = {r.bound[v]})"
+                r.early_done[v] = t
         return sql, present, pend
     if node.kind == "probe":
         lsql, present, pend = _render_node(node.left, reg, r)
@@ -2842,6 +2877,15 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     tree = main_tree or search(reg)
     base_sizes = _base_sizes(reg)
     r = _R(pos)
+    # Early decode, in a plain query only: no value level between the joins and the
+    # output (FILTER, BIND, OPTIONAL, a sub-SELECT's values), no grouping, DISTINCT or
+    # ordering on keys, no LIMIT (after one, decoding the page last is cheaper)
+    if (not keys_only and q.group_vars is None and not q.aggregates and not q.distinct
+            and not q.sub_distinct and q.limit is None and not q.offset and not q.order
+            and not (reg.filters or reg.iri_ne or reg.binds or reg.optionals or q.binds)
+            and not any(getattr(l, "vals", None) for u in reg.units for l in u.leaves)):
+        r.early = {v for v in (q.project or []) if v in region_vars(reg)}
+        r.early_rows = tree.rows
     core, present, pend = _render_node(tree, reg, r)
     for priv, v in reg.maybe_joins:
         if priv not in r.bound or v not in r.bound:
@@ -3310,6 +3354,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     else:
         from .sql_type_generation import COMPANION_SUFFIXES as _CS
         keys = keys + [f"{a}.c_{v}{suf} AS c_{v}{suf}" for v, a in sorted(carry.items()) for suf in ("",) + _CS]
+        keys = keys + [c for v in sorted(r.early_done) if v in names for c in _early_cols(v, names[v], r, ctx)]
         inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + (", ".join(keys) or "1 AS one") + "\nFROM " + core
                  + ("\nWHERE " + " AND ".join(where) if where else ""))
     level = inner
@@ -3459,6 +3504,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # a VALUES / IN pin bounds the variable's distinct values exactly
         out_ndv[v] = min(out_ndv.get(v, float(len(uuids))), float(len(uuids)))
     dedup = {v for v in (q.project or []) if v not in agg_vars and v not in cvars and v not in unbound
+             and v not in r.early_done
              and final_rows >= DEDUP_DECODE_MIN_ROWS and out_ndv.get(v)
              and final_rows >= DEDUP_DECODE_RATIO * out_ndv[v]}
     for v in (q.project or []):
@@ -3482,6 +3528,10 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             # a computed value: its own companion columns, as the generator produced them
             from .sql_type_generation import COMPANION_SUFFIXES as _CS
             cols += [f"top.c_{v}{suf} AS {sn}{suf}" for suf in ("",) + _CS]
+            continue
+        if v in r.early_done:
+            # decoded in the unit that binds it (`_early_cols`): its columns pass through
+            cols += [f"top.{c.rsplit(' AS ', 1)[1]}" for c in _early_cols(v, sn, r, ctx)]
             continue
         t = f"d_{v}"
         vcols = [c.replace(f"top.{sn}__uuid", f"top.k_{v}") for c in TypeRegistry.term_table_columns(

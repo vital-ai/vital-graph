@@ -902,3 +902,39 @@ SELECT vg_planner_last_report();
 (1 row)
 
 DROP TABLE q10;
+-- An early decode's term row (alias vgd_<var>) is transparent: LEFT JOINed inside the
+-- unit that binds the variable, the join the advice names (a b) holds it too.
+CREATE TABLE q11 (s int, p int, o int);
+INSERT INTO q11 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+CREATE TABLE t11 (u int PRIMARY KEY, txt text);
+INSERT INTO t11 SELECT g, 'x' || g FROM generate_series(0, 1100) g;
+ANALYZE q11; ANALYZE t11;
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+size k0 1846 a b
+method m0 hash a b
+*/ SELECT * FROM (q11 a LEFT JOIN t11 vgd_s ON vgd_s.u = a.s)
+   JOIN q11 b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
+             QUERY PLAN              
+-------------------------------------
+ Hash Left Join
+   Hash Cond: (a.s = vgd_s.u)
+   ->  Hash Join
+         Hash Cond: (a.s = b.s)
+         ->  Seq Scan on q11 a
+               Filter: (p = 1)
+         ->  Hash
+               ->  Seq Scan on q11 b
+                     Filter: (p = 2)
+   ->  Hash
+         ->  Seq Scan on t11 vgd_s
+(11 rows)
+
+SELECT vg_planner_last_report();
+         vg_planner_last_report          
+-----------------------------------------
+ size k0: 1846 applied (PostgreSQL 3422)+
+ method m0: hash applied
+(1 row)
+
+DROP TABLE q11; DROP TABLE t11;
