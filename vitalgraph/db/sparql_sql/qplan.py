@@ -203,9 +203,19 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
             q.sub_distinct = True
             p = p.children[0]
             continue
-        if (p.kind == KIND_PROJECT and q.project is not None) or (p.kind == KIND_SLICE and q.limit is not None) \
+        # Any other modifier below the outer projection or grouping is a SUB-SELECT's
+        # own: the outer query's LIMIT is above its PROJECT, so a SLICE below it is
+        # always a sub-SELECT's (`SELECT DISTINCT ?t { { SELECT ?t ?v … ORDER BY ?v
+        # LIMIT 20 } }`: read as the outer page, the DISTINCT ran before the cut and the
+        # ORDER sorted on ?v, which the projection had dropped: an SQL error). The
+        # region plans it whole as one leaf (`_collect`, `_subsel_leaf`): the KGQuery
+        # capped count, `SELECT (COUNT(*)) { { SELECT DISTINCT ?e … LIMIT cap+1 } }`.
+        if (p.kind == KIND_PROJECT and q.project is not None) or (p.kind == KIND_SLICE and inner) \
                 or (seen_group and p.kind in (KIND_PROJECT, KIND_DISTINCT, KIND_REDUCED, KIND_SLICE, KIND_ORDER)):
-            raise Unsupported(f"sub-SELECT ({p.kind} below the outer query's modifiers)")
+            if q.sub_project is not None or q.sub_distinct:
+                # part of it already read as the supported nesting
+                raise Unsupported(f"sub-SELECT ({p.kind} below the outer query's modifiers)")
+            break
         if p.kind == KIND_SLICE:
             q.limit = p.limit if p.limit >= 0 else None
             q.offset = p.offset or 0
