@@ -348,8 +348,10 @@ def _analyze_subselect(p, ctx, exclude: frozenset) -> Query:
     if p.kind != KIND_GROUP:
         raise Unsupported(f"sub-SELECT inside the pattern without GROUP BY ({p.kind})")
     gv = p.group_vars or []
-    if not gv or any(g.expr is not None for g in gv):
-        raise Unsupported("sub-SELECT: GROUP BY nothing or an expression")
+    # (no GROUP BY: one group, `SELECT (MAX(?y) AS ?m) { ... }`, its picked term a key
+    # like any other: W3C sq08 joins on it. Over no rows it is unbound and joins nothing.)
+    if any(g.expr is not None for g in gv):
+        raise Unsupported("sub-SELECT: GROUP BY an expression")
     q.group_vars = [g.var for g in gv]
     for k, agg in (p.aggregates or {}).items():
         if agg.name.upper() not in ("MAX", "MIN") or type(agg.expr).__name__ != "ExprVar":
@@ -620,8 +622,9 @@ def _collect(p, ctx, aliases, parts, outer_vars):
                 # unbound inside (an error, so false), and joining first would bind it.
                 from .var_scope import compute_scope
                 visible = compute_scope(p.children[0]).all_visible
-                if _expr_has_exists(e):
-                    raise Unsupported("FILTER with EXISTS inside an expression (C2)")
+                if _expr_has_exists(e) and not all(
+                        getattr(x, "prepared_plan", None) is not None for x in _exists_nodes(e)):
+                    raise Unsupported("FILTER with an EXISTS inside an expression, not prepared")
                 if _expr_vars(e) - set(visible):
                     e = _unbind(e, _expr_vars(e) - set(visible))
                 for c in _conjuncts(e):
@@ -675,8 +678,9 @@ def _collect(p, ctx, aliases, parts, outer_vars):
         visible = set(compute_scope(p.children[0]).all_visible)
         if p.extend_var in visible:
             raise Unsupported(f"BIND to ?{p.extend_var}, already bound")
-        if _expr_has_exists(p.extend_expr):
-            raise Unsupported("BIND with EXISTS (C2)")
+        if _expr_has_exists(p.extend_expr) and not all(
+                getattr(x, "prepared_plan", None) is not None for x in _exists_nodes(p.extend_expr)):
+            raise Unsupported("BIND with an EXISTS not prepared")
         ex = p.extend_expr
         if _expr_vars(ex) - visible:
             ex = _unbind(ex, _expr_vars(ex) - visible)
@@ -1216,6 +1220,10 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
     # a sub-SELECT's carried value is read from its c_<var> columns, not a term row
     read = set().union(*(_expr_vars(e) for e in list(reg.filters) + extra_filters),
                        *(_expr_vars(e) for _v, e in computed)) - cvars - set(outer_refs) - set(carry or {})
+    # an EXISTS inside an expression correlates on the variables registered here: the
+    # ones its body shares with the pattern (`_exists_shared_vars`)
+    read |= set().union(*(_exists_shared_vars(e) for e in list(reg.filters) + extra_filters),
+                        *(_exists_shared_vars(e) for _v, e in computed)) & set(r.bound)
     fvars = sorted(read | set(expose))
     for v in fvars:
         if v not in r.bound:
@@ -1334,6 +1342,38 @@ def _expr_vars(e) -> Set[str]:
         if getattr(x, "expr", None) is not None and t != "ExprVar":
             walk(x.expr)
     walk(e)
+    return out
+
+
+def _exists_shared_vars(e) -> Set[str]:
+    """The variables an EXISTS inside an expression reads from the enclosing row: its
+    body's (prepared) variables. The translator correlates the body on the variables
+    registered where it is emitted (`emit_expressions`), so the level evaluating the
+    expression must expose them (`_value_level`)."""
+    out: Set[str] = set()
+
+    def walk(x):
+        if type(x).__name__ == "ExprExists":
+            plan = getattr(x, "prepared_plan", None)
+            if plan is not None:
+                from .var_scope import compute_scope
+                out.update(compute_scope(plan).all_visible)
+            return
+        for a in getattr(x, "args", None) or []:
+            walk(a)
+        if getattr(x, "expr", None) is not None and type(x).__name__ != "ExprVar":
+            walk(x.expr)
+    walk(e)
+    return out
+
+
+def _exists_nodes(e) -> List[Any]:
+    """The EXISTS nodes inside an expression."""
+    if type(e).__name__ == "ExprExists":
+        return [e]
+    out = []
+    for a in getattr(e, "args", None) or []:
+        out += _exists_nodes(a)
     return out
 
 
@@ -2437,7 +2477,8 @@ def _render_grouped_subq(leaf: Leaf, ctx, term_table: str) -> _SubSql:
     tj = "".join(f"\n  JOIN {term_table} AS {t} ON {t}.term_uuid = {r.bound[v]}" for t, v in joins.items())
     inner = (f"SELECT {', '.join(cols)}\nFROM {core}{tj}" + ("\nWHERE " + " AND ".join(pend) if pend else ""))
     gk = [f"k_{v}" for v in q.group_vars]
-    sql = f"SELECT {', '.join(gk + picks)}\nFROM ({inner}) AS g_{leaf.alias}\nGROUP BY {', '.join(gk)}"
+    sql = (f"SELECT {', '.join(gk + picks)}\nFROM ({inner}) AS g_{leaf.alias}"
+           + (f"\nGROUP BY {', '.join(gk)}" if gk else ""))
     return _SubSql(sql=sql, sizes=list(r.sizes), units_adv=list(r.units_advice), methods=list(r.methods),
                    poses=[pos], base_sizes=_base_sizes(reg))
 
