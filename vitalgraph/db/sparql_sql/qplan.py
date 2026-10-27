@@ -95,6 +95,9 @@ class Region:
     rename: Dict[str, str] = field(default_factory=dict)
     # VALUES tables holding UNDEF, joined after the joins on compatibility (render)
     undef_tables: List[Leaf] = field(default_factory=list)
+    # (private name, variable): a UNION column some branch leaves unbound, joined on
+    # compatibility after the joins (`_build_region`, render)
+    maybe_joins: List[Tuple[str, str]] = field(default_factory=list)
     # an OPTIONAL's own FILTER: `A OPTIONAL { P FILTER(F) }` is LeftJoin(A, P, F), F
     # reading both sides, in the LEFT JOIN's condition (a row of A whose P rows all
     # fail F stays, unextended)
@@ -515,7 +518,18 @@ def _collect(p, ctx, aliases, parts, outer_vars):
             parts["leaves"].append(l)
         parts["plans"].append(p)
     elif p.kind == KIND_JOIN:
-        for c in p.children:
+        from .var_scope import compute_scope
+        scopes = [compute_scope(c) for c in p.children]
+        for i, c in enumerate(p.children):
+            others = set().union(*(set(sc.all_visible) for j, sc in enumerate(scopes) if j != i))
+            only_maybe = set(scopes[i].maybe) - set(scopes[i].defined)   # (`maybe` holds defined ones too)
+            if c.kind == KIND_LEFT_JOIN and only_maybe & others:
+                # a group whose OPTIONAL binds a variable a sibling binds too, evaluated
+                # on its own first (`{ ?y :n "george" OPTIONAL { ?x :e ?z } }` joined with
+                # `?x :n "paul"`: W3C "Join scope"): a one-branch UNION leaf, its OPTIONAL's
+                # variable joined on compatibility (`_build_region`, maybe_joins)
+                parts["leaves"].append(_union_leaf(c, ctx, aliases, parts, outer_vars))
+                continue
             _collect(c, ctx, aliases, parts, outer_vars)
     elif p.kind == KIND_TABLE and not p.values_vars and len(p.values_rows or []) == 1:
         pass                    # `{}`: one row binding nothing, the join's identity
@@ -690,6 +704,8 @@ class _Union:
     # c_<var> and companions, never keys (`leaf.vals`); per branch, the ones it computes
     vals: List[str] = field(default_factory=list)
     branch_vals: List[Set[str]] = field(default_factory=list)
+    # maybe-unbound variables joined on compatibility (`_build_region`, maybe_joins)
+    joined_maybe: Set[str] = field(default_factory=set)
 
 
 def _union_leaf(p, ctx, aliases, parts, outer_vars) -> Leaf:
@@ -973,6 +989,27 @@ def _build_region(parts, ctx, aliases) -> Region:
                 if stored:
                     low = min(stored)
                     l.scan = Est(float(sum(c if c is not None else low for c in counts)), "values_bound")
+    # A UNION variable some branch leaves unbound, joined by the region's patterns: an
+    # unbound row is compatible with every value, so not an equality. The UNION's column
+    # takes a private name (no join edge) and `render` joins on `(k IS NULL OR k = v)`
+    # after the joins, the value the pattern's (which always binds it). FILTERs, BINDs,
+    # OPTIONALs and negations then read the pattern's value, as SPARQL's join gives it.
+    maybe_joins: List[Tuple[str, str]] = []           # (private name, variable)
+    pattern_held = {v for x in leaves if x.kind in ("quad", "edge", "frame_slot")
+                    for v in [x.s_var] + [ov for _c, ov in x.o_vars] if v}
+    for l in leaves:
+        if l.kind != "union":
+            continue
+        for v in sorted(set(l.sub.vars) - l.sub.certain):
+            derived = [x for x in leaves if x is not l and x.kind not in ("quad", "edge", "frame_slot")
+                       and v in [x.s_var] + [ov for _c, ov in x.o_vars]]
+            if v not in pattern_held or derived:
+                continue
+            priv = f"__mj{len(maybe_joins)}_{re.sub(chr(92) + 'W', '', v)}"
+            l.o_vars = [(c, priv if ov == v else ov) for c, ov in l.o_vars]
+            l.sub.joined_maybe = l.sub.joined_maybe | {v}
+            maybe_joins.append((priv, v))
+    parts["maybe_joins"] = maybe_joins
     by_subject: Dict[str, List[Leaf]] = {}
     for l in leaves:
         key = l.s_var if l.s_var else (l.s_const or l.alias)
@@ -1009,12 +1046,10 @@ def _build_region(parts, ctx, aliases) -> Region:
     # OPTIONAL) that A does not bind: `?x :n "paul" {?y :n "george" OPTIONAL {?x :e ?z}}`
     # left-joins ?x inside the group, where ?x is free (the W3C "Join scope" test).
     required = {v for l in leaves for v in [l.s_var] + [ov for _c, ov in l.o_vars] if v} | set(values)
+    # A variable two OPTIONALs share, the first leaving it unbound on some rows, joins the
+    # second on compatibility (render: `opt_bound`), as SPARQL's LeftJoin does.
     for k, (o, left) in enumerate(zip(parts["optionals"], parts["opt_left"])):
-        others = set(required)
-        for k2, o2 in enumerate(parts["optionals"]):
-            if k2 != k:
-                others |= _region_all_vars(o2)
-        if (_region_all_vars(o) & others) - left:
+        if (_region_all_vars(o) & set(required)) - left:
             raise Unsupported("an OPTIONAL shares a variable its own group does not bind")
     # A RECURSIVE path whose variable end another pattern binds: the generator seeds
     # the recursion from that pattern; a path leaf cannot be (yet), and unseeded it
@@ -1039,7 +1074,7 @@ def _build_region(parts, ctx, aliases) -> Region:
     for l in leaves:
         if l.kind != "union":
             continue
-        maybe = set(l.sub.vars) - l.sub.certain
+        maybe = set(l.sub.vars) - l.sub.certain - l.sub.joined_maybe
         if not maybe:
             continue
         other = {v for x in leaves if x is not l for v in [x.s_var] + [ov for _c, ov in x.o_vars] if v}
@@ -1068,7 +1103,8 @@ def _build_region(parts, ctx, aliases) -> Region:
     return Region(units=units, edges=edges, values=values, plans=parts["plans"],
                   aliases=aliases, optionals=parts["optionals"], antis=parts["antis"],
                   filters=parts.get("filters", []), iri_ne=parts.get("iri_ne", []), binds=binds,
-                  undef_tables=list(parts.get("undef_tables", [])))
+                  undef_tables=list(parts.get("undef_tables", [])),
+                  maybe_joins=list(parts.get("maybe_joins", [])))
 
 
 def _conjuncts(e) -> List[Any]:
@@ -2387,7 +2423,8 @@ def _derived_tables(reg: Region, pos: "_Pos", ctx, subs: List["_SubSql"], poses:
                 pos.table[l.alias] = f"({s.sql})"
                 poses += s.poses
                 if l.kind == "union":
-                    maybe |= set(l.sub.vars) - l.sub.certain
+                    # (one joined on compatibility is the pattern's, always bound)
+                    maybe |= set(l.sub.vars) - l.sub.certain - l.sub.joined_maybe
                     # a value some branch leaves unbound: NULL, which sorts last
                     maybe |= set(l.sub.vals) - set.intersection(*l.sub.branch_vals)
             else:
@@ -2488,6 +2525,10 @@ def _render_union(leaf: Leaf, ctx, term_table: str) -> _SubSql:
         poses += s.poses
         base += s.base_sizes
     sql = "\nUNION ALL\n".join(f"({s})" for s in sqls)
+    if len(sqls) == 1:
+        # one branch (a group evaluated on its own, `_collect`): no UNION ALL to keep it
+        # a relation, PostgreSQL pulled it up and the advice naming it matched nothing
+        sql = f"SELECT * FROM ({sql}) AS uf OFFSET 0"
     return _SubSql(sql=sql, sizes=sizes, units_adv=units_adv, methods=methods, poses=poses, base_sizes=base,
                    lanes=lanes)
 
@@ -2736,6 +2777,10 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     base_sizes = _base_sizes(reg)
     r = _R(pos)
     core, present, pend = _render_node(tree, reg, r)
+    for priv, v in reg.maybe_joins:
+        if priv not in r.bound or v not in r.bound:
+            raise Unsupported("a UNION variable joined on compatibility is not bound by the plan")
+        pend = list(pend) + [f"({r.bound[priv]} IS NULL OR {r.bound[priv]} = {r.bound[v]})"]
     where = list(pend)
     sizes = list(r.sizes)
     units_adv = list(r.units_advice)
@@ -2793,7 +2838,13 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         present = {"cqp"} | {f"tpf{i}" for i in range(nfv)}
         final_filters = [f for f in reg.filters if not any(f is e for e in early)]
     # OPTIONAL blocks, each planned on its own, left-joined on the shared vars
+    opt_bound: Set[str] = set()     # variables an earlier OPTIONAL bound: NULL where it did not
     for oi, opt in enumerate(reg.optionals):
+        if not opt.optionals and not opt.antis and not (opt.filters or opt.iri_ne or opt.lj_filters):
+            pass                    # the plain form joins them on compatibility (below)
+        elif region_vars(opt) & opt_bound:
+            raise Unsupported("an OPTIONAL joins on a variable an earlier OPTIONAL may leave unbound")
+        before_opt = set(r.bound)
         opos = _pos_of(opt)
         opos.term_table = opos.term_table or pos.term_table
         poses.append(opos)
@@ -2833,6 +2884,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             sizes.append((rows, sorted(present)))
             for v in ovars:
                 r.bound.setdefault(v, f"{lo}.k_{v}")
+            opt_bound |= set(r.bound) - before_opt
             continue
         if _derived_tables(opt, opos, ctx, subs, poses) & outer_vars_:
             raise Unsupported("an OPTIONAL joins on a variable a UNION branch leaves unbound")
@@ -2960,18 +3012,29 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
                 methods.append(("hash", sorted(present)))
             for v in okeys:
                 r.bound.setdefault(v, f"{lo}.k_{v}")
+            opt_bound |= set(r.bound) - before_opt
             continue
         otree = search(opt)
         orr = _R(opos)
         osql, op, opend = _render_node(otree, opt, orr)
-        conds = []
+        conds, compat = [], []
         for var in sorted(region_vars(opt)):
             if var in r.bound and var in orr.bound:
+                if var in opt_bound:
+                    # unbound on the left where the earlier OPTIONAL found nothing:
+                    # compatible with any value, the OPTIONAL's binds it (W3C Nested
+                    # Optionals - 2). Not an equality: no method advised.
+                    if late:
+                        raise Unsupported("an OPTIONAL after the cut on a maybe-unbound variable")
+                    compat.append(var)
+                    conds.append(f"({r.bound[var]} IS NULL OR {r.bound[var]} = {orr.bound[var]})")
+                    continue
                 conds.append(f"{orr.bound[var]} = " + (f"pg_late.k_{var}" if late else r.bound[var]))
-        keyed = bool(conds)
+        keyed = bool(conds) and not compat
         out_ndv.update({k: n for k, n in otree.ndv.items() if k not in out_ndv})
         rows_before = rows
-        rows = _optional_rows(rows, otree, [v for v in region_vars(opt) if v in r.bound and v in orr.bound])
+        rows = _optional_rows(rows, otree, [v for v in region_vars(opt) if v in r.bound and v in orr.bound
+                                            and v not in compat])
         out_rows = max(out_rows, rows)
         # sharing no variable: every row pairs with each OPTIONAL row, or stays alone
         core = f"({core}\n LEFT JOIN {osql} ON " + " AND ".join(conds + opend or ["TRUE"]) + ")"
@@ -3004,7 +3067,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             anti_notes.append(f"OPTIONAL {oi} {'probed' if how == 'nl' else 'hashed'} "
                               f"(set {set_cost:,.0f} vs probe {probe_cost:,.0f})")
         for v, c in orr.bound.items():
-            r.bound.setdefault(v, c)
+            if v in compat:
+                r.bound[v] = f"COALESCE({r.bound[v]}, {c})"
+            else:
+                r.bound.setdefault(v, c)
+        opt_bound |= set(r.bound) - before_opt
     # NOT EXISTS bodies. Two forms, scored against each other:
     #   correlated    a SubPlan per outer row: outer rows x the body's cost
     #                 when its correlated variables are bound (one row);
@@ -3093,7 +3160,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # select list was EMPTY: PostgreSQL accepts `SELECT FROM ...`, so the
         # planner returned the right number of rows with no bindings in them (DAWG
         # open-world/date-3, open-eq-02; no query in the dashboard corpus is SELECT *).
-        shown = mentioned - q.order_hidden          # an ORDER BY expression's hidden variable is not shown
+        shown = {v for v in mentioned - q.order_hidden     # an ORDER BY expression's hidden variable is not shown
+                 if not v.startswith("__mj")}                # nor a UNION column joined on compatibility
         q.project = [v for v in names if v in shown] + sorted(v for v in shown if v not in names)
     unbound = {v for v in (q.project or []) if v not in agg_vars and v not in mentioned
                and v not in (q.group_vars or [])}
