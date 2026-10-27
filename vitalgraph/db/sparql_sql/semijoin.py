@@ -734,7 +734,9 @@ def _under_limit(node: Optional[PlanV2], target: PlanV2, key: Optional[str],
     elif node.kind == KIND_GROUP:
         limited = False
     elif node.kind == KIND_ORDER:
-        conds = node.order_conditions or []
+        from .ir import TiebreakVar           # a page's tiebreak is not the user's order
+        conds = [c for c in (node.order_conditions or [])
+                 if not isinstance(c[0] if isinstance(c, (tuple, list)) else c, TiebreakVar)]
         def _name(c):
             e = c[0] if isinstance(c, (tuple, list)) else c
             return e if isinstance(e, str) else getattr(e, "var", None)

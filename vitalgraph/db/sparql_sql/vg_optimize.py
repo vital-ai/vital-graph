@@ -150,9 +150,12 @@ def _find_order_on_score(
         return None, None, ""
 
     if node.kind == KIND_ORDER and node.order_conditions:
-        # Check if ordering on a single variable
-        if len(node.order_conditions) == 1:
-            key, direction = node.order_conditions[0]
+        # Check if ordering on a single variable (a page's tiebreak is not the
+        # user's order: `collect._add_paging_tiebreak`)
+        from .ir import TiebreakVar
+        conds = [c for c in node.order_conditions if not isinstance(c[0], TiebreakVar)]
+        if len(conds) == 1:
+            key, direction = conds[0]
             if isinstance(key, str):
                 return node, key, direction
             if isinstance(key, ExprVar):

@@ -80,6 +80,12 @@ def variable_order_keys(alias: str, info, var: str, direction: str,
         # Synthesized for stable paging: any total order, and uuid is the one
         # the paging emitters can produce from an index (issues/075, 078).
         return [f"{alias}.{sn}__uuid{suffix}"]
+    from .ir import TiebreakVar
+    if isinstance(var, TiebreakVar) and info is not None and info.has_term_identity():
+        # A page's tiebreak (`collect._add_paging_tiebreak`, issues/312): the term's
+        # identity, a total order over stored terms; a computed value keeps its
+        # value keys below
+        return [f"{alias}.{sn}__uuid{suffix}"]
     if info is not None and info.typed_lane:
         # A computed variable on the numeric or boolean lane — ORDER BY over a
         # COUNT, for instance. `sn` is not a text column there and PostgreSQL

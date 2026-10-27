@@ -1,6 +1,6 @@
 # 312 — An ordered page with ties at its boundary is not deterministic, on either path
 
-## Status: OPEN, 2026-10-26. Explained; the fix (a tiebreak for ordered pages) is undecided.
+## Status: FIXED 2026-10-27 on both paths (option 1). Open until the vg test stack runs the full suite on the rebuilt image.
 
 ## What was seen
 
@@ -63,3 +63,26 @@ contract corpus should report `l2_page` as "equal up to ties", not as a differen
   False (as multiset False)`, `same-order columns ['v6']` (the rating).
 - Tie count: `GROUP BY ?rating ORDER BY DESC(?rating)` over the same pattern gives 100.0: 59,
   99.9: 90, 99.8: 103.
+
+## Fix (option 1, decided 2026-10-27)
+
+A page of a user's ORDER BY (a LIMIT / OFFSET over it) sorts its projected variables by term uuid
+after the user's keys, on both paths:
+
+- `collect._add_paging_tiebreak` appends them to the ORDER node as `ir.TiebreakVar` keys: only
+  variables the ORDER can see, not ones it already sorts on.
+- `emit_order.variable_order_keys` orders a tiebreak by `__uuid` when the variable has a term
+  identity (a computed value keeps its value keys), so `emit_order` and `emit_project` agree;
+  `emit_slice`'s re-application after DISTINCT includes them.
+- The user's order is what the fast paths and optimizers match on: `_find_buried_order`,
+  `vg_optimize._find_order_on_score` and `semijoin._under_limit` skip tiebreak keys, so the
+  single-key paths keep firing.
+- The planner keeps them out of `q.order` (`q.tiebreak`) and appends `o.k_<var>` to its sort; under a
+  late cut it cuts on the required part's variables and orders the final rows by all of them.
+
+`l2_page` now returns the same 25 leads in the same order on both paths. Its time is unchanged
+within this machine's noise (today's SQL with and without the tiebreak keys: 8-17 s either way).
+
+Test: `tests/integration/test_ordered_pages_partition_through_ties.py`: pages of 7 over 40 rows
+with 10-way ties partition the ordered result and repeat exactly on a second pass. Without the
+fix, the two tied orders repeated or skipped rows.

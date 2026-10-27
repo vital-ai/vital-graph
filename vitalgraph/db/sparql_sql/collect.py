@@ -649,6 +649,41 @@ def _has_order(node, depth: int = 0) -> bool:
     return any(_has_order(c, depth + 1) for c in (node.children or []))
 
 
+def _add_paging_tiebreak(node) -> None:
+    """A page of a user's ORDER BY: its projected variables after the user's keys,
+    ordered by term uuid (`ir.TiebreakVar`). SPARQL leaves the order of rows with
+    equal keys undefined (15.1), so a page boundary falling among ties took any of
+    them, differently per execution and per path, and consecutive pages repeated or
+    skipped rows (issues/312: 59 leads tied at the top rating of lead 100k).
+    Only variables the ORDER can see (a projected expression computed above it is
+    not), and not ones it already sorts on."""
+    from .ir import TiebreakVar
+    from .var_scope import compute_scope
+    project_vars = None
+    n = node
+    for _ in range(8):
+        if n is None:
+            return
+        if n.kind == KIND_PROJECT and project_vars is None:
+            project_vars = list(n.project_vars or [])
+        if n.kind == KIND_ORDER:
+            break
+        if n.kind not in (KIND_PROJECT, KIND_DISTINCT, KIND_REDUCED, KIND_EXTEND) or not n.children:
+            return
+        n = n.children[0]
+    else:
+        return
+    if n is None or n.kind != KIND_ORDER or not n.order_conditions or (n.hints or {}).get("stable_paging"):
+        return
+    visible = set(compute_scope(n.children[0]).all_visible) if n.children else set()
+    keys = {k for k, _d in n.order_conditions if isinstance(k, str)}
+    cand = project_vars if project_vars is not None else sorted(visible)
+    extra = [(TiebreakVar(v), "ASC") for v in cand
+             if v in visible and v not in keys and not v.startswith(".")]
+    if extra:
+        n.order_conditions = list(n.order_conditions) + extra
+
+
 @collect.register(OpSlice)
 def _collect_slice(op: OpSlice, space_id: str, aliases: AliasGenerator,
                    graph_uri: str = None) -> PlanV2:
@@ -669,7 +704,9 @@ def _collect_slice(op: OpSlice, space_id: str, aliases: AliasGenerator,
     # so any order is a correct one. What is NOT permitted is substituting a
     # different order for one the caller asked for, which is what emitting a
     # default `ORDER BY ?entity` upstream had turned into (`issues/075`).
-    if not _has_order(inner):
+    if _has_order(inner):
+        _add_paging_tiebreak(inner)
+    else:
         anchor = _anchor_var_for_paging(inner)
         if anchor is not None:
             inner = PlanV2(kind=KIND_ORDER,

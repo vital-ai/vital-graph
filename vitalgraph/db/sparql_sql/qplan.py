@@ -125,6 +125,9 @@ class Query:
     # SELECT (expr AS ?v) over aggregates (`(MIN(?p) + MAX(?p)) / 2`): computed at the
     # general group's result level, a value (c_<var>) like an aggregate result
     agg_exprs: Dict[str, Any] = field(default_factory=dict)
+    # a page's tiebreak (`collect._add_paging_tiebreak`, issues/312): variables sorted
+    # by term uuid after the user's keys; not in `order`, which is the user's own
+    tiebreak: List[str] = field(default_factory=list)
     agg_lanes: Dict[str, Optional[str]] = field(default_factory=dict)   # their typed lanes
     having: List[Any] = field(default_factory=list)
     order: List[Tuple[str, str]] = field(default_factory=list)
@@ -201,6 +204,10 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
             if (getattr(p, "hints", None) or {}).get("stable_paging"):
                 q.synth_order = True
             for expr, d in (p.order_conditions or []):
+                from .ir import TiebreakVar
+                if isinstance(expr, TiebreakVar):
+                    q.tiebreak.append(str(expr))
+                    continue
                 if not isinstance(expr, str):
                     # ORDER BY an expression: a hidden computed variable (a top-level
                     # BIND, evaluated over the pattern's rows) sorted like any computed
@@ -3436,6 +3443,16 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             # page of names came back in another order (s01)
             from .collation import collate
             sort_cols += [(f"{ts}.dt_val", d), (f"{ts}.num_val", d), (collate(f"{ts}.term_text"), d)]
+    # The page's tiebreak, after the user's keys: each variable's term uuid (issues/312).
+    # Under a late cut, the page is cut on the required part's variables; the OPTIONALs'
+    # are added to the final order, so both give one total order.
+    tie_late: List[str] = []
+    if sort_cols:
+        for v in q.tiebreak:
+            if v in late_vars:
+                tie_late.append(v)
+            elif v in out_keys and v not in agg_vars and v not in cvars:
+                sort_cols.append((f"o.k_{v}", "ASC"))
     if general and not late:
         # on the aggregation itself (`g1`, `_general_group`): the levels around it are
         # pulled up when nothing sorts them, so only it is sure to be a relation
@@ -3459,7 +3476,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         if q.distinct:
             late_sql = f"SELECT DISTINCT *\nFROM ({late_sql}) AS d_late"
         top = (f"SELECT *\nFROM ({late_sql}) AS o_late\nORDER BY "
-               + ", ".join(f"sk{i} {d}" for i, (_c, d) in enumerate(sort_cols))
+               + ", ".join([f"sk{i} {d}" for i, (_c, d) in enumerate(sort_cols)]
+                           + [f"k_{v}" for v in tie_late])
                + f"\nLIMIT {q.limit}" + (f" OFFSET {q.offset}" if q.offset else ""))
         sizes.append((float(q.limit + (q.offset or 0)), ["pg_late"]))
         anti_notes.append(f"OPTIONALs joined after the cut ({len(late_opts)} onto {q.limit + (q.offset or 0)} rows)")

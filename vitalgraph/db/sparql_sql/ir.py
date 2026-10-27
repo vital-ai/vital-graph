@@ -172,6 +172,13 @@ ALL_KINDS = RELATION_KINDS | MODIFIER_KINDS
 # PlanV2
 # ---------------------------------------------------------------------------
 
+class TiebreakVar(str):
+    """An ORDER key added for paging, not requested (`collect._collect_slice`,
+    issues/312): a projected variable after the user's keys, ordered by its term
+    uuid (`emit_order.variable_order_keys`) so that ties at a page boundary fall
+    the same way on every execution and on both paths."""
+
+
 @dataclass
 class PlanV2:
     """v2 IR node — nested tree mirroring SPARQL algebra evaluation order.

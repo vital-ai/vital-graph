@@ -22,10 +22,24 @@ def _find_buried_order(plan: PlanV2, depth: int = 0) -> list:
     if depth > 4:
         return []
     if plan.kind == KIND_ORDER and plan.order_conditions:
-        return list(plan.order_conditions)
+        # without the paging tiebreak (`collect._add_paging_tiebreak`): the fast paths
+        # match on the user's keys; `_find_buried_order_with_tiebreak` re-applies all
+        from .ir import TiebreakVar
+        return [c for c in plan.order_conditions if not isinstance(c[0], TiebreakVar)]
     if plan.kind in (KIND_DISTINCT, KIND_REDUCED, KIND_PROJECT):
         if plan.children:
             return _find_buried_order(plan.children[0], depth + 1)
+    return []
+
+
+def _find_buried_order_with_tiebreak(plan: PlanV2, depth: int = 0) -> list:
+    """`_find_buried_order`, the paging tiebreak included (issues/312)."""
+    if plan is None or depth > 4:
+        return []
+    if plan.kind == KIND_ORDER and plan.order_conditions:
+        return list(plan.order_conditions)
+    if plan.kind in (KIND_DISTINCT, KIND_REDUCED, KIND_PROJECT) and plan.children:
+        return _find_buried_order_with_tiebreak(plan.children[0], depth + 1)
     return []
 
 
@@ -855,8 +869,9 @@ def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
     # (SPARQL: order after distinct, Jena algebra: order inside distinct)
     reorder_parts = []
     if plan.child and plan.child.kind in (KIND_DISTINCT, KIND_REDUCED):
-        buried = _find_buried_order(plan.child)
+        buried = _find_buried_order_with_tiebreak(plan.child)
         if buried:
+            from .ir import TiebreakVar
             s_alias = ctx.aliases.next("s")
             ob_parts = []
             for key, direction in buried:
@@ -864,6 +879,8 @@ def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
                     info = ctx.types.get(key)
                     sn = info.sql_name if info else key
                     col = f"{s_alias}.{sn}"
+                    if isinstance(key, TiebreakVar) and info is not None and info.has_term_identity():
+                        col = f"{s_alias}.{sn}__uuid"       # the page's tiebreak (issues/312)
                 else:
                     col = expr_to_sql(key, ctx)
                     if not col:
