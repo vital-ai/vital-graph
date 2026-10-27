@@ -1,6 +1,6 @@
 # 310 — category_page on the default path orders the reason CTE from its field units
 
-## Status: FIXED on the default path, 2026-10-25 (verified locally, pinned and unpinned; suites green). Open for: the production read-only EXPLAIN check, and the heuristic order by_reason_tied keeps under the pin (below).
+## Status: RESOLVED 2026-10-27. Verified locally (pinned and unpinned, suites green) and on production (read-only EXPLAIN ANALYZE, below). only_cause, which this fix does not reach on production, is `issues/320`.
 
 ## Fix as built
 
@@ -190,3 +190,20 @@ per-row probe, one per reason row, now planned with statistics (`issues/293`,
 correlated variables, hash anti-joined) is the separate next step on the
 default path. An earlier attempt to lift its correlated filter lost to a
 misestimated outer side (293, "Attempted ... reverted: lift").
+
+## Production check, 2026-10-27 (read-only EXPLAIN ANALYZE)
+
+The generator before the fix (`2c7d297e^`) and after it (the default path at `44981a7e`), run locally
+against the production UW space in a read-only session (`default_transaction_read_only`), three runs
+each; same row counts on both sides; every block a buffer hit.
+`test_scripts_internal/kg_uw_decision_reasons/prod_explain_ab.py`.
+
+| query | before | after |
+|---|---|---|
+| category_page (the dashboard's, test runs excluded) | 4,877 ms | **1,148 ms** (4.2x) |
+| naics_for_category | 1,094 ms | **280 ms** (3.9x) |
+| only_cause | 4,638 ms | 4,674 ms (no change: `issues/320`) |
+| all_of, by_outcome, by_reason, decision_page, latest_per_deal_by_outcome, total | | within 3% |
+
+only_cause halved locally (1,488 -> 695 ms) but not on production: there its time is the NOT EXISTS
+body and a term-table hash this fix leaves alone (`issues/320`).
