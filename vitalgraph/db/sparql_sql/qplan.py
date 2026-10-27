@@ -1160,8 +1160,9 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
     outer_refs = outer_refs or {}
     extra_filters = extra_filters or []
     expose = list(expose or [])
+    # a sub-SELECT's carried value is read from its c_<var> columns, not a term row
     read = set().union(*(_expr_vars(e) for e in list(reg.filters) + extra_filters),
-                       *(_expr_vars(e) for _v, e in computed)) - cvars - set(outer_refs)
+                       *(_expr_vars(e) for _v, e in computed)) - cvars - set(outer_refs) - set(carry or {})
     fvars = sorted(read | set(expose))
     for v in fvars:
         if v not in r.bound:
@@ -1192,12 +1193,14 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
         types.register(ColumnInfo.simple_output(v, sn, from_triple=True))
     for v, sn in sorted(outer_refs.items()):
         types.register(ColumnInfo.simple_output(v, sn, from_triple=True))
+    for v in sorted(carry or {}):
+        types.register(ColumnInfo.simple_output(v, f"c_{v}", typed_lane=(lanes or {}).get(v)))
     fctx = ctx.child(types=types)
     before = len(getattr(fctx, "_unresolved_vars", None) or [])
     level = ("SELECT " + (", ".join(cols) or "1 AS one") + f"\nFROM ({core_level}) AS {core_alias}"
              + ("\n" + "\n".join(joins) if joins else ""))
     # BINDs, in order: each a level adding its companion columns (a later one may read it)
-    visible = set(fvars)
+    visible = set(fvars) | set(carry or {})
     for i, (v, e) in enumerate(computed):
         with fctx.expression_scope(set(visible)):
             sql_e = expr_to_sql(e, fctx)
@@ -1222,7 +1225,10 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
             c = ebv_sql(e, fctx)
             if not c:
                 raise Unsupported(f"a FILTER expression the translator does not support: {type(e).__name__}")
-            conds.append(f"({c})")
+            # a constant (`FILTER(true)`, or one reading only unbound variables): as a
+            # sub-select it is a one-time filter evaluated at run time; folded at plan
+            # time, a false one removed every scan the advice names
+            conds.append(f"(SELECT {c})" if not _expr_vars(e) else f"({c})")
     if len(getattr(fctx, "_unresolved_vars", None) or []) > before:
         raise Unsupported("an expression reads a variable the value columns do not provide")
     out = [f"k_{v}" for v in need] + [f"c_{v}{suf}" for v in out_computed for suf in ("",) + COMPANION_SUFFIXES]
@@ -2286,10 +2292,12 @@ def _render_subq(leaf: Leaf, ctx, term_table: str) -> _SubSql:
     if getattr(leaf, "general", False):
         s = render(leaf.sub, {}, ctx, keys_only=True)
         q = leaf.sub
-        if q.limit is None and not q.offset and not q.order and not q.distinct:
+        if q.limit is None and not q.offset and not q.order:
             # a plain projection (or a grouping: only its aggregation survives) is a
             # simple sub-query PostgreSQL pulls up, and the advice naming it would match
-            # nothing (W3C sq09, sq13; a grouped COUNT sub-SELECT): kept one relation
+            # nothing (W3C sq09, sq13; a grouped COUNT sub-SELECT): kept one relation.
+            # A DISTINCT one too: its wrapper was pulled up and the alias went with it
+            # (W3C graph-variable-scope, the graphs enumerated by a DISTINCT sub-SELECT)
             s.sql = f"SELECT * FROM ({s.sql}) AS sf OFFSET 0"
         return s
     return _render_grouped_subq(leaf, ctx, term_table)
@@ -2637,6 +2645,25 @@ def _negation_sql(anti: "Anti", outer: Dict[str, str], certain: Set[str], rows: 
     return f"{kw} ({bsql_full})"
 
 
+def _nested_term_table(reg: Region) -> Optional[str]:
+    """The term table of any region inside `reg`, else the one beside its quad table."""
+    t = _Pos(reg.plans).term_table
+    if t:
+        return t
+    inner = [l.sub.region for u in reg.units for l in u.leaves if l.kind == "subq"]
+    inner += [b for u in reg.units for l in u.leaves if l.kind == "union" for b in l.sub.branches]
+    inner += list(reg.optionals) + [a.region for a in reg.antis]
+    for r_ in inner:
+        t = _nested_term_table(r_)
+        if t:
+            return t
+    for p in reg.plans:
+        for tb in p.tables:
+            if tb.kind == "quad" and tb.table_name.endswith("_rdf_quad"):
+                return tb.table_name[: -len("_rdf_quad")] + "_term"
+    return None
+
+
 def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = None,
            keys_only: bool = False):
     """The query's SQL and advice. `keys_only`: a sub-SELECT inside a pattern, its
@@ -2653,6 +2680,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # a property path's own (`path_meta`)
         pos.term_table = next((l.sub.get("term_table") for u in reg.units for l in u.leaves
                                if l.kind == "path" and l.sub.get("term_table")), None)
+    if pos.term_table is None:
+        # a sub-SELECT's, an OPTIONAL's or a negation's, or the space's own beside its
+        # quad table: an all-constant pattern joins no term row (`ASK { :s :p :o }`),
+        # and a pattern that is one aggregate sub-SELECT holds its term table inside
+        pos.term_table = _nested_term_table(reg)
     if pos.term_table is None:
         raise Unsupported("no term table")
     poses = [pos]
@@ -3028,7 +3060,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             others |= _region_all_vars(o)
         for a_ in reg.antis:
             others |= _region_all_vars(a_.region) | set().union(*(_expr_vars(f) for f in a_.filters))
-        others |= set().union(*(_expr_vars(f) for f in reg.filters), *(_expr_vars(e) for _v, e in reg.binds))
+        # read by a FILTER or BIND: from its c_<var> columns (`_value_level`, carry)
         if set(leafvals) & others:
             raise Unsupported("a sub-SELECT's computed value is joined or read in the pattern")
         mentioned |= set(leafvals)
