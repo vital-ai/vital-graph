@@ -1,6 +1,6 @@
 # 312 — An ordered page with ties at its boundary is not deterministic, on either path
 
-## Status: FIXED 2026-10-27 on both paths (option 1). Open until the vg test stack runs the full suite on the rebuilt image.
+## Status: RESOLVED 2026-10-27, on both paths (option 1). Verified on the vg test stack rebuilt for the fix: unit, DAWG conformance, integration and API suites, 0 failures.
 
 ## What was seen
 
