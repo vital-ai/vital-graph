@@ -170,8 +170,11 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
     p = plan
     seen_group = False
     while p.kind in (KIND_SLICE, KIND_PROJECT, KIND_DISTINCT, KIND_REDUCED, KIND_ORDER,
-                     KIND_EXTEND, KIND_GROUP) or (p.kind == KIND_FILTER and not seen_group
-                                                  and _is_having(p, q)):
+                     KIND_GROUP) or (p.kind == KIND_EXTEND and not seen_group) \
+            or (p.kind == KIND_FILTER and not seen_group and _is_having(p, q)):
+        # (an EXTEND below the GROUP is a BIND in the pattern, `{ ... BIND(?v * 2 AS ?w) }
+        # GROUP BY ?t`: the region's, an aggregate's input; read as one above the
+        # grouping it declined as "an expression over aggregates")
         # One level of modifiers only. A second PROJECT, or any projection,
         # DISTINCT, ORDER or LIMIT below the GROUP, is a SUB-SELECT
         # (`SELECT (COUNT(*) …) { SELECT DISTINCT ?e … }`): read as one level,
@@ -550,41 +553,10 @@ def _collect(p, ctx, aliases, parts, outer_vars):
         # VALUES with UNDEF: a cell compatible with any value. Joined after the
         # pattern's joins on `(vt.k_v IS NULL OR vt.k_v = <v>)` (render), not a leaf
         parts["undef_tables"].append(_vtable_leaf(p, aliases, parts, allow_undef=True))
-    elif p.kind == KIND_TABLE and len(p.values_vars or []) > 1 and len(p.values_rows or []) == 1:
-        # one row: a pin per variable. As a table PostgreSQL folds it into constants
-        # and the joins the advice names are gone.
-        leaf = _vtable_leaf(p, aliases, parts)
-        vars_, rows = leaf.sub
-        for i, v in enumerate(vars_):
-            u = rows[0][i]
-            if v in parts["values"]:
-                raise Unsupported(f"two VALUES pins on ?{v}")
-            parts["values"][v] = [u]
-    elif p.kind == KIND_TABLE and len(p.values_vars or []) != 1:
-        parts["leaves"].append(_vtable_leaf(p, aliases, parts))
     elif p.kind == KIND_TABLE:
-        vars_ = p.values_vars or []
-        v = vars_[0]
-        uuids = []
-        for row in p.values_rows or []:
-            node = row.get(v)
-            if node is None:
-                raise Unsupported("VALUES with UNDEF")
-            key = _term_key(node)
-            col = (aliases.constants or {}).get(key)
-            u = (aliases.resolved_constants or {}).get(col) if col else None
-            # A term absent from the term table matches nothing in an inner
-            # join, so it contributes no row: drop it (only where a pattern joins
-            # the variable: `_build_region` declines one only the VALUES binds)
-            if u is not None:
-                uuids.append(u)
-            else:
-                parts.setdefault("values_absent", set()).add(v)
-        if not uuids:
-            raise Unsupported("VALUES matches no stored term (today's provably-empty path handles it)")
-        if v in parts["values"]:
-            raise Unsupported(f"two VALUES pins on ?{v}")
-        parts["values"][v] = uuids
+        # decided in `_build_region`, which knows which of its variables a pattern holds
+        # (a key, joined) and which only the VALUES binds (a value, carried)
+        parts.setdefault("vtables", []).append(p)
     elif p.kind == KIND_LEFT_JOIN:
         _collect(p.children[0], ctx, aliases, parts, outer_vars)
         from .var_scope import compute_scope
@@ -914,6 +886,8 @@ _UNDEF = "UNDEF"          # a VALUES cell left unbound (rendered NULL)
 
 
 def _vtable_sql(leaf: Leaf) -> str:
+    if getattr(leaf, "vt_sql", None):
+        return leaf.vt_sql                  # a VALUES table carrying values (`_values_leaf`)
     vars_, rows = leaf.sub
     if not vars_:
         return "(SELECT 1 AS one OFFSET 0)"   # a group with no pattern: one row, fenced (a relation the advice can name)
@@ -950,8 +924,137 @@ def _one_row_leaf(n: int) -> Leaf:
     return leaf
 
 
+def _values_tables(parts, aliases) -> None:
+    """The region's VALUES tables (`_collect`). A variable a pattern holds is a KEY
+    (term uuid): a pin, or a table joined on it; a row whose term is not stored joins
+    nothing and is dropped. A variable only the VALUES binds is a VALUE (`_values_leaf`):
+    the row is a solution whatever is stored, so nothing is dropped and its term need
+    not exist. As keys, an unstored term's row was dropped from the answer, or the
+    VALUES declined (W3C GROUP_CONCAT DISTINCT, pp35)."""
+    req_held = {v for l in parts["leaves"] for v in [l.s_var] + [ov for _c, ov in l.o_vars] if v}
+    # joined by an OPTIONAL or a negation body: a key too (their joins read it), but the
+    # VALUES is its only required binding, so a term not stored still is a solution
+    opt_held = set().union(*(_region_all_vars(o) for o in parts["optionals"]),
+                           *(_region_all_vars(a.region) for a in parts["antis"]))
+    held = req_held | opt_held
+    for p in parts.pop("vtables", []):
+        vars_ = list(p.values_vars or [])
+        rows = p.values_rows or []
+        valued = [v for v in vars_ if v not in held]
+        if valued:
+            parts["leaves"].append(_values_leaf(p, aliases, parts, vars_, valued))
+            continue
+        if len(vars_) > 1 and len(rows) == 1:
+            # one row: a pin per variable. As a table PostgreSQL folds it into constants
+            # and the joins the advice names are gone.
+            leaf = _vtable_leaf(p, aliases, parts)
+            vs, rs = leaf.sub
+            for i, v in enumerate(vs):
+                if v in parts["values"]:
+                    raise Unsupported(f"two VALUES pins on ?{v}")
+                parts["values"][v] = [rs[0][i]]
+        elif len(vars_) != 1:
+            leaf = _vtable_leaf(p, aliases, parts)
+            if leaf.vt_absent - req_held:
+                raise Unsupported("VALUES binds a variable no pattern joins to a term not stored")
+            parts["leaves"].append(leaf)
+        else:
+            v = vars_[0]
+            uuids = []
+            for row in rows:
+                node = row.get(v)
+                if node is None:
+                    raise Unsupported("VALUES with UNDEF")
+                col = (aliases.constants or {}).get(_term_key(node))
+                u = (aliases.resolved_constants or {}).get(col) if col else None
+                # a pattern joins it: a term not stored matches nothing, its row drops
+                if u is not None:
+                    uuids.append(u)
+                else:
+                    parts.setdefault("values_absent", set()).add(v)
+            if not uuids:
+                raise Unsupported("VALUES matches no stored term (today's provably-empty path handles it)")
+            if v in parts["values"]:
+                raise Unsupported(f"two VALUES pins on ?{v}")
+            parts["values"][v] = uuids
+
+
+def _values_leaf(p, aliases, parts, vars_: List[str], valued: List[str]) -> Leaf:
+    """A VALUES table with variables no pattern holds: those carried as values (c_<var>
+    and companions, as a sub-SELECT's are: `leaf.vals`), the others as keys (k_<var>).
+    A row with a key not stored joins nothing and is dropped; an UNDEF cell is NULL.
+    Fenced: one row, PostgreSQL folded it into constants (the advice's relation gone)."""
+    from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
+    cols = getattr(aliases, "constants", None) or {}
+    resolved = getattr(aliases, "resolved_constants", None) or {}
+    keyed = [v for v in vars_ if v not in valued]
+    q = lambda x: "'" + str(x).replace("'", "''") + "'"
+    out_rows = []
+    for row in p.values_rows or []:
+        cells, keep = [], True
+        for v in keyed:
+            node = row.get(v)
+            u = None
+            if node is not None:
+                col = cols.get(_term_key(node))
+                u = resolved.get(col) if col else None
+                if u is None:
+                    keep = False                 # a key not stored: joins nothing
+            cells.append(f"'{u}'::uuid" if u else "NULL::uuid")
+        if not keep:
+            continue
+        for v in valued:
+            node = row.get(v)
+            t = type(node).__name__
+            if node is None:
+                cells += ["NULL::text", "NULL::text", "NULL::uuid", "NULL::text", "NULL::text",
+                          "NULL::numeric", "NULL::boolean", "NULL::timestamp"]
+                continue
+            col = cols.get(_term_key(node)) if t in ("URINode", "LiteralNode") else None
+            u = resolved.get(col) if col else None
+            if t == "URINode":
+                cells += [q(node.value) + "::text", "'U'::text", f"'{u}'::uuid" if u else "NULL::uuid",
+                          "NULL::text", "NULL::text", "NULL::numeric", "NULL::boolean", "NULL::timestamp"]
+            elif t == "LiteralNode":
+                dt = node.datatype or None
+                lang = getattr(node, "lang", None) or None
+                txt = node.value
+                num = (f"{txt}::numeric" if dt in _NUMERIC_DATATYPES
+                       and re.fullmatch(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", txt or "") else "NULL::numeric")
+                boo = (("TRUE" if txt in ("true", "1") else "FALSE") if dt == _BOOLEAN_DT
+                       and txt in ("true", "false", "1", "0") else "NULL::boolean")
+                tsv = (f"{q(txt)}::timestamp" if dt in _DATETIME_DATATYPES and re.match(r"\d{4}-", txt or "")
+                       else "NULL::timestamp")
+                cells += [q(txt) + "::text", "'L'::text", f"'{u}'::uuid" if u else "NULL::uuid",
+                          (q(lang) + "::text") if lang else "NULL::text", (q(dt) + "::text") if dt else "NULL::text",
+                          num, boo, tsv]
+            else:
+                raise Unsupported(f"VALUES term of kind {t}")
+        out_rows.append(cells)
+    if not out_rows:
+        raise Unsupported("VALUES matches no stored term (today's provably-empty path handles it)")
+    names = [f"k_{v}" for v in keyed] + [f"c_{v}{suf}" for v in valued
+                                        for suf in ("", "__type", "__uuid", "__lang", "__datatype",
+                                                    "__num", "__bool", "__dt")]
+    body = ", ".join("(" + ", ".join(r_) + ")" for r_ in out_rows)
+    alias = "vv_" + "_".join(re.sub(r"\W", "", v) for v in vars_)[:30]
+    taken = {l.alias for l in parts["leaves"]}
+    while alias in taken:
+        alias += "x"
+    leaf = Leaf(alias=alias, kind="vtable", pred=None, s_var=None, o_var=None, s_const=None,
+                o_const=None, scan=Est(float(len(out_rows)), "values"), pred_rows=None, pred_objects=None,
+                o_vars=[(f"k_{v}", v) for v in keyed],
+                col_ndv={f"k_{v}": float(len(out_rows)) for v in keyed})
+    leaf.sub = (keyed, [[None] * len(keyed)] * len(out_rows))
+    leaf.vt_sql = f"(SELECT * FROM (VALUES {body}) AS v({', '.join(names)}) OFFSET 0)"
+    leaf.vals = {v: None for v in valued}
+    leaf.sub_cost = 0.01 * len(out_rows)
+    return leaf
+
+
 def _build_region(parts, ctx, aliases) -> Region:
     leaves: List[Leaf] = parts["leaves"]
+    _values_tables(parts, aliases)
     if not leaves and not parts.get("undef_tables") and not parts["values"]:
         leaves.append(_one_row_leaf(id(parts) % 100000))
     # A constant predicate or object the term table does not hold matches nothing:
@@ -3381,10 +3484,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # a group key, grouped on its value columns (`_general_group`); one only a FILTER
         # reads is applied before it (W3C GROUP_CONCAT 2: a sub-SELECT's value filtered,
         # then COUNT(*))
+        # (an aggregate's input is read below the grouping, on its value columns)
         after = (set(q.project or []) - set(agg_vars)) | {v for v, _d in q.order}
-        for a_ in q.aggregates.values():
-            if a_.expr is not None:
-                after |= _expr_vars(a_.expr)
         if (cvars & after) - set(q.group_vars):
             raise Unsupported("GROUP BY with a computed BIND that is not a key")
     if q.project is None and q.group_vars is None:
@@ -3464,6 +3565,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             general = True          # an expression over aggregates: the general group's result level
         if set(q.group_vars) & cvars:
             general = True          # a computed group key: grouped on its value columns
+        if any(a.expr is not None and _expr_vars(a.expr) & cvars for a in q.aggregates.values()):
+            general = True          # an aggregate over a computed value: on its value columns
         if not general:
             try:
                 [_having_sql(h, q, {ph: "x" for ph in q.aggregates}) for h in q.having]
@@ -3472,7 +3575,13 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     ainputs = sorted(set().union(*(_expr_vars(a.expr) for a in q.aggregates.values()
                                    if a.expr is not None and (a.name.upper() != "COUNT"
                                                               or type(a.expr).__name__ != "ExprVar")))
-                     ) if general else []
+                     - cvars) if general else []
+    # computed values an aggregate reads: carried to the group as their value columns
+    agg_cin = sorted(set().union(*(_expr_vars(a.expr) for a in q.aggregates.values() if a.expr is not None))
+                     & cvars) if general else []
+    for v in agg_cin:
+        if v not in out_computed:
+            out_computed.append(v)
     if final_filters or computed or ainputs or (carry and q.sub_distinct):
         from dataclasses import replace as _replace
         # An aggregate's input level needs no fence (that is for FILTERs: `_value_level`),
@@ -3526,7 +3635,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         g1 = "g1" if not keys_only else "g1_" + min(
             (l.alias for u in reg.units for l in u.leaves), default="x")
         level, gctx = _general_group(q, ctx, inner, sorted(need), ainputs, final_filters, g1=g1,
-                                     computed_keys=set(q.group_vars) & cvars)
+                                     computed_keys=set(q.group_vars) & cvars,
+                                     computed_inputs={v: clanes.get(v) for v in agg_cin})
         out_keys = list(q.group_vars)
         # The groups, sized (the keys' distinct values, at most the input rows): left to
         # PostgreSQL the decode read the whole term table to hash-join 7 groups (a06)
@@ -3968,7 +4078,8 @@ def _ph(ph: str) -> str:
 
 
 def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str],
-                   filters: List[Any], g1: str = "g1", computed_keys=None) -> Tuple[str, Any]:
+                   filters: List[Any], g1: str = "g1", computed_keys=None,
+                   computed_inputs: Optional[Dict[str, Optional[str]]] = None) -> Tuple[str, Any]:
     """GROUP BY with any aggregate, on the generator's translation: the aggregates
     and their companions by `emit_group.aggregate_columns` (one translator), each
     result then given its eight output columns as the generator's EXTEND gives them
@@ -3985,6 +4096,10 @@ def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str
     types = TypeRegistry(aliases=ctx.aliases)
     for v in ainputs:
         types.register(ColumnInfo.simple_output(v, f"ag{fv_order.index(v)}", from_triple=True))
+    # an aggregate over a computed or carried value (`SUM(?w)` over a BIND, GROUP_CONCAT
+    # over a VALUES-only variable): its value columns, c_<var>, from the input level
+    for v, lane in sorted((computed_inputs or {}).items()):
+        types.register(ColumnInfo.simple_output(v, f"c_{v}", typed_lane=lane))
     gctx = ctx.child(types=types)
     from .sql_type_generation import COMPANION_SUFFIXES as _CS
     ckeys = set(computed_keys or ())
