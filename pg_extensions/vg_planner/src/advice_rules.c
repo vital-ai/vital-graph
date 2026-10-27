@@ -221,8 +221,20 @@ pair_allowance(VgpProblem *p, RelOptInfo *joinrel,
 	if (e && (e->marks & MARK_DISABLED))
 		return 0;
 
+	/*
+	 * A join adding only decode relations (VgpProblem.decode) to the other
+	 * side: a term lookup above the advised join, not the join, so no method
+	 * item constrains it. Never a merge join: that reads the whole term table
+	 * through its key index, in uuid (random heap) order, costed near a
+	 * sequential scan and 12x slower than one (n04: 1.1M index rows for
+	 * 407,700 lookups, 858 ms; hashed above the fence, 528 ms in all).
+	 */
+	if (p->decode &&
+		(bms_is_subset(bms_difference(innerrel->relids, p->root->outer_join_rels), p->decode) ||
+		 bms_is_subset(bms_difference(outerrel->relids, p->root->outer_join_rels), p->decode)))
+		allow &= ~ALLOW_MERGE;
 	/* method items: the planner's choice for exactly this join relation */
-	if (p->nmethods > 0)
+	else if (p->nmethods > 0)
 	{
 		Relids		base = bms_difference(bms_difference(joinrel->relids, p->root->outer_join_rels),
 										  p->transparent);

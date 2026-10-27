@@ -200,6 +200,13 @@ typedef struct VgpProblem
 	 * name changes the row count, and stays visible.
 	 */
 	Relids		transparent;
+	/*
+	 * The decode relations among them (alias `vgd_`, a term row LEFT JOINed
+	 * by key). A join adding only these to the other side is not the advised
+	 * join of that side: no method item constrains it (a hash-only item made
+	 * the term lookup a merge join over the whole term table).
+	 */
+	Relids		decode;
 } VgpProblem;
 
 /*

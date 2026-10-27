@@ -288,6 +288,25 @@ vgp_problem_begin(PlannerInfo *root, List *initial_rels, VgpAdvice *advice)
 			useful++;
 		}
 	}
+	/*
+	 * A problem holding a decode relation (alias `vgd_`) is one too, advice items
+	 * or not: its term lookup is never a merge join (advice_rules.c,
+	 * pair_allowance). A fenced level's own sub-problem (a FILTER's term rows
+	 * inside its fence) names nothing the advice does.
+	 */
+	if (useful == 0)
+	{
+		int			x = -1;
+
+		while (useful == 0 && (x = bms_next_member(problem_relids, x)) >= 0)
+		{
+			RangeTblEntry *rte = x < root->simple_rel_array_size ? root->simple_rte_array[x] : NULL;
+
+			if (rte && rte->rtekind == RTE_RELATION && rte->eref &&
+				strncmp(rte->eref->aliasname, "vgd_", 4) == 0)
+				useful++;
+		}
+	}
 	if (useful == 0)
 		return NULL;
 
@@ -319,9 +338,13 @@ vgp_problem_begin(PlannerInfo *root, List *initial_rels, VgpAdvice *advice)
 
 			if (rte && rte->rtekind == RTE_RELATION && rte->eref &&
 				strncmp(rte->eref->aliasname, "vgd_", 4) == 0)
+			{
 				p->transparent = bms_add_member(p->transparent, rti);
+				p->decode = bms_add_member(p->decode, rti);
+			}
 		}
 		p->transparent = bms_del_members(p->transparent, named);
+		p->decode = bms_del_members(p->decode, named);
 		while ((x = bms_next_member(p->transparent, x)) >= 0)
 		{
 			RangeTblEntry *rte = root->simple_rte_array[x];

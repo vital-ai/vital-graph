@@ -322,3 +322,37 @@ method m0 hash a b
    JOIN q11 b ON b.s = a.s WHERE a.p = 1 AND b.p = 2;
 SELECT vg_planner_last_report();
 DROP TABLE q11; DROP TABLE t11;
+-- A decode relation joined ABOVE the advised join: the method item (hash a b) is the
+-- join of a and b, not the term lookup on top of it, which stays free to probe the
+-- key (a nested loop); constrained, it merge-joined the whole term table.
+CREATE TABLE q12 (s int, p int, o int);
+INSERT INTO q12 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+CREATE TABLE t12 (u int PRIMARY KEY, txt text);
+INSERT INTO t12 SELECT g, 'x' || g FROM generate_series(0, 400000) g;
+ANALYZE q12; ANALYZE t12;
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+size k0 40 a b
+method m0 hash a b
+*/ SELECT * FROM ((q12 a JOIN q12 b ON b.s = a.s AND b.o = a.o)
+   LEFT JOIN t12 vgd_o ON vgd_o.u = a.o * 397) WHERE a.p = 1 AND b.p = 1;
+SELECT vg_planner_last_report();
+DROP TABLE q12; DROP TABLE t12;
+-- A decode relation is never merge-joined, in a sub-problem no advice item names too
+-- (a fenced level's term rows): the merge reads the whole term table by its key index.
+-- The same statement with a plain alias (x) is the control: PostgreSQL merges it.
+CREATE TABLE q13 (s int, o int);
+INSERT INTO q13 SELECT g, g % 300000 FROM generate_series(1, 200000) g;
+CREATE INDEX ON q13 (o);
+CREATE TABLE t13 (u int PRIMARY KEY, txt text);
+INSERT INTO t13 SELECT g, 'x' || g FROM generate_series(0, 400000) g;
+ANALYZE q13; ANALYZE t13;
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+size k0 200000 f
+*/ SELECT * FROM (SELECT a.s, x.txt FROM q13 a LEFT JOIN t13 x ON x.u = a.o ORDER BY a.o OFFSET 0) f;
+EXPLAIN (COSTS OFF)
+/*vg:plan 1
+size k0 200000 f
+*/ SELECT * FROM (SELECT a.s, vgd_x.txt FROM q13 a LEFT JOIN t13 vgd_x ON vgd_x.u = a.o ORDER BY a.o OFFSET 0) f;
+DROP TABLE q13; DROP TABLE t13;

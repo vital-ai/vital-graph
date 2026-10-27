@@ -411,6 +411,32 @@ alias_set_equals(PlannedStmt *pstmt, Bitmapset *rtis, VgpMethodItem *m, VgpAdvic
 	return n == m->naliases;
 }
 
+/*
+ * Every relation scanned under `sub` is a decode relation (alias `vgd_`, a term
+ * row LEFT JOINed by key, transparent): a join with such a side is a lookup above
+ * the advised join, not the join (VgpProblem.decode, as join search skips it).
+ */
+static bool
+only_decode(PlannedStmt *pstmt, Plan *sub, VgpAdvice *advice)
+{
+	Bitmapset  *rtis = sub ? scanned(sub) : NULL;
+	int			n = 0,
+				x = -1;
+
+	while ((x = bms_next_member(rtis, x)) >= 0)
+	{
+		RangeTblEntry *rte = rt_fetch(x, pstmt->rtable);
+
+		if (!VGP_NAMEABLE_RTE(rte))
+			continue;
+		if (!(rte->eref && strncmp(rte->eref->aliasname, "vgd_", 4) == 0 &&
+			  is_transparent(advice, rte->eref->aliasname)))
+			return false;
+		n++;
+	}
+	return n > 0;
+}
+
 static void
 check_methods(PlannedStmt *pstmt, Plan *plan, VgpAdvice *advice, int *parent)
 {
@@ -420,6 +446,9 @@ check_methods(PlannedStmt *pstmt, Plan *plan, VgpAdvice *advice, int *parent)
 	if (plan == NULL)
 		return;
 	m = node_method(plan);
+	if (m != VGP_M_NONE && (only_decode(pstmt, plan->lefttree, advice) ||
+							only_decode(pstmt, plan->righttree, advice)))
+		m = VGP_M_NONE;
 	if (m != VGP_M_NONE)
 	{
 		Bitmapset  *all = scanned(plan);
