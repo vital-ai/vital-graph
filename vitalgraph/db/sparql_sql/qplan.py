@@ -2696,6 +2696,77 @@ def _negation_sql(anti: "Anti", outer: Dict[str, str], certain: Set[str], rows: 
     return f"{kw} ({bsql_full})"
 
 
+def _lone_union(q: Query, reg: Region) -> bool:
+    """The query is one UNION and nothing to do above it but project (and DISTINCT)."""
+    return (len(reg.units) == 1 and len(reg.units[0].leaves) == 1 and reg.units[0].leaves[0].kind == "union"
+            and not (reg.filters or reg.iri_ne or reg.binds or reg.optionals or reg.antis or reg.values
+                     or reg.undef_tables or reg.maybe_joins)
+            and q.group_vars is None and not q.aggregates and not q.having and not q.order
+            and q.limit is None and not q.offset and q.sub_project is None and not q.binds)
+
+
+def _render_lone_union(q: Query, leaf: Leaf, names: Dict[str, str], ctx) -> "Rendered":
+    """A query that is one UNION: each branch rendered as a query of its own, DECODED,
+    the branches joined by UNION ALL (and DISTINCT over the decoded columns). Decoded
+    above the UNION ALL, its rows were looked up serially where today's SQL decodes in
+    each branch, in the parallel workers (u14 130,000 rows: 1.18x today's SQL; u17,
+    computed values: 1.6x). Each branch's advice is renumbered into the statement's."""
+    from .sql_type_generation import COMPANION_SUFFIXES as _CS
+    un = leaf.sub
+    allv = set(un.vars) | set(un.vals)
+    proj = list(q.project) if q.project is not None else (
+        [v for v in names if v in allv] + sorted(v for v in allv if v not in names))
+    types = dict(zip(("",) + _CS, ("text", "text", "uuid", "text", "text", "numeric", "boolean", "timestamp")))
+    # a computed value keeps its column's type (a number NUMERIC, as today's SQL) when
+    # every branch computing it agrees on its typed lane, else text (`_render_union`)
+    keep_type: Set[str] = set()
+    if un.vals:
+        lanes: Dict[str, Set[Optional[str]]] = {}
+        for i, breg in enumerate(un.branches):
+            kq = Query(region=breg)
+            kq.project = sorted(v for v in un.vars if v in un.branch_vars[i]) + sorted(un.branch_vals[i])
+            for v, ln in render(kq, {}, ctx, keys_only=True).lanes.items():
+                lanes.setdefault(v, set()).add(ln)
+        keep_type = {v for v, ls in lanes.items() if len(ls) == 1 and None not in ls}
+    parts, advice, plans, cost, pin = [], {"bgp": [], "size": [], "method": []}, [], 0.0, True
+    for i, breg in enumerate(un.branches):
+        mine = un.branch_vars[i] | un.branch_vals[i]
+        bq = Query(region=breg)
+        bq.project = [v for v in proj if v in mine]
+        rd = render(bq, names, ctx)
+        cols = []
+        for v in proj:
+            sn = names.get(v)
+            if sn is None:
+                raise Unsupported(f"no SQL name for ?{v}")
+            for suf in ("",) + _CS:
+                t = types[suf]
+                if suf == "" and v in keep_type:
+                    cols.append(f"b{i}.{sn} AS {sn}" if v in bq.project else f"NULL AS {sn}")
+                    continue
+                cols.append(f"b{i}.{sn}{suf}::{t} AS {sn}{suf}" if v in bq.project else f"NULL::{t} AS {sn}{suf}")
+        parts.append(f"SELECT {', '.join(cols)}\nFROM ({rd.sql}) AS b{i}")
+        for line in rd.advice.splitlines()[1:-1]:
+            kind = line.split(" ", 1)[0]
+            if kind not in advice:
+                raise Unsupported(f"a branch's advice item the merge does not know: {kind}")
+            advice[kind].append(line.split(" ", 2)[2])
+        plans.append(rd.plan)
+        cost += rd.cost
+        pin = pin and rd.pin
+    sql = "\nUNION ALL\n".join(f"({x})" for x in parts)
+    if q.distinct:
+        sql = f"SELECT DISTINCT * FROM ({sql}) AS ud"
+    lines = ["/*vg:plan 1"]
+    lines += [f"bgp u{i} {a}" for i, a in enumerate(advice["bgp"])]
+    lines += [f"size k{i} {a}" for i, a in enumerate(advice["size"])]
+    if pin:
+        lines += [f"method m{i} {a}" for i, a in enumerate(advice["method"])]
+    lines.append("*/")
+    return Rendered(sql=sql, advice="\n".join(lines), plan=" UNION ".join(f"({x})" for x in plans),
+                    cost=cost, pin=pin)
+
+
 def _nested_term_table(reg: Region) -> Optional[str]:
     """The term table of any region inside `reg`, else the one beside its quad table."""
     t = _Pos(reg.plans).term_table
@@ -2766,13 +2837,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             raise Unsupported("a BIND inside a NOT EXISTS / MINUS body")
         if a.region.optionals:
             raise Unsupported("OPTIONAL inside a NOT EXISTS / MINUS body")
-    if (not keys_only and len(reg.units) == 1 and len(reg.units[0].leaves) == 1
-            and reg.units[0].leaves[0].kind == "union" and reg.units[0].leaves[0].sub.vals
-            and q.limit is None and q.group_vars is None and not q.aggregates):
-        # nothing to order, and its rows decoded above the UNION ALL run serially where
-        # today's SQL decodes in each branch, in parallel workers (u17: 132 against 82
-        # ms); the decode is the slower list's (planning_planner/13)
-        raise Unsupported("a lone UNION carrying computed values, every row decoded")
+    if not keys_only and _lone_union(q, reg):
+        return _render_lone_union(q, reg.units[0].leaves[0], names, ctx)
     tree = main_tree or search(reg)
     base_sizes = _base_sizes(reg)
     r = _R(pos)
