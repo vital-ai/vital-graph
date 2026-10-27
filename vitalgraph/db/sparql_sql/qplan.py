@@ -2415,9 +2415,15 @@ def _optional_rows(rows: float, otree: "Node", jvars: List[str]) -> float:
 #: (15-run minimums; 1.01x at twenty). A 3-value cross product (u11, o05) is far above.
 DEDUP_DECODE_MIN_ROWS = 1000.0
 DEDUP_DECODE_RATIO = 20.0
+#: ... and when its materialized level fits PostgreSQL's working memory (the stacks'
+#: work_mem, 32 MB): a variable decoded per row adds about this many bytes a row
+DEDUP_DECODE_MAX_BYTES = 32.0 * 1024 * 1024
+DECODED_VALUE_BYTES = 200.0
 #: Early decode (`render`): a variable's term row joined in the unit binding it when the
-#: output has at least this many times the unit's rows.
-EARLY_DECODE_RATIO = 2.0
+#: output has at least this many times the unit's rows. One: at as many rows, the unit's
+#: lookups run in the parallel workers, the output's serially after them (d03, ORDER BY
+#: over 43,700 rows: 0.95x today's SQL at one, 2.0x at two).
+EARLY_DECODE_RATIO = 1.0
 #: A projected variable a FILTER reads: its value columns from the FILTER's level, not
 #: looked up again for the output (`render`, `_value_level` reuse)
 REUSE_FILTER_DECODE = True
@@ -3220,11 +3226,15 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     base_sizes = _base_sizes(reg)
     r = _R(pos)
     # Early decode, in a plain query only: no value level between the joins and the
-    # output (FILTER, BIND, OPTIONAL, a sub-SELECT's values), no grouping, DISTINCT or
-    # ordering on keys, no LIMIT (after one, decoding the page last is cheaper)
+    # output (FILTER, BIND, OPTIONAL, a sub-SELECT's values), no grouping or DISTINCT,
+    # no LIMIT (after one, decoding the page last is cheaper). An ORDER BY sorts on
+    # the decoded columns (below): sorting on a term row of its own, then decoding
+    # after, looked each term up twice, the second serially (d03: 2.2x today's SQL)
     if (not keys_only and q.group_vars is None and not q.aggregates and not q.distinct
-            and not q.sub_distinct and q.limit is None and not q.offset and not q.order
-            and not (reg.filters or reg.iri_ne or reg.binds or reg.optionals or q.binds)
+            and not q.sub_distinct and q.limit is None and not q.offset
+            # (a negation removes rows after the joins: u12, a NOT EXISTS leaving none of
+            # 10,000, decoded all of them first, 23 against today's 5 ms)
+            and not (reg.filters or reg.iri_ne or reg.binds or reg.optionals or q.binds or reg.antis)
             and not any(getattr(l, "vals", None) for u in reg.units for l in u.leaves)):
         r.early = {v for v in (q.project or []) if v in region_vars(reg)}
         r.early_rows = tree.rows
@@ -3725,12 +3735,14 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # is looked up there anyway, not a second time for the output. Not under a LIMIT
         # (the output decodes the page only), a grouping, DISTINCT (wider rows to
         # compare) or a late OPTIONAL cut.
-        if (REUSE_FILTER_DECODE and agg_fence and not keys_only and not general and q.group_vars is None
+        # Unfenced (a BIND level), the term join is inner: only a variable every row
+        # binds (d05, a BIND over 43,700 rows, its output decoded serially: 1.6x).
+        if (REUSE_FILTER_DECODE and not keys_only and not general and q.group_vars is None
                 and not q.distinct and not q.sub_distinct and q.limit is None and not q.offset
                 and not late and not reg.post_binds):
-            fread = set().union(*(_expr_vars(f) for f in final_filters)) - set(carry)
+            fread = set().union(*(_expr_vars(f) for f in final_filters), *(_expr_vars(e) for _v, e in computed)) - set(carry)
             reuse = [v for v in (q.project or []) if v in need and v not in cvars
-                     and (v in fread or DECODE_IN_FILTER_LEVEL)]
+                     and (v in fread or DECODE_IN_FILTER_LEVEL) and (agg_fence or v in outer_vars_)]
         inner = _value_level(_replace(reg, filters=final_filters), ctx, r, core, where, sorted(need),
                              q.sub_distinct, pos.term_table, computed, out_computed,
                              expose=ainputs, prefix="ag", fence=agg_fence, lanes=clanes, carry=carry,
@@ -3833,6 +3845,12 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             sort_cols += [(k, d) for k in variable_order_keys("o", info, v, "ASC")]
         elif v in agg_vars:
             sort_cols.append((f"o.a_{_ph(agg_vars[v])}", d))
+        elif (v in r.early_done or v in reuse) and v in names and not q.synth_order:
+            # decoded at the keys level (`_early_cols`, or the FILTER level's `r_<var>`):
+            # the generator's own keys over those columns, as today's SQL sorts
+            sn = names[v] if v in r.early_done else f"r_{v}"
+            sort_cols += [(k, d) for k in variable_order_keys("o", _CI.simple_output(v, sn, from_triple=True),
+                                                             v, "ASC")]
         elif q.synth_order:
             # the generator's own stable-paging order is by the term's UUID: the same
             # here, so consecutive pages agree whichever path renders each of them
@@ -3928,6 +3946,15 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
              and v not in r.early_done and v not in reuse
              and final_rows >= DEDUP_DECODE_MIN_ROWS and out_ndv.get(v)
              and final_rows >= DEDUP_DECODE_RATIO * out_ndv[v]}
+    # The decode by distinct keys reads its level more than once, so it is a
+    # MATERIALIZED CTE: one larger than PostgreSQL's working memory spills to disk
+    # and every read is a scan of the spill (d08, 407,700 rows: 1.40x today's SQL
+    # with it, 1.03x without). Estimated as its keys plus the per-row decoded values.
+    if dedup:
+        per_row = [v for v in (q.project or []) if v not in dedup and v not in unbound]
+        width = 16.0 * len(out_keys) + DECODED_VALUE_BYTES * len(per_row)
+        if final_rows * width > DEDUP_DECODE_MAX_BYTES:
+            dedup = set()
     for v in (q.project or []):
         if v in unbound:
             continue            # no column: the executor leaves an unbound variable out of the bindings
@@ -3969,9 +3996,13 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         if v in dedup:
             # the term rows of its DISTINCT keys, once each: decoded per output row, a
             # 3 x 10,000 cross product looked the same 3 terms up 30,000 times, with no
-            # estimate for PostgreSQL to memoize on (u11, o05)
-            djoins.append(f"LEFT JOIN (SELECT * FROM {pos.term_table} WHERE term_uuid IN "
-                          f"(SELECT k_{v} FROM top)) AS {t} ON {t}.term_uuid = top.k_{v}")
+            # estimate for PostgreSQL to memoize on (u11, o05). Each distinct key probes
+            # the term table (a fenced LATERAL): PostgreSQL has no estimate of a CTE's
+            # distinct keys, guessed 144,384 for 51 and hashed the whole 1.1M-row term
+            # table, once per variable (d08: 1.9 s against today's 1.4)
+            djoins.append(f"LEFT JOIN (SELECT dt.* FROM (SELECT DISTINCT k_{v} AS k FROM top WHERE k_{v} IS NOT NULL) AS dk"
+                          f" CROSS JOIN LATERAL (SELECT * FROM {pos.term_table} WHERE term_uuid = dk.k OFFSET 0) AS dt)"
+                          f" AS {t} ON {t}.term_uuid = top.k_{v}")
             cols += vcols
         elif dedup:
             # the others per row INSIDE the materialized level, where its plan may run in
