@@ -118,6 +118,12 @@ class Anti:
     minus: bool = False
     # FILTER EXISTS: the same body, kept when it matches (a semi-join)
     negated: bool = True
+    # MINUS where a shared variable may be unbound on a side (an OPTIONAL in the body
+    # or the pattern): the body a query of its own, a row removed when a body row is
+    # compatible on every shared variable and both bind at least one of `overlap`
+    # (`_minus_compat_sql`)
+    compat: bool = False
+    overlap: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -638,17 +644,27 @@ def _collect(p, ctx, aliases, parts, outer_vars):
         _collect(p.children[0], ctx, aliases, parts, outer_vars)
         left, right = compute_scope(p.children[0]), compute_scope(p.children[1])
         shared = set(left.all_visible) & set(right.all_visible)
-        if any(v.startswith(".") for v in shared):
-            raise Unsupported("MINUS sharing a generated variable")
-        if not shared:
+        # A generated variable (GRAPH ?g's scope, `.gctx`) must match (the same graph)
+        # but is no shared variable of the query's: sharing only those, the domains are
+        # disjoint and nothing is removed (W3C "outer GRAPH operator does not affect
+        # MINUS disjointness")
+        user = {v for v in shared if not v.startswith(".")}
+        if not user:
             return
-        if shared & (set(left.maybe) | set(right.maybe)):
-            raise Unsupported("MINUS sharing a variable one side may leave unbound")
         # its FILTERs are its own group's (`_collect` checks their scope): the body
         # region's, on value columns
         br = _region(p.children[1], ctx, aliases, outer_vars)
-        if br.optionals or br.binds:
-            raise Unsupported("a MINUS body with OPTIONAL or BIND")
+        maybe = (set(left.maybe) - set(left.defined)) | (set(right.maybe) - set(right.defined))
+        if shared & maybe or br.optionals:
+            # unbound on a side is compatible: per-variable compatibility, and at least
+            # one shared variable bound on both (W3C "Subtraction ... fully bound minuend")
+            if br.binds:
+                raise Unsupported("a MINUS body with OPTIONAL and BIND")
+            parts["antis"].append(Anti(region=br, correlated=sorted(shared), filters=[], minus=True,
+                                       compat=True, overlap=sorted(user)))
+            return
+        if br.binds:
+            raise Unsupported("a MINUS body with BIND")
         parts["antis"].append(Anti(region=br, correlated=sorted(shared), filters=[], minus=True))
     elif p.kind == KIND_EXTEND:
         # BIND(expr AS ?v) inside a group: sees only what its group bound BEFORE it
@@ -3038,6 +3054,45 @@ def _nested_term_table(reg: Region) -> Optional[str]:
     return None
 
 
+def _minus_compat_sql(anti: "Anti", r: "_R", ctx, acc, poses, notes,
+                      left_certain: Set[str] = frozenset()) -> str:
+    """MINUS with a shared variable maybe unbound on a side: NOT EXISTS a body row
+    compatible on every shared variable (equal, or unbound on either side) that shares
+    a bound variable with the row (both bind one of the query's shared variables).
+    The body, OPTIONALs included, planned and rendered as a query of its own."""
+    bq = Query(region=anti.region)
+    bq.project = sorted(_region_all_vars(anti.region))
+    s_ = render(bq, {}, ctx, keys_only=True)
+    acc["sizes"] += s_.sizes + s_.base_sizes
+    acc["units_adv"] += s_.units_adv
+    acc["methods"] += s_.methods
+    poses += s_.poses
+    right_certain = region_vars(anti.region)
+    for v in anti.correlated:
+        if v not in r.bound or v not in bq.project:
+            raise Unsupported(f"MINUS shares ?{v}, which a side does not produce")
+    both = [v for v in anti.correlated if v in left_certain and v in right_certain]
+    ov = [v for v in anti.correlated if v in anti.overlap]
+    # A variable bound on both sides is an equality, and satisfies the overlap by itself;
+    # with one variable able to overlap, overlap and compatibility make it an equality.
+    # Each gives PostgreSQL an equality to anti-join on (all IS NULL ORs: compared with
+    # every body row, n11 over 30 s against today's 0.35)
+    eq = set(both) if both else (set(ov) if len(ov) == 1 else set())
+    conds, overlap = [], []
+    for v in anti.correlated:
+        o, b = r.bound[v], f"mb.k_{v}"
+        if v in eq:
+            conds.append(f"{o} = {b}")
+        else:
+            conds.append(f"({o} IS NULL OR {b} IS NULL OR {o} = {b})")
+            if v in anti.overlap:
+                overlap.append(f"({o} IS NOT NULL AND {b} IS NOT NULL)")
+    if not eq:
+        conds.append("(" + " OR ".join(overlap or ["FALSE"]) + ")")
+    notes.append("MINUS on compatibility (a shared variable maybe unbound)")
+    return f"NOT EXISTS (SELECT 1 FROM ({s_.sql}) AS mb WHERE " + " AND ".join(conds) + ")"
+
+
 def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = None,
            keys_only: bool = False):
     """The query's SQL and advice. `keys_only`: a sub-SELECT inside a pattern, its
@@ -3088,6 +3143,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # a NULL on the pattern's side is compatible too; `IS NULL OR =` reads only the table's
         raise Unsupported("VALUES with UNDEF on a variable a UNION branch leaves unbound")
     for a in reg.antis:
+        if a.compat:
+            continue                    # a query of its own (`_minus_compat_sql`)
         if a.region.undef_tables:
             raise Unsupported("VALUES with UNDEF inside a NOT EXISTS / MINUS body")
         if a.region.binds:
@@ -3420,6 +3477,9 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     if [v for v in ovars if v not in ocols]:
         core, where, _l = _outer_values(core, where, r, [v for v in ovars if v not in ocols], pos.term_table, ctx, ocols)
     for anti in reg.antis:
+        if anti.compat:
+            where.append(_minus_compat_sql(anti, r, ctx, acc, poses, anti_notes, outer_vars_))
+            continue
         where.append(_negation_sql(anti, dict(r.bound), outer_vars_ | set(reg.values), rows, ctx,
                                    pos.term_table, subs, poses, acc, anti_notes, _iri_vars(reg), ocols))
     # the derived leaves' own advice (the OPTIONALs' and NOT EXISTS bodies' included)
@@ -3765,7 +3825,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         for opt in reg.optionals:
             base_sizes += _base_sizes(opt)
         for anti in reg.antis:
-            base_sizes += _base_sizes(anti.region)
+            if not anti.compat:
+                base_sizes += _base_sizes(anti.region)
         return _SubSql(sql=top, sizes=sizes, units_adv=units_adv, methods=methods, poses=poses,
                        base_sizes=base_sizes, lanes=lanes)
     # decode, in the executor's column contract
@@ -3857,7 +3918,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             out += _anti_bases(n)
         return out
     for anti in reg.antis:
-        base_sizes += _anti_bases(anti)
+        if not anti.compat:              # its own render's sizes (`_minus_compat_sql`)
+            base_sizes += _anti_bases(anti)
     # No base size for a leaf restricted by a sub-select filter (driving or not): alone,
     # its scan is NOT restricted (the filter applies when the sub-select's relation is
     # joined), and sizing it at the filtered rows made PostgreSQL hash a 437,000-row
