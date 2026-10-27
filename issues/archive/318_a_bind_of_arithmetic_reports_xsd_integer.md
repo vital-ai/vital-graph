@@ -1,6 +1,6 @@
 # 318 — A BIND of arithmetic over a stored decimal, float or double reports xsd:integer
 
-## Status: FIXED 2026-10-26, on the default path. Open until the vg test stack runs the full suite on the rebuilt image.
+## Status: RESOLVED 2026-10-27. Verified on the vg test stack rebuilt for the fix: unit, DAWG conformance, integration and API suites, 0 failures.
 
 ## Defect
 
