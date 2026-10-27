@@ -746,12 +746,13 @@ def _union_leaf(p, ctx, aliases, parts, outer_vars) -> Leaf:
     req = [region_vars(reg) | {v for v, _e in reg.binds} for reg in branches]
     ball = [r_ | set().union(*(_region_all_vars(o) for o in reg.optionals)) for r_, reg in zip(req, branches)]
     # a branch's computed values, as its render tells them apart: a BIND copying a
-    # bound key is that key, until the first computed one (`render`)
+    # bound key, or a stored IRI (`_stored_iri`), is a key, until the first computed
+    # one (`render`)
     bvals = []
     for reg in branches:
         comp, rv = set(), region_vars(reg)
         for v, e in reg.binds:
-            if comp or not (type(e).__name__ == "ExprVar" and e.var in rv):
+            if comp or not ((type(e).__name__ == "ExprVar" and e.var in rv) or _stored_iri(e, aliases)):
                 comp.add(v)
             else:
                 rv = rv | {v}
@@ -929,6 +930,18 @@ def _term_key(node):
     if t == "LiteralNode":
         return (node.value, "L", getattr(node, "lang", None) or None, node.datatype or None)
     raise Unsupported(f"VALUES term of kind {t}")
+
+
+def _stored_iri(e, aliases) -> Optional[str]:
+    """The term uuid of `BIND(<iri> AS ?v)`'s IRI when the term table holds it (a
+    constant the query registered and the generator resolved), else None. Such a
+    BIND is a KEY: its term row is the IRI's (`<e> ?p ?o BIND(<e> AS ?subject)`, the
+    entity graph listing's first UNION branch, beside branches copying keys)."""
+    node = getattr(e, "node", None)
+    if type(e).__name__ != "ExprValue" or type(node).__name__ != "URINode":
+        return None
+    col = (getattr(aliases, "constants", None) or {}).get(_term_key(node))
+    return (getattr(aliases, "resolved_constants", None) or {}).get(col) if col else None
 
 
 def _one_row_leaf(n: int) -> Leaf:
@@ -3559,12 +3572,15 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     if reg.post_binds and late:
         raise Unsupported("a BIND's patterns joined after it, with OPTIONALs after the cut")
     # BINDs: a copy of a bound variable is an alias of its key (it keeps its term
-    # identity); anything else is COMPUTED, carried as companion columns
+    # identity), a stored IRI its term's key (`_stored_iri`); anything else is
+    # COMPUTED, carried as companion columns
     computed: List[Tuple[str, Any]] = []
     for v, e in reg.binds:
         mentioned.add(v)
         if type(e).__name__ == "ExprVar" and e.var in r.bound and not computed:
             r.bound[v] = r.bound[e.var]
+        elif not computed and _stored_iri(e, reg.aliases):
+            r.bound[v] = f"'{_stored_iri(e, reg.aliases)}'::uuid"
         else:
             computed.append((v, e))
     cvars = {v for v, _e in computed}
