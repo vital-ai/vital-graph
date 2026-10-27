@@ -909,7 +909,9 @@ def _vtable_sql(leaf: Leaf) -> str:
         return "(SELECT 1 AS one OFFSET 0)"   # a group with no pattern: one row, fenced (a relation the advice can name)
     body = ", ".join("(" + ", ".join("NULL::uuid" if u is _UNDEF else f"'{u}'::uuid" for u in r_) + ")"
                      for r_ in rows)
-    return f"(SELECT * FROM (VALUES {body}) AS v({', '.join(f'k_{v}' for v in vars_)}))"
+    # one row: fenced, or PostgreSQL folds it into constants (the advice's relation gone)
+    fence = " OFFSET 0" if len(rows) == 1 else ""
+    return f"(SELECT * FROM (VALUES {body}) AS v({', '.join(f'k_{v}' for v in vars_)}){fence})"
 
 
 def _leaf_identity(l: Leaf):
@@ -953,12 +955,28 @@ def _values_tables(parts, aliases) -> None:
     opt_held = set().union(*(_region_all_vars(o) for o in parts["optionals"]),
                            *(_region_all_vars(a.region) for a in parts["antis"]))
     held = req_held | opt_held
+    # a UNION variable some branch leaves unbound and no pattern joins (`?s ?p ?o
+    # OPTIONAL { ?s :knows ?o2 } } VALUES ?o2 { :b }`): the VALUES binds it, a table
+    # of its own the UNION joins on compatibility (`_build_region`, maybe_joins)
+    pattern_held = {v for l in parts["leaves"] if l.kind in ("quad", "edge", "frame_slot")
+                    for v in [l.s_var] + [ov for _c, ov in l.o_vars] if v}
+    union_maybe = set().union(*(set(l.sub.vars) - l.sub.certain for l in parts["leaves"]
+                                if l.kind == "union")) - pattern_held
     for p in parts.pop("vtables", []):
         vars_ = list(p.values_vars or [])
         rows = p.values_rows or []
         valued = [v for v in vars_ if v not in held]
         if valued:
             parts["leaves"].append(_values_leaf(p, aliases, parts, vars_, valued))
+            continue
+        if set(vars_) & union_maybe:
+            leaf = _vtable_leaf(p, aliases, parts)
+            if leaf.vt_absent:
+                # a row with a term not stored is still a solution where the UNION
+                # leaves the variable unbound: not droppable
+                raise Unsupported("VALUES on a UNION variable some branch leaves unbound, to a term not stored")
+            parts["leaves"].append(leaf)
+            parts.setdefault("values_maybe", set()).update(set(vars_) & union_maybe)
             continue
         if len(vars_) > 1 and len(rows) == 1:
             # one row: a pin per variable. As a table PostgreSQL folds it into constants
@@ -1174,13 +1192,17 @@ def _build_region(parts, ctx, aliases) -> Region:
             post_binds.append((bv, _build_region(sub_parts, ctx, aliases)))
             leaves[:] = rest
     maybe_joins: List[Tuple[str, str]] = []           # (private name, variable)
+    # a VALUES table with no UNDEF binds its variables on every row, as a pattern does
+    # (`_values_tables`, values_maybe)
+    values_maybe = parts.get("values_maybe", set())
     pattern_held = {v for x in leaves if x.kind in ("quad", "edge", "frame_slot")
-                    for v in [x.s_var] + [ov for _c, ov in x.o_vars] if v}
+                    for v in [x.s_var] + [ov for _c, ov in x.o_vars] if v} | values_maybe
     for l in leaves:
         if l.kind != "union":
             continue
         for v in sorted(set(l.sub.vars) - l.sub.certain):
             derived = [x for x in leaves if x is not l and x.kind not in ("quad", "edge", "frame_slot")
+                       and not (x.kind == "vtable" and v in values_maybe)
                        and v in [x.s_var] + [ov for _c, ov in x.o_vars]]
             if v not in pattern_held or derived:
                 continue
@@ -1345,7 +1367,8 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
                  top_where: Optional[List[str]] = None, expose: Optional[List[str]] = None,
                  prefix: str = "fv", core_alias: str = "cq",
                  lanes: Optional[Dict[str, Optional[str]]] = None,
-                 carry: Optional[Dict[str, str]] = None) -> str:
+                 carry: Optional[Dict[str, str]] = None,
+                 reuse: Optional[List[str]] = None) -> str:
     """The region's rows with its BINDs computed and its FILTERs applied, as a level
     of keys (`k_<v>`, term uuids) plus the computed variables' companion columns
     (`c_<v>`, `c_<v>__type`, ...) for `out_computed`.
@@ -1393,7 +1416,7 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
     # ones its body shares with the pattern (`_exists_shared_vars`)
     read |= set().union(*(_exists_shared_vars(e) for e in list(reg.filters) + extra_filters),
                         *(_exists_shared_vars(e) for _v, e in computed)) & set(r.bound)
-    fvars = sorted(read | set(expose))
+    fvars = sorted(read | set(expose) | set(reuse or []))
     for v in fvars:
         if v not in r.bound:
             raise Unsupported(f"an expression reads ?{v}, which the plan does not bind")
@@ -1401,26 +1424,43 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
     # a sub-SELECT's values (`carry`: var -> its leaf alias), passed through as c_<var>
     carried = [f"{a}.c_{v}{suf} AS c_{v}{suf}" for v, a in sorted((carry or {}).items())
                for suf in ("",) + COMPANION_SUFFIXES]
-    core_level = ("SELECT " + (", ".join([f"{r.bound[v]} AS b_{v}" for v in bind_vars] + carried) or "1 AS one")
-                  + "\nFROM " + core + ("\nWHERE " + " AND ".join(where) if where else "") + ("\nOFFSET 0" if fence else ""))
     cols = [f"{core_alias}.b_{v} AS k_{v}" for v in need] + [
         f"{core_alias}.c_{v}{suf}" for v in sorted(carry or {}) for suf in ("",) + COMPANION_SUFFIXES]
-    joins = []
+    joins, term_cols = [], []
     types = TypeRegistry(aliases=ctx.aliases)
     for i, v in enumerate(fvars):
-        sn, t = f"{prefix}{i}", f"t{prefix}{i}"
-        # Unfenced (a negation body, where every variable is bound: bodies with an
-        # OPTIONAL decline), an inner join: a FILTER's CASE is not strict, so a LEFT
-        # JOIN stays one and PostgreSQL cannot memoize the lookup (n03: 10,000 term
-        # probes against today's 3,494 memoized)
-        joins.append(f"{'LEFT JOIN' if fence else 'JOIN'} {term_table} AS {t} ON {t}.term_uuid = {core_alias}.b_{v}")
-        tc = TypeRegistry.term_table_columns(
+        sn = f"{prefix}{i}"
+        tc_of = lambda t: TypeRegistry.term_table_columns(
             sn, t, "FSUB", _NUMERIC_DT_SQL_LIST, dt_case_sql=ctx.dt_case_expr(t),
             numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
             boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
             datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))
+        if fence and FILTER_TERMS_IN_FENCE:
+            # Fenced: the term row joined INSIDE the fence, a LEFT JOIN (never a driver:
+            # the FILTER's condition is outside, so it stays one) under a `vgd_` alias,
+            # transparent to the advice (vg_planner advice_state.c); its columns read
+            # out here. Joined outside, every lookup ran serially above the fence's
+            # Gather (f03, 43,700 FILTER and 43,389 output lookups: 441 against today's
+            # parallel 243 ms).
+            t = f"vgd_{prefix}{i}"
+            core = f"({core}\n LEFT JOIN {term_table} AS {t} ON {t}.term_uuid = {r.bound[v]})"
+            tc = tc_of(t)
+            used = sorted(set(re.findall(rf"\b{t}\.(\w+)", " ".join(tc))))
+            term_cols += [f"{t}.{c} AS {t}_{c}" for c in used]
+            tc = [re.sub(rf"\b{t}\.(\w+)", rf"{core_alias}.{t}_\1", c) for c in tc]
+        else:
+            # Unfenced (a negation body, where every variable is bound: bodies with an
+            # OPTIONAL decline), an inner join: a FILTER's CASE is not strict, so a LEFT
+            # JOIN stays one and PostgreSQL cannot memoize the lookup (n03: 10,000 term
+            # probes against today's 3,494 memoized)
+            t = f"t{prefix}{i}"
+            joins.append(f"{'LEFT JOIN' if fence else 'JOIN'} {term_table} AS {t} ON {t}.term_uuid = {core_alias}.b_{v}")
+            tc = tc_of(t)
         cols += [c.replace(f"FSUB.{sn}__uuid", f"{core_alias}.b_{v}") for c in tc]
         types.register(ColumnInfo.simple_output(v, sn, from_triple=True))
+    core_level = ("SELECT " + (", ".join([f"{r.bound[v]} AS b_{v}" for v in bind_vars] + carried + term_cols)
+                               or "1 AS one")
+                  + "\nFROM " + core + ("\nWHERE " + " AND ".join(where) if where else "") + ("\nOFFSET 0" if fence else ""))
     for v, sn in sorted(outer_refs.items()):
         types.register(ColumnInfo.simple_output(v, sn, from_triple=True))
     for v in sorted(carry or {}):
@@ -1463,6 +1503,9 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
         raise Unsupported("an expression reads a variable the value columns do not provide")
     out = [f"k_{v}" for v in need] + [f"c_{v}{suf}" for v in out_computed for suf in ("",) + COMPANION_SUFFIXES]
     out += [f"{prefix}{fvars.index(v)}{suf}" for v in expose for suf in ("",) + COMPANION_SUFFIXES]
+    # a projected variable's value columns, for the output to read (`r_<var>`, `render`)
+    out += [f"{prefix}{fvars.index(v)}{suf} AS r_{v}{suf}" for v in (reuse or [])
+            for suf in ("",) + COMPANION_SUFFIXES]
     conds = list(top_where or []) + conds
     return ("SELECT " + ("DISTINCT " if distinct else "") + (", ".join(out) or "1 AS one")
             + f"\nFROM ({level}) AS fl" + ("\nWHERE " + " AND ".join(conds) if conds else ""))
@@ -2362,6 +2405,13 @@ DEDUP_DECODE_RATIO = 20.0
 #: Early decode (`render`): a variable's term row joined in the unit binding it when the
 #: output has at least this many times the unit's rows.
 EARLY_DECODE_RATIO = 2.0
+#: A projected variable a FILTER reads: its value columns from the FILTER's level, not
+#: looked up again for the output (`render`, `_value_level` reuse)
+REUSE_FILTER_DECODE = True
+#: ... and the other projected variables too, inside the FILTER level's fence
+DECODE_IN_FILTER_LEVEL = True
+#: A fenced FILTER level's term rows joined inside its fence (`_value_level`)
+FILTER_TERMS_IN_FENCE = True
 
 #: `unit_methods`: advise a nested loop into a constant leaf only when its own scan
 #: is at least this many times the rows probing it.
@@ -3217,14 +3267,13 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     if reg.optionals and early and not late:
         from dataclasses import replace as _replace
         keep = sorted(r.bound)
-        nfv = len(set().union(*(_expr_vars(f) for f in early)))
         lvl = _value_level(_replace(reg, filters=early), ctx, r, core, where, keep, False, pos.term_table,
                            [], [], prefix="pf", core_alias="cqp")
         core, where = f"({lvl}) AS fx", []
         r.bound = {v: f"fx.k_{v}" for v in keep}
-        # the relations PostgreSQL joins after pulling the level up: the fenced core
-        # and the FILTERs' term rows
-        present = {"cqp"} | {f"tpf{i}" for i in range(nfv)}
+        # the relation PostgreSQL joins after pulling the level up: the fenced core (the
+        # FILTERs' term rows are inside it, `vgd_`, transparent to the advice)
+        present = {"cqp"}
         final_filters = [f for f in reg.filters if not any(f is e for e in early)]
     # OPTIONAL blocks, each planned on its own, left-joined on the shared vars
     opt_bound: Set[str] = set()     # variables an earlier OPTIONAL bound: NULL where it did not
@@ -3642,6 +3691,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     for v in agg_cin:
         if v not in out_computed:
             out_computed.append(v)
+    reuse: List[str] = []           # projected variables decoded by the FILTER level (below)
     if final_filters or computed or ainputs or (carry and q.sub_distinct):
         from dataclasses import replace as _replace
         # An aggregate's input level needs no fence (that is for FILTERs: `_value_level`),
@@ -3654,9 +3704,21 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         cin = set().union(*(_expr_vars(e) for _v, e in computed))
         agg_fence = (any(_expr_vars(f) for f in final_filters)
                      or any(v not in outer_vars_ for v in set(ainputs) | cin))
+        # The projected variables decoded in the fenced FILTER level (`r_<var>`), inside
+        # its fence where the lookups run in the parallel workers: a FILTER's variable
+        # is looked up there anyway, not a second time for the output. Not under a LIMIT
+        # (the output decodes the page only), a grouping, DISTINCT (wider rows to
+        # compare) or a late OPTIONAL cut.
+        if (REUSE_FILTER_DECODE and agg_fence and not keys_only and not general and q.group_vars is None
+                and not q.distinct and not q.sub_distinct and q.limit is None and not q.offset
+                and not late and not reg.post_binds):
+            fread = set().union(*(_expr_vars(f) for f in final_filters)) - set(carry)
+            reuse = [v for v in (q.project or []) if v in need and v not in cvars
+                     and (v in fread or DECODE_IN_FILTER_LEVEL)]
         inner = _value_level(_replace(reg, filters=final_filters), ctx, r, core, where, sorted(need),
                              q.sub_distinct, pos.term_table, computed, out_computed,
-                             expose=ainputs, prefix="ag", fence=agg_fence, lanes=clanes, carry=carry)
+                             expose=ainputs, prefix="ag", fence=agg_fence, lanes=clanes, carry=carry,
+                             reuse=reuse)
     else:
         from .sql_type_generation import COMPANION_SUFFIXES as _CS
         keys = keys + [f"{a}.c_{v}{suf} AS c_{v}{suf}" for v, a in sorted(carry.items()) for suf in ("",) + _CS]
@@ -3847,7 +3909,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # a VALUES / IN pin bounds the variable's distinct values exactly
         out_ndv[v] = min(out_ndv.get(v, float(len(uuids))), float(len(uuids)))
     dedup = {v for v in (q.project or []) if v not in agg_vars and v not in cvars and v not in unbound
-             and v not in r.early_done
+             and v not in r.early_done and v not in reuse
              and final_rows >= DEDUP_DECODE_MIN_ROWS and out_ndv.get(v)
              and final_rows >= DEDUP_DECODE_RATIO * out_ndv[v]}
     for v in (q.project or []):
@@ -3875,6 +3937,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         if v in r.early_done:
             # decoded in the unit that binds it (`_early_cols`): its columns pass through
             cols += [f"top.{c.rsplit(' AS ', 1)[1]}" for c in _early_cols(v, sn, r, ctx)]
+            continue
+        if v in reuse:
+            # decoded by the FILTER level (`_value_level`): its columns pass through
+            from .sql_type_generation import COMPANION_SUFFIXES as _CS
+            cols += [f"top.r_{v}{suf} AS {sn}{suf}" for suf in ("",) + _CS]
             continue
         t = f"d_{v}"
         vcols = [c.replace(f"top.{sn}__uuid", f"top.k_{v}") for c in TypeRegistry.term_table_columns(

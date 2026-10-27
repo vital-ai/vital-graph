@@ -138,7 +138,12 @@ def compute_scope(plan: PlanV2) -> VarScope:
         return VarScope()
 
     if kind == KIND_PATH:
-        return VarScope(defined=frozenset(plan.var_slots.keys()))
+        # GRAPH ?g { path } binds ?g on the path node itself (collect._bind_graph_var)
+        graph_var = (plan.path_meta or {}).get("graph_var")
+        defined = set(plan.var_slots.keys())
+        if graph_var:
+            defined.add(graph_var)
+        return VarScope(defined=frozenset(defined))
 
     # --- Binary relation kinds ---
 
