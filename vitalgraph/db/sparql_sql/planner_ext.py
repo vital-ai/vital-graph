@@ -149,16 +149,21 @@ def active() -> bool:
     return _current.get() is not None
 
 
-def exists_alias_prefix() -> str:
+def exists_alias_prefix(depth: int = 0) -> str:
     """The alias prefix for an EXISTS body's own AliasGenerator.
 
-    "ex_" as always when inactive. Active, every body in the statement gets its
-    own ("ex1_", "ex2_", ...): advice names relations by alias, and two bodies
-    both called `ex_q0` would make that ambiguous.
+    Inactive: "ex_" for a body of the query, "exd<depth>_" for one nested inside
+    another body. The same "ex_" at both levels named the body's ?e and the nested
+    body's ?e both `ex_v0`, and the nested correlation `ex_v0__uuid =
+    ex__ex0.ex_v0__uuid` resolved its unqualified side to the nested sub-query: a
+    column compared with itself, the nested negation uncorrelated (issues/319).
+    Active, every body in the statement gets its own ("ex1_", "ex2_", ...): advice
+    names relations by alias, and two bodies both called `ex_q0` would make that
+    ambiguous.
     """
     st = _current.get()
     if st is None:
-        return "ex_"
+        return "ex_" if depth == 0 else f"exd{depth}_"
     st.exists_bodies += 1
     return f"ex{st.exists_bodies}_"
 

@@ -2062,7 +2062,11 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
         inner_aliases = expr.prepared_aliases
         _share_planning_stats(ctx.aliases, inner_aliases)
     else:
-        inner_aliases = AliasGenerator(alias_prefix=exists_alias_prefix())
+        # nested in another body: its own prefix (`exists_alias_prefix`, issues/319)
+        _outer = getattr(ctx.aliases, "_alias_prefix", "") or ""
+        _m = re.match(r"exd(\d+)_$", _outer)
+        _depth = int(_m.group(1)) + 1 if _m else (1 if _outer.startswith("ex") else 0)
+        inner_aliases = AliasGenerator(alias_prefix=exists_alias_prefix(_depth))
         inner_plan = collect(gp, ctx.space_id, inner_aliases,
                              graph_uri=ctx.graph_lock_uri)
 
@@ -2138,7 +2142,10 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
     #
     # Safe against shadowing: inner column names carry the "ex_" alias prefix
     # (AliasGenerator.next_var), so a bare outer name like `v0` can never
-    # collide with an inner one and resolves to the enclosing query.
+    # collide with an inner one and resolves to the enclosing query. A body
+    # nested in another body has a prefix of its own ("exd1_", ...): with "ex_"
+    # at both levels the nested correlation compared a column with itself
+    # (`exists_alias_prefix`, issues/319).
     for var in outer_vars - inner_vars:
         o_info = ctx.types.get(var)
         if o_info and o_info.sql_name:

@@ -132,7 +132,7 @@ async def prepare_exists_subplans(plan: PlanV2, space_id: str, *,
             # exactly as the emit path had it. With the planner switch on each
             # body's prefix is also unique ("ex1_", ...), so advice can name
             # its relations (`planner_ext.exists_alias_prefix`).
-            inner_aliases = AliasGenerator(alias_prefix=exists_alias_prefix())
+            inner_aliases = AliasGenerator(alias_prefix=exists_alias_prefix(depth))
             # graph_uri is NOT optional: the emit-time path passes
             # ctx.graph_lock_uri, and omitting it here would let the body match
             # quads in every graph while the outer query is locked to one —
