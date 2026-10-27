@@ -119,6 +119,10 @@ class Query:
     group_vars: Optional[List[str]] = None
     aggregates: Dict[str, Any] = field(default_factory=dict)   # placeholder -> ExprAggregator
     extend: Dict[str, str] = field(default_factory=dict)        # var -> placeholder
+    # SELECT (expr AS ?v) over aggregates (`(MIN(?p) + MAX(?p)) / 2`): computed at the
+    # general group's result level, a value (c_<var>) like an aggregate result
+    agg_exprs: Dict[str, Any] = field(default_factory=dict)
+    agg_lanes: Dict[str, Optional[str]] = field(default_factory=dict)   # their typed lanes
     having: List[Any] = field(default_factory=list)
     order: List[Tuple[str, str]] = field(default_factory=list)
     project: Optional[List[str]] = None
@@ -216,6 +220,12 @@ def analyze(plan, ctx, exclude: frozenset = frozenset()) -> Query:
                 if seen_group:
                     raise Unsupported("a graph variable above a GROUP")
                 q.binds.append((p.extend_var, e))
+            elif (name is None and not seen_group and not _expr_has_exists(e)
+                  and any(v.startswith(".") and not is_graph_ctx_var(v) for v in _expr_vars(e))
+                  and not any(is_graph_ctx_var(v) for v in _expr_vars(e))):
+                # an expression over aggregate results (their placeholders): met above
+                # the GROUP, computed at its result level
+                q.agg_exprs[p.extend_var] = e
             elif name is None or not name.startswith("."):
                 if seen_group:
                     raise Unsupported("an expression over aggregates or group keys (C3)")
@@ -365,7 +375,7 @@ def _subsel_leaf(p, ctx, exclude: frozenset) -> Leaf:
         raise Unsupported("a sub-SELECT * inside the pattern")
     # a projected computed value or aggregate is a VALUE of the leaf (c_<var> and its
     # companions), not a key: projected, ordered or deduplicated outside, never joined
-    vals = [v for v in inner.project if v in inner.extend or v in {b for b, _e in inner.binds}
+    vals = [v for v in inner.project if v in inner.extend or v in inner.agg_exprs or v in {b for b, _e in inner.binds}
             or v in {b for b, _e in inner.region.binds}]
     # inside GRAPH ?g, the sub-SELECT's patterns read the graph through a variable
     # (`context_uuid`); one it does not project is not tied to the outer graph, and
@@ -463,7 +473,7 @@ def _is_having(p, q) -> bool:
             yield e.var
         for a in getattr(e, "args", None) or []:
             yield from refs(a)
-    names = set(q.extend) | set(q.extend.values())
+    names = set(q.extend) | set(q.extend.values()) | set(q.agg_exprs)
     from .graph_scope_rewrite import GRAPH_CTX_PREFIX, GRAPH_INNER_PREFIX
 
     def agg(r: str) -> bool:
@@ -2703,10 +2713,6 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             raise Unsupported("an OPTIONAL with its own OPTIONAL or negation and a FILTER reading both sides")
         if o.undef_tables:
             raise Unsupported("VALUES with UNDEF inside an OPTIONAL")
-        if any(not _expr_vars(f) for f in o.filters + o.lj_filters):
-            # constant (one reading only unbound variables): PostgreSQL folds the LEFT
-            # JOIN away, and the advice names a join it never formed (W3C expr-5)
-            raise Unsupported("an OPTIONAL's FILTER reads no variable")
     if reg.undef_tables and not reg.units:
         raise Unsupported("VALUES with UNDEF and no pattern to join it to")
     if maybe_vars & {v for ut in reg.undef_tables for v in ut.sub[0]}:
@@ -2939,7 +2945,9 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
                     c = ebv_sql(e, fctx)
                     if not c:
                         raise Unsupported(f"an OPTIONAL FILTER the translator does not support: {type(e).__name__}")
-                    conds.append(f"({c})")
+                    # a constant one fenced as in `_value_level`: folded, a false ON
+                    # clause removed the OPTIONAL's scans the advice names (W3C expr-5)
+                    conds.append(f"(SELECT {c})" if not _expr_vars(e) else f"({c})")
             if len(getattr(fctx, "_unresolved_vars", None) or []) > before:
                 raise Unsupported("an OPTIONAL's FILTER reads a variable the value columns do not provide")
             core = f"({core}\n LEFT JOIN ({inner}) AS {lo} ON " + " AND ".join(conds or ["TRUE"]) + ")"
@@ -3031,6 +3039,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         anti_notes.append(_early_stop_note(q, reg, tree, rows))
     # the key set
     agg_vars = {v: ph for v, ph in q.extend.items()}
+    agg_vars.update({v: v for v in q.agg_exprs})      # computed at the result level (general)
     # A projected variable that no pattern of the query mentions is UNBOUND on every
     # row (`SELECT ?x WHERE { ... <const> ... }`): no key and no column, as today's
     # SQL (wordnet hub queries: the hub is a constant).
@@ -3067,10 +3076,17 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         cvars |= set(leafvals)
         clanes.update({v: lane for v, (_a, lane) in leafvals.items()})
     carry = {v: a for v, (a, _lane) in leafvals.items()}
-    if q.group_vars is not None and (cvars - set(q.group_vars)):
-        # a computed value under GROUP BY that is not a group key (a key is grouped on
-        # its value columns: `_general_group`)
-        raise Unsupported("GROUP BY with a computed BIND that is not a key")
+    if q.group_vars is not None:
+        # a computed value read past the grouping (projected, aggregated, sorted) must be
+        # a group key, grouped on its value columns (`_general_group`); one only a FILTER
+        # reads is applied before it (W3C GROUP_CONCAT 2: a sub-SELECT's value filtered,
+        # then COUNT(*))
+        after = (set(q.project or []) - set(agg_vars)) | {v for v, _d in q.order}
+        for a_ in q.aggregates.values():
+            if a_.expr is not None:
+                after |= _expr_vars(a_.expr)
+        if (cvars & after) - set(q.group_vars):
+            raise Unsupported("GROUP BY with a computed BIND that is not a key")
     if q.project is None and q.group_vars is None:
         # SELECT * (no PROJECT in the algebra): every variable the pattern binds, in
         # the generator's order (`names` follows its var_map). Without this the
@@ -3129,6 +3145,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
                       for a in q.aggregates.values())
         if keys_only and q.extend:
             general = True          # its results leave as values (c_<var>), as the general group makes them
+        if q.agg_exprs:
+            general = True          # an expression over aggregates: the general group's result level
         if set(q.group_vars) & cvars:
             general = True          # a computed group key: grouped on its value columns
         if not general:
@@ -3218,6 +3236,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             # companion columns (`variable_order_keys`), by its typed lane
             if v in cvars:
                 lane = clanes.get(v)
+            elif v in q.agg_exprs:
+                lane = q.agg_lanes.get(v)
             else:
                 ainfo = gctx.types.get(agg_vars[v])
                 lane = None if ainfo is None or ainfo._sql_has_companions else ainfo.typed_lane
@@ -3272,7 +3292,9 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     if keys_only:
         lanes: Dict[str, Optional[str]] = {}
         for v in (q.project or []):
-            if v in agg_vars and general:
+            if v in q.agg_exprs:
+                lanes[v] = q.agg_lanes.get(v)
+            elif v in agg_vars and general:
                 ainfo = gctx.types.get(agg_vars[v])
                 lanes[v] = None if ainfo is None or ainfo._sql_has_companions else ainfo.typed_lane
             elif v in cvars and v in out_keys:
@@ -3627,15 +3649,23 @@ def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str
         else:
             cols += aggregate_columns(ph, agg, "g0", gctx, child_sql_names=[f"k_{v}" for v in need],
                                       grouped=bool(q.group_vars))
+    # The input's value columns once per row: pulled up into the aggregate, each
+    # reference re-evaluated its CASE (a regex and a cast for __num) in every
+    # array_agg ORDER BY, the sort key and AVG (a09, MIN / MAX / AVG of a value: 355
+    # against today's 255 ms; fenced 197; a07 282 -> 152). Only when it has value
+    # columns: a COUNT over keys has nothing to re-evaluate.
+    if ainputs:
+        inner = f"SELECT * FROM ({inner}) AS gi OFFSET 0"
     level = (f"SELECT {', '.join(cols)}\nFROM ({inner}) AS g0"
              + (f"\nGROUP BY {', '.join(gb)}" if gb else ""))
     before = len(getattr(gctx, "_unresolved_vars", None) or [])
     scope = set(q.aggregates) | set(q.group_vars)
     res = []
     from .sql_type_generation import COMPANION_SUFFIXES
-    for v, ph in sorted(q.extend.items()):
-        e = ExprVar(var=ph)
-        info = gctx.types.get(ph)
+    outs = [(v, ExprVar(var=ph), ph) for v, ph in sorted(q.extend.items())]
+    outs += [(v, e, v) for v, e in sorted(q.agg_exprs.items(), key=lambda kv: kv[0])]
+    for v, e, ph in outs:
+        info = gctx.types.get(ph) if v in q.extend else None
         if info is not None and info.sql_name and info._sql_has_companions:
             # MIN / MAX / SAMPLE carry the winning row's companions: passed through, as
             # emit_extend copies them (re-inferred, the type and __num were lost)
@@ -3650,6 +3680,8 @@ def _general_group(q: Query, ctx, inner: str, need: List[str], ainputs: List[str
         _patch_strafter_strbefore_companions(ns, gctx, typed)
         _patch_concat_companions(ns, gctx, typed)
         res += arith_datatype_companion(e, gctx.types, f"c_{v}", typed.produce_companions(f"c_{v}", sql_e))
+        if v in q.agg_exprs:
+            q.agg_lanes[v] = typed.typed_lane       # sorted by it (`render`)
     conds = []
     with gctx.expression_scope(scope):
         for h in q.having:
