@@ -294,3 +294,16 @@ method m1 hash a un
    WHERE a.p = 1 OFFSET 0) f;
 SELECT vg_planner_last_report();
 DROP TABLE q9;
+-- A one-alias size is the scan's: a semi-join of that relation with an EXISTS
+-- body (transparent to the advice) keeps PostgreSQL's semi-join estimate. It
+-- took the scan's 2,000 rows when the body reduced the join to that relation.
+CREATE TABLE q10 (s int, p int, o int);
+INSERT INTO q10 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+ANALYZE q10;
+EXPLAIN (COSTS ON)
+/*vg:plan 1
+size k0 2000 a
+*/ SELECT * FROM q10 a WHERE a.p = 1
+   AND EXISTS (SELECT 1 FROM q10 x WHERE x.s = a.s AND x.p = 4 AND x.o < 20);
+SELECT vg_planner_last_report();
+DROP TABLE q10;

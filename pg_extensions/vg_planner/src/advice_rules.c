@@ -165,6 +165,15 @@ vgp_joinrel_built(PlannerInfo *root, RelOptInfo *joinrel,
 	{
 		VgpProblemSize *ps = &p->psizes[z];
 
+		/*
+		 * A one-alias item sizes a scan (vgp_size_base_rel), never a join: a
+		 * semi-join of that relation with a transparent EXISTS body reduces to
+		 * the same one relation here, and took the scan's rows, its selectivity
+		 * thrown away (n03: 41 -> 10,000 estimated, 731 actual; a parallel plan
+		 * at twice the time).
+		 */
+		if (ps->size->naliases == 1)
+			continue;
 		if (ps->relids && bms_equal(base, ps->relids))
 		{
 			ps->size->pg_rows = pg_rows;

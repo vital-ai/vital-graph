@@ -871,3 +871,34 @@ SELECT vg_planner_last_report();
 (1 row)
 
 DROP TABLE q9;
+-- A one-alias size is the scan's: a semi-join of that relation with an EXISTS
+-- body (transparent to the advice) keeps PostgreSQL's semi-join estimate. It
+-- took the scan's 2,000 rows when the body reduced the join to that relation.
+CREATE TABLE q10 (s int, p int, o int);
+INSERT INTO q10 SELECT g % 997, g % 13, (g * 7) % 1013 FROM generate_series(1, 24000) g;
+ANALYZE q10;
+EXPLAIN (COSTS ON)
+/*vg:plan 1
+size k0 2000 a
+*/ SELECT * FROM q10 a WHERE a.p = 1
+   AND EXISTS (SELECT 1 FROM q10 x WHERE x.s = a.s AND x.p = 4 AND x.o < 20);
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Hash Join  (cost=490.83..962.45 rows=68 width=12)
+   Hash Cond: (a.s = x.s)
+   ->  Seq Scan on q10 a  (cost=0.00..465.62 rows=2000 width=12)
+         Filter: (p = 1)
+   ->  Hash  (cost=490.41..490.41 rows=33 width=4)
+         ->  HashAggregate  (cost=490.08..490.41 rows=33 width=4)
+               Group Key: x.s
+               ->  Seq Scan on q10 x  (cost=0.00..490.00 rows=34 width=4)
+                     Filter: ((o < 20) AND (p = 4))
+(9 rows)
+
+SELECT vg_planner_last_report();
+         vg_planner_last_report          
+-----------------------------------------
+ size k0: 2000 applied (PostgreSQL 1847)
+(1 row)
+
+DROP TABLE q10;
