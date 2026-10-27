@@ -512,6 +512,9 @@ class EmitContext:
             trace_enabled=self.trace_enabled,
             datatype_cache=self.datatype_cache,
             text_needed_vars=self.text_needed_vars,
+            # the query's BASE: an IRI("x") in a UNION branch, a sub-SELECT or the
+            # planner's value levels resolved against nothing without it
+            base_uri=self.base_uri,
         )
         ctx._depth = self._depth + 1
         # Propagate query-wide variable set for diagnostic warnings
