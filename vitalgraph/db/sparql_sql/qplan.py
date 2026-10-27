@@ -1370,7 +1370,14 @@ def _unit_ndv(u: Unit, values: Dict[str, List[str]], bound: Dict[str, float]) ->
     r = u.rows.rows or 0.0
     out: Dict[str, float] = {}
     if u.subject.startswith("?"):
-        out[u.subject[1:]] = r
+        # a variable-predicate probe multiplies the unit's rows by the subject's
+        # predicates (`qtree._unit`), not its subjects: `?s hasKGGraphURI ?e . ?s ?p ?o`
+        # has ~6 rows per ?s, and ?s counted as one value per row (6,563 for 1,096)
+        fan = 1.0
+        for l in u.probes:
+            if l.s_fan:
+                fan *= l.s_fan
+        out[u.subject[1:]] = r / fan if fan > 1.0 else r
     for l in u.leaves:
         for c, ov in l.o_vars:
             d = l.ndv(c)
@@ -2029,10 +2036,25 @@ def _pick_driver(u: Unit, pos: "_Pos", aliases):
     return best
 
 
+def _optional_rows(rows: float, otree: "Node", jvars: List[str]) -> float:
+    """Rows after LEFT-JOINING an OPTIONAL to `rows`: each row extended by its matches
+    (the OPTIONAL's rows per distinct join key), or kept alone; sharing no variable,
+    every row pairs with each OPTIONAL row. Sized at the required rows, an OPTIONAL
+    sharing nothing (3 x 10,000) was advised as 3 rows, and every join above it was
+    planned for 3: a nested loop of 300,000,000 comparisons (o05)."""
+    if not jvars:
+        return rows * max(1.0, otree.rows)
+    nd = max((otree.ndv.get(v) or 0.0) for v in jvars)
+    return rows * max(1.0, otree.rows / nd) if nd else rows
+
+
 #: Decode a variable by its distinct keys (`render`) when the estimated rows are at
 #: least this many, and this many times its distinct values.
+#: Twenty, not four: PostgreSQL memoizes a key repeated a few times per value about
+#: as cheaply, and deduplicating ?s at 6 rows per value made UW 003 1.09x today's SQL
+#: (15-run minimums; 1.01x at twenty). A 3-value cross product (u11, o05) is far above.
 DEDUP_DECODE_MIN_ROWS = 1000.0
-DEDUP_DECODE_RATIO = 4.0
+DEDUP_DECODE_RATIO = 20.0
 
 #: `unit_methods`: advise a nested loop into a constant leaf only when its own scan
 #: is at least this many times the rows probing it.
@@ -2767,8 +2789,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             base_sizes += s_.base_sizes
             poses += s_.poses
             otree = search(opt)
-            if not any(v in certain for v in ovars if v in r.bound):
-                out_rows *= max(1.0, otree.rows)
+            rows = _optional_rows(rows, otree, [v for v in ovars if v in r.bound and v in certain])
+            out_rows = max(out_rows, rows)
             present = set(present) | {lo}
             sizes.append((rows, sorted(present)))
             for v in ovars:
@@ -2868,8 +2890,8 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             conds = [f"{lo}.k_{v} = {r.bound[v]}" for v in okeys if v in r.bound]
             keyed = bool(conds)
             out_ndv.update({k: n for k, n in otree.ndv.items() if k not in out_ndv})
-            if not keyed:
-                out_rows *= max(1.0, otree.rows)
+            rows = _optional_rows(rows, otree, [v for v in okeys if v in r.bound])
+            out_rows = max(out_rows, rows)
             types = TypeRegistry(aliases=ctx.aliases)
             for v in expose:
                 types.register(ColumnInfo.simple_output(v, f"{pre}{fv_order.index(v)}", from_triple=True))
@@ -2908,8 +2930,9 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
                 conds.append(f"{orr.bound[var]} = " + (f"pg_late.k_{var}" if late else r.bound[var]))
         keyed = bool(conds)
         out_ndv.update({k: n for k, n in otree.ndv.items() if k not in out_ndv})
-        if not keyed:
-            out_rows *= max(1.0, otree.rows)    # every row pairs with each OPTIONAL row
+        rows_before = rows
+        rows = _optional_rows(rows, otree, [v for v in region_vars(opt) if v in r.bound and v in orr.bound])
+        out_rows = max(out_rows, rows)
         # sharing no variable: every row pairs with each OPTIONAL row, or stays alone
         core = f"({core}\n LEFT JOIN {osql} ON " + " AND ".join(conds + opend or ["TRUE"]) + ")"
         sizes += orr.sizes
@@ -2923,10 +2946,10 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             # probe per row with its join variables bound. Always hashed, 3 frames read
             # all 120,000 hasKGFrameType rows to be extended (s03: 0.7 -> 9 ms).
             corr = sorted(v for v in region_vars(opt) if v in r.bound)
-            set_cost = _hash_cost(Node("scan", frozenset(), 0.0, rows, {}), otree, rows)
+            set_cost = _hash_cost(Node("scan", frozenset(), 0.0, rows_before, {}), otree, rows_before)
             opt.bound = {v: 1.0 for v in corr}
             try:
-                probe_cost = rows * _search_bound(opt, corr).cost
+                probe_cost = rows_before * _search_bound(opt, corr).cost
             except Unsupported:
                 probe_cost = float("inf")
             opt.bound = {}
@@ -3240,6 +3263,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     if missing:
         raise Unsupported(f"projected ?{', ?'.join(missing)} not produced by the plan's top level")
     cols, djoins = [], []
+    inner_cols, inner_joins = [], []        # decoded per row inside the dedup CTE (below)
     # Decode a variable's term rows by its DISTINCT keys when the rows far outnumber
     # them (a cross product, an OPTIONAL sharing nothing); otherwise per row, as before
     final_rows = float(q.limit) if q.limit is not None else out_rows
@@ -3272,22 +3296,33 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             cols += [f"top.c_{v}{suf} AS {sn}{suf}" for suf in ("",) + _CS]
             continue
         t = f"d_{v}"
+        vcols = [c.replace(f"top.{sn}__uuid", f"top.k_{v}") for c in TypeRegistry.term_table_columns(
+            sn, t, "top", _NUMERIC_DT_SQL_LIST,
+            dt_case_sql=ctx.dt_case_expr(t),
+            numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
+            boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
+            datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))]
         if v in dedup:
             # the term rows of its DISTINCT keys, once each: decoded per output row, a
             # 3 x 10,000 cross product looked the same 3 terms up 30,000 times, with no
             # estimate for PostgreSQL to memoize on (u11, o05)
             djoins.append(f"LEFT JOIN (SELECT * FROM {pos.term_table} WHERE term_uuid IN "
                           f"(SELECT k_{v} FROM top)) AS {t} ON {t}.term_uuid = top.k_{v}")
+            cols += vcols
+        elif dedup:
+            # the others per row INSIDE the materialized level, where its plan may run in
+            # parallel workers; read after it, every lookup ran serially off the CTE scan
+            # (u04 147 -> 92 ms, o06 83 -> 55; today's SQL 151, 96)
+            inner_joins.append(f"LEFT JOIN {pos.term_table} AS {t} ON {t}.term_uuid = top.k_{v}")
+            inner_cols += vcols
+            cols += [f"top.{c.rsplit(' AS ', 1)[1]}" for c in vcols]
         else:
             djoins.append(f"LEFT JOIN {pos.term_table} AS {t} ON {t}.term_uuid = top.k_{v}")
-        cols += [c.replace(f"top.{sn}__uuid", f"top.k_{v}") for c in TypeRegistry.term_table_columns(
-            sn, t, "top", _NUMERIC_DT_SQL_LIST,
-            dt_case_sql=ctx.dt_case_expr(t),
-            numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
-            boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
-            datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))]
+            cols += vcols
     # (a pattern binding no variable, `SELECT * { GRAPH <g> {} }`: one placeholder)
     if dedup:
+        if inner_cols:
+            top = (f"SELECT top.*, {', '.join(inner_cols)}\nFROM ({top}) AS top\n" + "\n".join(inner_joins))
         outer = (f"WITH top AS MATERIALIZED ({top})\nSELECT {', '.join(cols) or '1 AS one'}\nFROM top\n"
                  + "\n".join(djoins))
     else:
