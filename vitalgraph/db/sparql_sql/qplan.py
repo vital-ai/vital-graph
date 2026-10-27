@@ -98,6 +98,10 @@ class Region:
     # (private name, variable): a UNION column some branch leaves unbound, joined on
     # compatibility after the joins (`_build_region`, render)
     maybe_joins: List[Tuple[str, str]] = field(default_factory=list)
+    # (variable, region): `BIND(... AS ?z) ?s1 ?p1 ?z`, the patterns holding a BIND's
+    # variable, planned as a region of their own and joined after the BIND is computed,
+    # on the computed value's term (`_build_region`, render)
+    post_binds: List[Tuple[str, "Region"]] = field(default_factory=list)
     # an OPTIONAL's own FILTER: `A OPTIONAL { P FILTER(F) }` is LeftJoin(A, P, F), F
     # reading both sides, in the LEFT JOIN's condition (a row of A whose P rows all
     # fail F stays, unextended)
@@ -570,9 +574,12 @@ def _collect(p, ctx, aliases, parts, outer_vars):
             col = (aliases.constants or {}).get(key)
             u = (aliases.resolved_constants or {}).get(col) if col else None
             # A term absent from the term table matches nothing in an inner
-            # join, so it contributes no row: drop it.
+            # join, so it contributes no row: drop it (only where a pattern joins
+            # the variable: `_build_region` declines one only the VALUES binds)
             if u is not None:
                 uuids.append(u)
+            else:
+                parts.setdefault("values_absent", set()).add(v)
         if not uuids:
             raise Unsupported("VALUES matches no stored term (today's provably-empty path handles it)")
         if v in parts["values"]:
@@ -908,6 +915,8 @@ _UNDEF = "UNDEF"          # a VALUES cell left unbound (rendered NULL)
 
 def _vtable_sql(leaf: Leaf) -> str:
     vars_, rows = leaf.sub
+    if not vars_:
+        return "(SELECT 1 AS one OFFSET 0)"   # a group with no pattern: one row, fenced (a relation the advice can name)
     body = ", ".join("(" + ", ".join("NULL::uuid" if u is _UNDEF else f"'{u}'::uuid" for u in r_) + ")"
                      for r_ in rows)
     return f"(SELECT * FROM (VALUES {body}) AS v({', '.join(f'k_{v}' for v in vars_)}))"
@@ -930,8 +939,21 @@ def _term_key(node):
     raise Unsupported(f"VALUES term of kind {t}")
 
 
+def _one_row_leaf(n: int) -> Leaf:
+    """A group with no pattern (`{ BIND(?o + 1 AS ?z) }`, `{}`): one solution binding
+    nothing, SPARQL's empty group, as a one-row table its BINDs and FILTERs read."""
+    leaf = Leaf(alias=f"one{n}", kind="vtable", pred=None, s_var=None, o_var=None, s_const=None,
+                o_const=None, scan=Est(1.0, "values"), pred_rows=None, pred_objects=None, o_vars=[],
+                col_ndv={})
+    leaf.sub = ([], [[]])
+    leaf.sub_cost = 0.01
+    return leaf
+
+
 def _build_region(parts, ctx, aliases) -> Region:
     leaves: List[Leaf] = parts["leaves"]
+    if not leaves and not parts.get("undef_tables") and not parts["values"]:
+        leaves.append(_one_row_leaf(id(parts) % 100000))
     # A constant predicate or object the term table does not hold matches nothing:
     # the generator answers that on its provably-empty path (no scan). Priced, the
     # leaf read the generator's estimate (100,000 for an absent entity type), and
@@ -971,6 +993,10 @@ def _build_region(parts, ctx, aliases) -> Region:
         subject_holders = [l for l in leaves if l.s_var == var]
         if not holders and not subject_holders and len(uuids) == 1:
             raise Unsupported("a one-row VALUES binding no pattern (PostgreSQL folds it to a constant)")
+        if not holders and not subject_holders and var in parts.get("values_absent", set()):
+            # its own table, so a row with a term not stored is still a solution: it
+            # cannot be dropped, and has no key to decode (W3C GROUP_CONCAT DISTINCT)
+            raise Unsupported("VALUES binds a variable no pattern joins to a term not stored")
         if not holders and not subject_holders:
             # no pattern holds it: the VALUES is a table of its own (a cross product)
             leaves.append(_vtable_leaf(None, aliases, parts, [var], [[u] for u in uuids]))
@@ -1005,6 +1031,29 @@ def _build_region(parts, ctx, aliases) -> Region:
     # takes a private name (no join edge) and `render` joins on `(k IS NULL OR k = v)`
     # after the joins, the value the pattern's (which always binds it). FILTERs, BINDs,
     # OPTIONALs and negations then read the pattern's value, as SPARQL's join gives it.
+    # A BIND's variable held by required patterns (`?s ?p ?o BIND(?o + 1 AS ?z) ?s1 ?p1
+    # ?z`): those patterns' units, a region of their own joined after the BIND, on the
+    # computed value's term (render). Only when the BIND reads none of their variables.
+    post_binds: List[Tuple[str, Region]] = []
+    if parts.get("binds"):
+        keyof = lambda l: l.s_var if l.s_var else (l.s_const or l.alias)
+        lvars = lambda l: {v for v in [l.s_var] + [ov for _c, ov in l.o_vars] if v}
+        for bv, be in list(parts["binds"]):
+            holders = [l for l in leaves if bv in lvars(l)]
+            if not holders:
+                continue
+            subj = {keyof(l) for l in holders}
+            group = [l for l in leaves if keyof(l) in subj]
+            rest = [l for l in leaves if keyof(l) not in subj]
+            gvars = set().union(*(lvars(l) for l in group))
+            if (not rest or _expr_vars(be) & (gvars - {bv}) or bv in set().union(*(lvars(l) for l in rest))
+                    or gvars & set(parts["values"])):
+                continue                     # left to the decline below
+            sub_parts = dict(parts)
+            sub_parts.update(leaves=list(group), values={}, optionals=[], antis=[], filters=[], iri_ne=[],
+                             binds=[], opt_left=[], undef_tables=[], values_absent=set())
+            post_binds.append((bv, _build_region(sub_parts, ctx, aliases)))
+            leaves[:] = rest
     maybe_joins: List[Tuple[str, str]] = []           # (private name, variable)
     pattern_held = {v for x in leaves if x.kind in ("quad", "edge", "frame_slot")
                     for v in [x.s_var] + [ov for _c, ov in x.o_vars] if v}
@@ -1102,8 +1151,9 @@ def _build_region(parts, ctx, aliases) -> Region:
             raise Unsupported("a UNION variable some branch leaves unbound is joined or read outside it")
     binds = parts.get("binds", [])
     if binds:
-        # a BIND's variable joining a pattern would join a computed value to stored
-        # terms: not planned yet (a value-to-term join)
+        # a BIND's variable joining a pattern of an OPTIONAL or a negation: a value
+        # joined to stored terms there is not planned (a required pattern's is:
+        # `post_binds`, split off before the units were built)
         pattern_vars = {v for l in leaves for v in [l.s_var] + [ov for _c, ov in l.o_vars] if v}
         for o in parts["optionals"]:
             pattern_vars |= region_vars(o)
@@ -1115,7 +1165,7 @@ def _build_region(parts, ctx, aliases) -> Region:
                   aliases=aliases, optionals=parts["optionals"], antis=parts["antis"],
                   filters=parts.get("filters", []), iri_ne=parts.get("iri_ne", []), binds=binds,
                   undef_tables=list(parts.get("undef_tables", [])),
-                  maybe_joins=list(parts.get("maybe_joins", [])))
+                  maybe_joins=list(parts.get("maybe_joins", [])), post_binds=post_binds)
 
 
 def _conjuncts(e) -> List[Any]:
@@ -2155,6 +2205,22 @@ def _early_cols(v: str, sn: str, r: "_R", ctx) -> List[str]:
         datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES))]
 
 
+def _term_identity_sql(t: str, c: str, ctx) -> str:
+    """Term row `t` is the value in columns `c`, `c__type`, `c__lang`, `c__datatype`:
+    its text, kind, language and datatype (a plain literal's NULL or xsd:string)."""
+    dt = getattr(ctx, "_dt_uri_to_id", None) or {}
+    xs = "http://www.w3.org/2001/XMLSchema#string"
+    sid = dt.get(xs)
+    whens = " ".join(f"WHEN '{u}' THEN {i}" for u, i in sorted(dt.items(), key=lambda kv: kv[1]))
+    plain = f"({t}.datatype_id IS NULL" + (f" OR {t}.datatype_id = {sid})" if sid is not None else ")")
+    typed = (f"{t}.datatype_id IS NOT DISTINCT FROM (CASE {c}__datatype {whens} END)" if whens
+             else f"{t}.datatype_id IS NULL")
+    return (f"{t}.term_text = {c}::text AND {t}.term_type = {c}__type"
+            f" AND {t}.lang IS NOT DISTINCT FROM {c}__lang"
+            f" AND (CASE WHEN {c}__type = 'L' AND {c}__lang IS NULL AND ({c}__datatype IS NULL"
+            f" OR {c}__datatype = '{xs}') THEN {plain} ELSE {typed} END)")
+
+
 def _optional_rows(rows: float, otree: "Node", jvars: List[str]) -> float:
     """Rows after LEFT-JOINING an OPTIONAL to `rows`: each row extended by its matches
     (the OPTIONAL's rows per distinct join key), or kept alone; sharing no variable,
@@ -2890,6 +2956,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # quad table: an all-constant pattern joins no term row (`ASK { :s :p :o }`),
         # and a pattern that is one aggregate sub-SELECT holds its term table inside
         pos.term_table = _nested_term_table(reg)
+    if pos.term_table is None and getattr(ctx, "space_id", None):
+        # nothing in the pattern names it (no pattern, `SELECT (1 + 1 AS ?x) {}`): the
+        # space's own
+        from .space_names import space_prefix
+        pos.term_table = f"{space_prefix(ctx.space_id)}_term"
     if pos.term_table is None:
         raise Unsupported("no term table")
     poses = [pos]
@@ -3271,6 +3342,10 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     mentioned = region_vars(reg)
     for o in reg.optionals:
         mentioned |= _region_all_vars(o)
+    for _bv, sub in reg.post_binds:
+        mentioned |= region_vars(sub)
+    if reg.post_binds and late:
+        raise Unsupported("a BIND's patterns joined after it, with OPTIONALs after the cut")
     # BINDs: a copy of a bound variable is an alias of its key (it keeps its term
     # identity); anything else is COMPUTED, carried as companion columns
     computed: List[Tuple[str, Any]] = []
@@ -3352,6 +3427,20 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
     out_computed = [v for v in (q.sub_project if q.sub_project is not None else term_vars) if v in cvars]
     out_computed += [v for v in (q.group_vars or []) if v in cvars and v not in out_computed]
     out_computed += [v for v, _d in q.order if v in cvars and v not in out_computed]
+    # The patterns joined after a BIND (`post_binds`): their own variables come from
+    # their keys after the value level; the ones shared with the pattern join there, so
+    # the level carries them, and the BIND's value for the term lookup
+    pb_new: List[str] = []
+    for bv, sub in reg.post_binds:
+        svars = region_vars(sub)
+        pb_new += sorted(v for v in (need & svars) - set(r.bound) - cvars if v not in pb_new)
+        need |= (svars - {bv}) & set(r.bound)
+        if bv in cvars:
+            if bv not in out_computed:
+                out_computed.append(bv)
+        else:
+            need.add(bv)                 # a copy of a bound key (`BIND(?o AS ?z)`): its key
+    need -= set(pb_new)
     for v in need:
         if v not in r.bound:
             raise Unsupported(f"?{v} is not bound by the plan")
@@ -3405,8 +3494,32 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         keys = keys + [c for v in sorted(r.early_done) if v in names for c in _early_cols(v, names[v], r, ctx)]
         inner = ("SELECT " + ("DISTINCT " if q.sub_distinct else "") + (", ".join(keys) or "1 AS one") + "\nFROM " + core
                  + ("\nWHERE " + " AND ".join(where) if where else ""))
+    for i, (bv, sub) in enumerate(reg.post_binds):
+        # the BIND's value as a stored term (text, kind, language, datatype: the term's
+        # identity, as a VALUES constant is matched, issues/316), then its patterns' keys
+        sq = Query(region=sub)
+        svars = sorted(region_vars(sub))
+        sq.project = svars
+        s_ = render(sq, {}, ctx, keys_only=True)
+        sizes += s_.sizes
+        units_adv += s_.units_adv
+        methods += s_.methods
+        base_sizes += s_.base_sizes
+        poses += s_.poses
+        lt, pb = f"pbt{i}", f"pb{i}"
+        computed_bv = bv in cvars
+        conds = [f"{pb}.k_{bv} = " + (f"{lt}.term_uuid" if computed_bv else f"pv.k_{bv}")] + [
+            f"{pb}.k_{v} = pv.k_{v}" for v in svars if v != bv and v in need]
+        add = [f"{pb}.k_{v} AS k_{v}" for v in svars if v in pb_new]
+        lookup = (f"JOIN {pos.term_table} AS {lt} ON {_term_identity_sql(lt, f'pv.c_{bv}', ctx)}\n"
+                  if computed_bv else "")
+        inner = (f"SELECT pv.*{''.join(', ' + a for a in add)}\nFROM ({inner}) AS pv\n{lookup}"
+                 f"JOIN ({s_.sql}) AS {pb} ON " + " AND ".join(conds))
+        # (not fenced: pulled up, PostgreSQL probes the patterns by the BIND's term,
+        # and the advice names their own relations; fenced it built them whole first,
+        # b02 98 against today's 45 ms)
     level = inner
-    out_keys = sorted(need) + out_computed
+    out_keys = sorted(need) + out_computed + pb_new
     if general:
         # the aggregation's alias, unique in the statement (a sub-SELECT's own GROUP is
         # rendered into the same statement as the outer one's)
@@ -3653,7 +3766,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         # (a scan of the leaf alone does not: its size is the leaf's own)
         if len(al) < 2:
             return al
-        return al + [x for a in al for x in subl.get(a, []) if x not in al]
+        return list(dict.fromkeys(al + [x for a in al for x in subl.get(a, []) if x not in al]))
     lines += [f"size k{i} {max(rws, 1):.0f} {' '.join(named(al))}" for i, (rws, al) in enumerate(sizes) if len(al) >= 1]
     # METHOD items: a leaf's sub-select is in the join's set only when PostgreSQL joins
     # it as a relation of that join (a driver; a unique column, reduced to an inner
@@ -3692,7 +3805,9 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         for o, xs in embedded.items():
             if o in al and len(al) > first_with.get(o, len(al)):
                 out += [x for x in xs if x not in out]
-        return out
+        # each relation once: a sub-region built from the same plans (a BIND's patterns,
+        # `post_binds`) lists the same sub-selects again
+        return list(dict.fromkeys(out))
     pin = not _has_recursive_path(q.region)
     # Unpinned, PostgreSQL orders the joins, and a method names a join it may never
     # form (a seeded path's hash join: `method m0 NOT APPLIED (plan: no such join)`)
