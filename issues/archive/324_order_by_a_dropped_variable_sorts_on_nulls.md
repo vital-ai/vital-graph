@@ -1,6 +1,6 @@
 # 324 — ORDER BY a variable the projection drops sorts on NULLs
 
-## Status: FIXED 2026-10-27 on the default path; verified on the vg test stack rebuilt at 85ae4819 (unit, DAWG conformance, integration and API suites, 0 failures). OPEN for one product decision: where an unbound value sorts (below).
+## Status: RESOLVED 2026-10-28. Verified on the vg test stack rebuilt at 3d99208c: unit, DAWG conformance, integration and API suites, 0 failures. The unbound placement left open here was decided and fixed in issues/326 (SPARQL's lowest; the app states missing-last explicitly).
 
 ## Defects
 

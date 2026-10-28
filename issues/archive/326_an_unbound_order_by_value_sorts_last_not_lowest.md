@@ -1,6 +1,6 @@
 # 326 — An unbound ORDER BY value sorts last, not lowest; the KG list sort relies on it
 
-## Status: FIXED 2026-10-27 on the default path. Open until the vg test stack runs the full suite on the rebuilt image.
+## Status: RESOLVED 2026-10-28. Verified on the vg test stack rebuilt at 3d99208c: unit, DAWG conformance, integration and API suites, 0 failures.
 
 ## The two things
 
@@ -45,7 +45,7 @@
       defect), and only PostgreSQL's NULL placement had put them last.
 - [x] Timing: the 27 ordered queries (lead10k portal, ordered corpus shapes), the generator before
       324 against now, 7 runs each: 0.95x-1.06x (u08 1.04x over 15 runs). No regression.
-- [ ] The vg test stack's full suite.
+- [x] The vg test stack's full suite.
 
 The differential sweep against Oxigraph now agrees on every unbound placement; its remaining
 mismatches are the two left by issues/324 (equal numbers by text) and MIN / MAX over unbound values.
