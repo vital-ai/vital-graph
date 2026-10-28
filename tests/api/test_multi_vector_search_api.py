@@ -90,12 +90,15 @@ async def mv_env(vg_client, test_space, test_graph):
         _make_entity(ENTITY_3, "MultiVec Entity Gamma"),
         _make_entity(ENTITY_4, "MultiVec Entity Delta"),
     ]
-    await vg_client.kgentities.create_kgentities(
+    created = await vg_client.kgentities.create_kgentities(
         space_id=test_space, graph_id=test_graph, objects=entities
     )
+    assert created.is_success and created.created_count == 4, f"entity create: {created}"
 
-    # Create vector indexes
-    await vg_client.vector_indexes.create_index(
+    # Every setup step is checked. A step that half-succeeds returns 200 with the
+    # failure in the body, and showed up only as a wrong ranking several
+    # requests later (one suite run: every query found 1 of the 3 entities).
+    ia = await vg_client.vector_indexes.create_index(
         space_id=test_space,
         index_name=INDEX_A,
         dimensions=DIMENSIONS,
@@ -103,7 +106,8 @@ async def mv_env(vg_client, test_space, test_graph):
         provider="vitalsigns",
         description="Multi-vector test index A",
     )
-    await vg_client.vector_indexes.create_index(
+    assert ia.success, f"create index A: {ia}"
+    ib = await vg_client.vector_indexes.create_index(
         space_id=test_space,
         index_name=INDEX_B,
         dimensions=DIMENSIONS,
@@ -111,9 +115,10 @@ async def mv_env(vg_client, test_space, test_graph):
         provider="vitalsigns",
         description="Multi-vector test index B",
     )
+    assert ib.success, f"create index B: {ib}"
 
     # Upsert vectors into INDEX_A (all 4 entities)
-    await vg_client.vector_indexes.upsert_vectors(
+    ua = await vg_client.vector_indexes.upsert_vectors(
         space_id=test_space,
         index_name=INDEX_A,
         vectors=[
@@ -123,9 +128,10 @@ async def mv_env(vg_client, test_space, test_graph):
             {"subject_uri": ENTITY_4, "graph_uri": test_graph, "embedding": VEC_A_4},
         ],
     )
+    assert ua.upserted == 4 and not ua.errors, f"upsert A: {ua}"
 
     # Upsert vectors into INDEX_B (only 3 entities — ENTITY_4 missing)
-    await vg_client.vector_indexes.upsert_vectors(
+    ub = await vg_client.vector_indexes.upsert_vectors(
         space_id=test_space,
         index_name=INDEX_B,
         vectors=[
@@ -134,6 +140,13 @@ async def mv_env(vg_client, test_space, test_graph):
             {"subject_uri": ENTITY_3, "graph_uri": test_graph, "embedding": VEC_B_3},
         ],
     )
+    assert ub.upserted == 3 and not ub.errors, f"upsert B: {ub}"
+    # And the rows are there to be read: an upsert that reported success and
+    # then lost rows would otherwise also read as a wrong ranking.
+    for idx, n in ((INDEX_A, 4), (INDEX_B, 3)):
+        got = await vg_client.vector_indexes.get_vectors(
+            space_id=test_space, index_name=idx, graph_uri=test_graph)
+        assert len(got.vectors) == n, f"{idx}: {len(got.vectors)} of {n} vectors stored"
 
     yield {
         "space_id": test_space,

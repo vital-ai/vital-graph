@@ -156,8 +156,10 @@ def test_a_wide_object_is_priced_by_its_referents():
     that many objects cost and counts as one, so the census reports the
     referent total, the widest objects, and a measured full collection."""
     wide = {f"k{i}": [i] for i in range(5000)}
-    out = _run(H.HeapCensusJob(min_len=1000))
+    small = [[1], [2]]
+    total, widest = H.fan_out([wide, small], top=5)
+    assert total == 5000 + 2
+    assert widest == [("dict", 5000)]               # str keys are not visited
+    out = _run(H.HeapCensusJob(min_len=1000))       # the whole heap, in any process
     assert out["referents"] >= len(wide)
-    assert ("dict", 5000) in out["widest"]          # str keys are not visited
     assert out["gc_ms"] >= 0 and out["gc_cold_ms"] >= 0
-    del wide

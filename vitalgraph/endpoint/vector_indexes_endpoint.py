@@ -443,6 +443,14 @@ class VectorIndexesEndpoint:
                 except Exception as e:
                     errors.append(f"{entry.subject_uri}: {e}")
 
+            if errors:
+                # Logged as well as returned: a caller that reads only the HTTP
+                # status sees 200 either way, and a silently partial upsert
+                # surfaces much later as a wrong search result.
+                logger.warning(
+                    "upsert_vectors(%s, %s): %d of %d rows failed: %s",
+                    space_id, index_name, len(errors), len(body.vectors),
+                    "; ".join(errors[:5]))
             if errors and upserted:
                 upsert_status = OperationStatus.PARTIAL
             elif errors:

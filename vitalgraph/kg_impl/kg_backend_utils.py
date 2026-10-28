@@ -157,6 +157,12 @@ from .refusals import RequestRefused
 # Post-write aux-table ANALYZE, scheduled per space (`issues/253`).
 _AUX_ANALYZE_TASKS = BackgroundTasks("aux-table ANALYZE")
 
+# The ANALYZE lock managers, one per (event loop, database): see
+# `SparqlSQLBackendAdapter._get_analyze_lock_manager`.
+_ANALYZE_LOCK_MANAGERS: Dict[tuple, Any] = {}
+# Spaces with an aux-table ANALYZE running in this process.
+_ANALYZE_IN_FLIGHT: set = set()
+
 
 # How long one subject-level write may take, end to end (`issues/253`).
 #
@@ -1124,15 +1130,30 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
     # ------------------------------------------------------------------
 
     async def _get_analyze_lock_manager(self):
-        """Lazily create the process lock manager used to serialise ANALYZE."""
-        if getattr(self, '_analyze_lock_manager', None) is None:
-            if not self._pg_config:
-                return None
+        """The process's lock manager used to serialise ANALYZE, shared.
+
+        ONE per process and event loop, not one per adapter. Adapters are built
+        per request (`create_backend_adapter`), so a per-adapter manager opened a
+        new database connection for every ANALYZE and never closed it: it went
+        only when the adapter was freed, as `ResourceWarning: unclosed
+        connection`, ~25 per API suite run.
+        """
+        if not self._pg_config:
+            return None
+        cfg = self._pg_config
+        key = (id(asyncio.get_running_loop()), cfg.get('host'), cfg.get('port'),
+               cfg.get('database'), cfg.get('username'))
+        mgr = _ANALYZE_LOCK_MANAGERS.get(key)
+        if mgr is None:
             from ..process.process_lock_manager import ProcessLockManager
-            mgr = ProcessLockManager(self._pg_config)
-            await mgr.connect()
-            self._analyze_lock_manager = mgr
-        return self._analyze_lock_manager
+            new = ProcessLockManager(cfg)
+            await new.connect()
+            # Two first callers can both get here; the first to finish wins and
+            # the other closes its connection rather than leaking it.
+            mgr = _ANALYZE_LOCK_MANAGERS.setdefault(key, new)
+            if mgr is not new:
+                await new.disconnect()
+        return mgr
 
     def _schedule_analyze_aux_tables(self, space_id: str) -> None:
         """Schedule the post-write aux-table ANALYZE. Never awaited.
@@ -1233,8 +1254,21 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
         # Tier 2 — non-blocking lock. If another process is mid-ANALYZE, skip;
         # never block, or writers queue behind maintenance.
-        lock_mgr = await self._get_analyze_lock_manager()
+        # In-process first: the lock manager's connection is shared by the whole
+        # process, and a session-level advisory lock is RE-ENTRANT for the
+        # session holding it, so it no longer keeps two of this process's own
+        # tasks apart.
+        if space_id in _ANALYZE_IN_FLIGHT:
+            self.logger.debug("⏱️  BACKEND ANALYZE: skipped (already running here)")
+            return False
+        _ANALYZE_IN_FLIGHT.add(space_id)
+        try:
+            lock_mgr = await self._get_analyze_lock_manager()
+        except BaseException:
+            _ANALYZE_IN_FLIGHT.discard(space_id)
+            raise
         if lock_mgr is not None and not await lock_mgr.try_acquire("analyze", space_id):
+            _ANALYZE_IN_FLIGHT.discard(space_id)
             self.logger.debug("⏱️  BACKEND ANALYZE: skipped (another process holds the lock)")
             return False
         try:
@@ -1249,8 +1283,11 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                              _time.monotonic() - since)
             return True
         finally:
-            if lock_mgr is not None:
-                await lock_mgr.release("analyze", space_id)
+            try:
+                if lock_mgr is not None:
+                    await lock_mgr.release("analyze", space_id)
+            finally:
+                _ANALYZE_IN_FLIGHT.discard(space_id)
 
     # ------------------------------------------------------------------
     # Thread-offloaded ANALYZE helper
