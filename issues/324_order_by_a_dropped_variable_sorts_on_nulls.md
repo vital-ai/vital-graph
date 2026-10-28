@@ -1,6 +1,6 @@
 # 324 — ORDER BY a variable the projection drops sorts on NULLs
 
-## Status: FIXED 2026-10-27 on the default path. Open for the vg test stack's full suite on the rebuilt image (the sort keys were reverted to plain columns after a timing check, below), and for one product decision: where an unbound value sorts.
+## Status: FIXED 2026-10-27 on the default path; verified on the vg test stack rebuilt at 85ae4819 (unit, DAWG conformance, integration and API suites, 0 failures). OPEN for one product decision: where an unbound value sorts (below).
 
 ## Defects
 
