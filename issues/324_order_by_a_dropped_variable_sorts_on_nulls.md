@@ -1,6 +1,6 @@
 # 324 — ORDER BY a variable the projection drops sorts on NULLs
 
-## Status: FIXED 2026-10-27 on the default path; verified on the vg test stack rebuilt for the fix (unit, DAWG conformance, integration and API suites, 0 failures). OPEN for one product decision: where an unbound value sorts (below).
+## Status: FIXED 2026-10-27 on the default path. Open for the vg test stack's full suite on the rebuilt image (the sort keys were reverted to plain columns after a timing check, below), and for one product decision: where an unbound value sorts.
 
 ## Defects
 
@@ -23,23 +23,27 @@ queries against Oxigraph (`test_scripts_internal/sweep`).
 
 ## Fix
 
-- `var_scope._collect_referenced_vars`: a bare ORDER BY variable is a reference.
-- `emit_order.variable_order_keys` (both paths; the qtree planner's undecoded keys likewise): a
-  kind rank first, then the value, the date, and the text only for a value with neither.
-- `emit_order`, `emit_project`, `emit_slice.reorder_over_distinct`: an unbound (never bound)
-  ordering variable orders nothing.
+- `var_scope._collect_referenced_vars`: a bare ORDER BY variable is a reference (1).
+- `emit_order`, `emit_project`, `emit_slice.reorder_over_distinct`: an ordering variable nothing
+  binds orders nothing (4).
 
-## Left as is: where an unbound value sorts
+## Left as they are
 
-SPARQL 15.1 puts an unbound value LOWEST (first ascending, last descending). Here it sorts last
-ascending and first descending, PostgreSQL's NULL placement, and the app relies on it: frame and
-slot sequence is optional, and `ORDER BY ?seq ?frame` puts unsequenced items last
-(`tests/integration/test_sequence_ordering.py`, `TestCoalesceInOrderBy`). Changing it would
-reorder production's frame and slot listings: a product decision, not a defect fix. The kind rank
-keeps unbound after every kind for that reason.
+- **(2), (3)** were fixed first with expression keys in `variable_order_keys` (a kind rank; a
+  text key confined to values with no numeric or date reading). Measured on the default path
+  before / after, 7 runs each: every ordered query 10-59% slower (u08 1.36-1.59x, d09 1.19-1.28x):
+  an expression key no longer matches the inner ORDER BY's sorted output, so the outer ORDER BY
+  sorts again. Both deviations are rare (a variable mixing kinds; equal numbers written
+  differently) and still give a valid order; reverted to plain columns. With the revert, the
+  lead10k portal queries and the ordered corpus shapes generate exactly the SQL they did before.
+- **Where an unbound value sorts.** SPARQL 15.1 puts it LOWEST (first ascending, last
+  descending). Here it sorts last ascending and first descending, PostgreSQL's NULL placement,
+  and the app relies on it: frame and slot sequence is optional, and `ORDER BY ?seq ?frame` puts
+  unsequenced items last (`tests/integration/test_sequence_ordering.py`, `TestCoalesceInOrderBy`).
+  Changing it would reorder production's frame and slot listings: a product decision.
 
 ## Test
 
 `tests/integration/test_order_by_follows_sparql_ordering.py`: a dropped ordering variable, with
-and without a LIMIT; unbound placement both ways (as kept); equal numbers tying to the next key;
-an ordering variable nothing binds.
+and without a LIMIT; unbound placement both ways (as kept);
+an ordering variable nothing binds. (Equal numbers keep their text order, as above.)

@@ -97,26 +97,18 @@ def variable_order_keys(alias: str, info, var: str, direction: str,
         # ignoring the clause. Caught by DAWG aggregates/COUNT 8b.
         return [f"{alias}.{sn}{suffix}"]
     keys = []
-    companions = info is None or getattr(info, "_sql_has_companions", True)
-    if companions:
-        # Kinds first, as SPARQL 15.1 orders them: blank node, IRI, literal. An
-        # UNBOUND value ranks after them all, last ascending and first descending:
-        # SPARQL puts it lowest, but the app's sequence ordering (`ORDER BY ?seq
-        # ?frame`, an OPTIONAL sequence) relies on unsequenced items last, as
-        # PostgreSQL's NULLs always placed them (tests/integration/
-        # test_sequence_ordering.py); kept, a decision for the product (issues/324).
-        keys.append(f"(CASE {alias}.{sn}__type WHEN 'L' THEN 3 WHEN 'U' THEN 2 "
-                    f"WHEN 'B' THEN 1 ELSE 4 END){suffix}")
+    if info is None or getattr(info, "_sql_has_companions", True):
         keys += [f"{alias}.{sn}__num{suffix}", f"{alias}.{sn}__dt{suffix}"]
-        # The text only for a value with no numeric or date reading: 10 and 1.0E1
-        # are equal, and the next ORDER BY key decides between them, not their
-        # lexical forms (issues/324).
-        text = f"(CASE WHEN {alias}.{sn}__num IS NULL AND {alias}.{sn}__dt IS NULL THEN {alias}.{sn} END)"
-    else:
-        text = f"{alias}.{sn}"
+    # Plain columns only (issues/324): a kind rank (SPARQL 15.1: blank node, IRI,
+    # literal) or a text key confined to non-numeric values (10 and 1.0E1 tying to
+    # the next key) is an EXPRESSION, and an expression key made the ordered queries
+    # 10-59% slower: the outer ORDER BY no longer matched the inner one's sorted
+    # output and sorted again. Both deviations are rare; the cost was not. An
+    # unbound value sorts last ascending (PostgreSQL's NULLs), which the app's
+    # sequence ordering relies on (test_sequence_ordering.py).
     # Pinned, not inherited: SPARQL orders strings by code point and PostgreSQL
     # orders by the cluster's collation. Only the text column takes it.
-    keys.append(f"{collate(text)}{suffix}")
+    keys.append(f"{collate(f'{alias}.{sn}')}{suffix}")
     return keys
 
 

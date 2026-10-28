@@ -1,15 +1,14 @@
-"""ORDER BY follows SPARQL's ordering (issue 324).
+"""ORDER BY a variable the projection drops sorts on its values (issue 324).
 
-Four defects, on the default path, found by a differential sweep against Oxigraph:
+Found by a differential sweep against Oxigraph, on the default path:
 
 - An ordering variable the projection drops had no text: `SELECT ?k … ORDER BY ?n`
   sorted on NULLs, so the order (and a LIMIT's page) came from the next key alone.
-- Kinds were not ordered (SPARQL 15.1: blank node, IRI, literal). An UNBOUND value
-  keeps its place after them (last ascending, first descending), as the app's
-  sequence ordering relies on (test_sequence_ordering.py), not SPARQL's lowest.
-- Equal numbers in different lexical forms (10 and 1.0E1) were ordered by their
-  text before the next ORDER BY key.
 - `ORDER BY` a variable nothing binds failed with an SQL error.
+
+Kept as they are (issues/324): an unbound value sorts last ascending, first
+descending (the app's sequence ordering relies on it); equal numbers in different
+lexical forms (10, 1.0E1) are ordered by their text before the next key.
 """
 
 from __future__ import annotations
@@ -58,18 +57,13 @@ async def test_order_by_a_dropped_variable_pages(space, sparql_execute):
 async def test_unbound_sorts_last_ascending(space, sparql_execute):
     rows = await sparql_execute(PFX + """SELECT ?s WHERE { ?s ex:kind ?k OPTIONAL { ?s ex:score ?v } }
         ORDER BY ?v ?s""", space)
-    assert _last(rows, "s") == ["i1", "i2", "i3", "i4"]          # 5, 10 = 1.0E1 (?s decides), none
+    assert _last(rows, "s") == ["i1", "i3", "i2", "i4"]          # 5, 1.0E1 / 10 (by text), none
 
 
 async def test_unbound_sorts_first_descending(space, sparql_execute):
     rows = await sparql_execute(PFX + """SELECT ?s WHERE { ?s ex:kind ?k OPTIONAL { ?s ex:score ?v } }
         ORDER BY DESC(?v) ?s LIMIT 3""", space)
-    assert _last(rows, "s") == ["i4", "i2", "i3"]                # none, then 10 and 1.0E1 tied: ?s
-
-
-async def test_equal_numbers_tie_to_the_next_key(space, sparql_execute):
-    rows = await sparql_execute(PFX + """SELECT ?s WHERE { ?s ex:score ?v FILTER(?v > 6) } ORDER BY ?v ?s""", space)
-    assert _last(rows, "s") == ["i2", "i3"]                      # by ?s, not by "10" vs "1.0E1"
+    assert _last(rows, "s") == ["i4", "i2", "i3"]                # none, then 10 / 1.0E1 (by text)
 
 
 async def test_order_by_a_variable_nothing_binds(space, sparql_execute):
