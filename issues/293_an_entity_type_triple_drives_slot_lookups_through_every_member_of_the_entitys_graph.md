@@ -179,11 +179,8 @@ hash anti-join in `issues/320` (production, read-only: 4,890 -> 497 ms).
   Measured: 60 loops for 60 rows as shipped; 18,000 with the rewrites off.
 - The `edge_fanout` maintenance decision (below).
 - Release, then re-measure the dashboard on production.
-- **Re-measure plan for the semi-join on edge mode** (decided 2026-10-28): rerun
-  `stage6_semijoin_ab.py`'s comparison on the edge-mode lead files over
-  `sp_lead_synth_100k`, asserting a NON-EMPTY result first, plus the 045 / 138 /
-  161 shapes the split exists for; counts and loops, not wall-clock, while the
-  machine swaps.
+- ~~Re-measure the semi-join on edge mode~~ DONE 2026-10-28, below
+  ("Stage 6, the semi-join re-measured on edge mode").
 
 ### Stage 1 — fan-out statistics (2026-10-22)
 
@@ -339,6 +336,48 @@ leads tie at the page's rating, so the plans broke the tie differently (rating
 multisets identical). That check exposed a SEPARATE, pre-existing defect: 59
 leads rate 100.0 and neither version returns them first; the double ordering
 looks lexical ("99.9" > "100.0"). Not this issue; to be filed.
+
+### Stage 6, the semi-join re-measured on edge mode (2026-10-28)
+
+Replaces 6(a) below, which measured graph mode over predicates no space has and
+returned 0 rows. `test_scripts_internal/kg_uw_decision_reasons/semijoin_edge_remeasure.py`,
+`sp_lead_synth_100k` (74.2M quads, 5.28M edges), the six edge-mode lead KGQuery
+files. Four arms: **G** as built (split, then the model gate); **F** the split
+forced (what the gate replaced); **N** no split, no model order; **M** no split,
+the model's order. Work, not time (the Mac was 31 GB into swap): rows processed
+is the sum of rows x loops over every plan node. Every arm returned the same
+result; the counts are non-empty and checked by value (9,227 / 49,775 / 35,003).
+
+| query | G (shipped) | F (split forced) | N (merged, Postgres) | split kept by G |
+|---|---|---|---|---|
+| state_ca_edge_count | 339,904 rows, 371k buf | 15,319,183, 11.7M buf | 339,904 | no (reverted) |
+| mql_edge_count | 4,181,212, 8.2M buf | 20,860,229, 22.6M buf | 4,181,212 | no (reverted) |
+| high_rated_edge_count | 1,540,415, 3.1M buf | 16,167,716, 13.0M buf | 1,540,415 | no (reverted) |
+| state_ca_edge_page | 12,333, 35k buf | same as G | 303,119, 334k buf | yes (LIMIT) |
+| mql_edge_page | 5,538, 13k buf | same as G | 3,982,235, 8.0M buf | yes (LIMIT) |
+| high_rated_edge_page | 2,763, 7.5k buf | same as G | 105,475, 13k buf | yes (LIMIT) |
+
+M equals N on all six: the model's order does not fire on these BGPs (the
+`mql_edge_count` case above: predicted gain inside the 10x band).
+
+**Reading.** The shipped choice is the cheapest of the four arms on every
+query. On the counts the gate reverts the split, and the forced split does
+4.5x-45x more work (rows processed); on the pages the split stands under the
+LIMIT and the merged join does 38x-720x more. So the semi-join's structural
+anchor, gated by the model, is right on edge mode in both directions.
+
+**The shapes the split exists for** (045 / 138 / 161: specific-type entity
+pages). The performance suite (`-m "not ingest_bench"`) with a plugin logging
+every gate call (`plugins/semijoin_gate_log.py`, checked to intercept on the
+gate's unit tests): **0 calls**. Every split in the suite is under a LIMIT, so
+the gate stands aside and keeps it; the 045 bench
+(`test_specific_entity_type_still_pages_cheaply`) passes. The gate cannot have
+changed those shapes. Unrelated failures in the same run, none touching the
+semi-join: three `test_slot_value_attachment_on_wordnet` cases query a
+pre-storage-key table name (`wordnet_frames_rdf_quad`);
+`test_every_space_with_quads_has_predicate_stats` (a space without a
+pred-stats table); `test_extended_stats_fix_correlation_estimate` (Postgres
+now estimates the case exactly); two `test_frame_slot_paging_bench` setup errors.
 
 ### Stage 6 (a) measured: the semi-join's structural anchor on KGQuery graph mode (2026-10-22) — DROPPED 2026-10-28 as framed (direct mode is unused; see the stage table)
 
