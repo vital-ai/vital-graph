@@ -69,6 +69,8 @@ def reorder_over_distinct(distinct: PlanV2, ctx: EmitContext, child_sql: str,
         suffix = " DESC" if direction == "DESC" else ""
         if isinstance(key, str):
             info = ctx.types.get(key)
+            if info is not None and getattr(info, "is_unbound", False):
+                continue                    # bound by nothing: orders nothing
             if info is not None and info.sql_name and (projected is None or key in projected):
                 ob_parts += variable_order_keys(s_alias, info, key, direction)
                 continue

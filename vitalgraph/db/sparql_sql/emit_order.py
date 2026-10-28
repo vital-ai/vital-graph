@@ -39,6 +39,10 @@ def emit_order(plan: PlanV2, ctx: EmitContext) -> str:
     ob_parts = []
     for key, direction in plan.order_conditions:
         if isinstance(key, str):
+            if ctx.types.get(key) is None or getattr(ctx.types.get(key), "is_unbound", False):
+                # a variable nothing binds: unbound on every row, so it orders
+                # nothing; its columns do not exist (`ORDER BY ?nothing` failed)
+                continue
             ob_parts.extend(variable_order_keys(o_alias, ctx.types.get(key), key,
                                                 direction, stable=stable))
             continue
@@ -93,11 +97,26 @@ def variable_order_keys(alias: str, info, var: str, direction: str,
         # ignoring the clause. Caught by DAWG aggregates/COUNT 8b.
         return [f"{alias}.{sn}{suffix}"]
     keys = []
-    if info is None or getattr(info, "_sql_has_companions", True):
+    companions = info is None or getattr(info, "_sql_has_companions", True)
+    if companions:
+        # Kinds first, as SPARQL 15.1 orders them: blank node, IRI, literal. An
+        # UNBOUND value ranks after them all, last ascending and first descending:
+        # SPARQL puts it lowest, but the app's sequence ordering (`ORDER BY ?seq
+        # ?frame`, an OPTIONAL sequence) relies on unsequenced items last, as
+        # PostgreSQL's NULLs always placed them (tests/integration/
+        # test_sequence_ordering.py); kept, a decision for the product (issues/324).
+        keys.append(f"(CASE {alias}.{sn}__type WHEN 'L' THEN 3 WHEN 'U' THEN 2 "
+                    f"WHEN 'B' THEN 1 ELSE 4 END){suffix}")
         keys += [f"{alias}.{sn}__num{suffix}", f"{alias}.{sn}__dt{suffix}"]
+        # The text only for a value with no numeric or date reading: 10 and 1.0E1
+        # are equal, and the next ORDER BY key decides between them, not their
+        # lexical forms (issues/324).
+        text = f"(CASE WHEN {alias}.{sn}__num IS NULL AND {alias}.{sn}__dt IS NULL THEN {alias}.{sn} END)"
+    else:
+        text = f"{alias}.{sn}"
     # Pinned, not inherited: SPARQL orders strings by code point and PostgreSQL
     # orders by the cluster's collation. Only the text column takes it.
-    keys.append(f"{collate(f'{alias}.{sn}')}{suffix}")
+    keys.append(f"{collate(text)}{suffix}")
     return keys
 
 

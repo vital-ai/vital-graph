@@ -518,7 +518,10 @@ def _collect_referenced_vars(plan: PlanV2, refs: Set[str],
 
     if kind == KIND_ORDER and plan.order_conditions and not late_text:
         for expr, _dir in plan.order_conditions:
-            refs.update(vars_in_expr(expr))
+            # `ORDER BY ?x` is held as the bare name (`collect._collect_order`), which
+            # `vars_in_expr` does not read: an ordering variable the projection drops
+            # had no text, and `SELECT ?k … ORDER BY ?n` sorted on NULLs (issues/324)
+            refs.update({str(expr)} if isinstance(expr, str) else vars_in_expr(expr))
 
     if kind == KIND_GROUP:
         if plan.group_vars:

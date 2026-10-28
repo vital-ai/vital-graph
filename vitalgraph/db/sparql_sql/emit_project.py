@@ -72,6 +72,12 @@ def emit_project(plan: PlanV2, ctx: EmitContext) -> str:
                 ob_parts.append(f"{p_alias}.{sn}" + (" DESC" if direction == "DESC" else ""))
                 continue
             if isinstance(key, str):
+                _info = ctx.types.get(key)
+                if _info is None or getattr(_info, "is_unbound", False):
+                    # bound by nothing (registered just above as NULL columns of
+                    # this projection, which the child it orders does not have):
+                    # it orders nothing (`emit_order`)
+                    continue
                 # The same keys as the ORDER node (`issues/295`): this outer
                 # ORDER BY is the order the query returns.
                 ob_parts.extend(variable_order_keys(

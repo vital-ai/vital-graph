@@ -3892,8 +3892,15 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             # the text under SPARQL's code-point order, as today's SQL pins it
             # (`collation.collate`, issues/295): left to the database's collation, a
             # page of names came back in another order (s01)
+            # As the generator's keys (`variable_order_keys`, issues/324): the kind
+            # first (blank node, IRI, literal, then unbound, as PostgreSQL's NULLs
+            # placed it), then the value, the text only for a value with no numeric
+            # or date reading
             from .collation import collate
-            sort_cols += [(f"{ts}.dt_val", d), (f"{ts}.num_val", d), (collate(f"{ts}.term_text"), d)]
+            sort_cols += [(f"(CASE {ts}.term_type WHEN 'L' THEN 3 WHEN 'U' THEN 2 WHEN 'B' THEN 1 ELSE 4 END)", d),
+                          (f"{ts}.num_val", d), (f"{ts}.dt_val", d),
+                          (collate(f"(CASE WHEN {ts}.num_val IS NULL AND {ts}.dt_val IS NULL "
+                                   f"THEN {ts}.term_text END)"), d)]
     # The page's tiebreak, after the user's keys: each variable's term uuid (issues/312).
     # Under a late cut, the page is cut on the required part's variables; the OPTIONALs'
     # are added to the final order, so both give one total order.
