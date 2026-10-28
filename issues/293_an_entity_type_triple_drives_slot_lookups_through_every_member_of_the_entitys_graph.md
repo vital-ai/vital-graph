@@ -155,12 +155,27 @@ issue in the class, not only this one.
 | stage | status |
 |---|---|
 | 0. targeted fix for this shape (`slot_group_cte`) | done, committed, not released |
-| 1. fan-out statistics | done, committed, not released (below) |
-| 2. cardinality model | done for flat quad BGPs, committed (below); edge/`frame_slot` BGPs not modelled |
-| 3. driver by selectivity | done, committed (below): the model's order, enforced past 10x predicted gain |
-| 4. enforcement, generalised | partly: `join_collapse_limit = 1` + `slot_group_cte`; edge/`frame_slot` BGPs not covered |
+| 1. fan-out statistics | done, committed, not released |
+| 2. cardinality model | done: flat quad BGPs (2026-10-22); EXISTS bodies with their correlated variables bound (60ba280e, 2026-10-23); edge and `frame_slot` tables (06c1422f), the hop-wise path and the absorbed frame type (36dfd53e) |
+| 3. driver by selectivity | done: the model's order, enforced past 10x predicted gain; slot-group CTEs first (03301465); the remainder after them in the model's order (2c7d297e, `issues/310`) |
+| 4. enforcement, generalised | partly: `join_collapse_limit = 1` + `slot_group_cte`; slot-group units priced (2c7d297e) |
 | 5. cross-workload verification | in progress |
-| 6. **the real test**: the model replaces `reorder_joins`' single-pattern root, the semi-join anchor (161) and the `selective-driven` gate, on every path | started; (a)'s first measurement RETRACTED (empty results, below); plan and acceptance criteria in `planning/planning_performance/uw_decision_reason_sparql_query_plan.md`, "The real test of the general solution". Needs the model to cover edge/`frame_slot` tables first |
+| 6. the model replaces the structural decisions | the semi-join anchor: done on EDGE mode (06c1422f, "Done 2026-10-23" below: the split is priced and reverted when the merged join is 10x cheaper; `state_ca_edge_count` 122.7 s -> 0.37 s). 6(a) as framed (graph mode, `vg-direct:` predicates) DROPPED 2026-10-28: no space uses direct mode, and its only measurement returned 0 rows. `reorder_joins`' root and the `selective-driven` gate: not started |
+
+**only_cause** is resolved separately: its correlated `NOT EXISTS` became one
+hash anti-join in `issues/320` (production, read-only: 4,890 -> 497 ms).
+
+**Open, 2026-10-28:**
+- `mql_edge_count`: the model's order cuts 919,000 loops to 100,000 but predicts
+  only 1.8x, inside the 10x gate, so it is not enforced.
+- A regression test at the UW shape, asserting the ratio rather than a time.
+- The `edge_fanout` maintenance decision (below).
+- Release, then re-measure the dashboard on production.
+- **Re-measure plan for the semi-join on edge mode** (decided 2026-10-28): rerun
+  `stage6_semijoin_ab.py`'s comparison on the edge-mode lead files over
+  `sp_lead_synth_100k`, asserting a NON-EMPTY result first, plus the 045 / 138 /
+  161 shapes the split exists for; counts and loops, not wall-clock, while the
+  machine swaps.
 
 ### Stage 1 — fan-out statistics (2026-10-22)
 
@@ -317,7 +332,7 @@ multisets identical). That check exposed a SEPARATE, pre-existing defect: 59
 leads rate 100.0 and neither version returns them first; the double ordering
 looks lexical ("99.9" > "100.0"). Not this issue; to be filed.
 
-### Stage 6 (a) measured: the semi-join's structural anchor on KGQuery graph mode (2026-10-22)
+### Stage 6 (a) measured: the semi-join's structural anchor on KGQuery graph mode (2026-10-22) — DROPPED 2026-10-28 as framed (direct mode is unused; see the stage table)
 
 `test_scripts_internal/kg_uw_decision_reasons/stage6_semijoin_ab.py` and
 `stage6_semijoin_timing.py`, `sp_lead_synth_100k` (74M quads), the lead
