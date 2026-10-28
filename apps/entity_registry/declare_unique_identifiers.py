@@ -1,26 +1,31 @@
 #!/usr/bin/env python3
 """Report on, and apply, DECLARED-unique identifiers — `issues/227`.
 
-A (type_key, namespace) pair in `EntityRegistrySchema.DECLARED_UNIQUE_IDENTIFIERS`
-is declared unique: a partial unique index on `entity_identifier`, so at most
-one ACTIVE identifier row per value for entities of that type, on every write
-path, and `resolve_or_create_entity` works for it.
+A declared (type_key, namespace) pair is a partial unique index on
+`entity_identifier`: at most one ACTIVE identifier row per value for entities
+of that type, on every write path, and `resolve_or_create_entity` works for it.
 
-    --report   every pair in use: rows, rows still without entity_type_id, and
-               the values held by MORE THAN ONE active entity of that type —
-               which is exactly what blocks a declaration. Read-only.
-    --apply    build each declared pair's index, CONCURRENTLY (no write lock on
-               the table). A pair whose data still contradicts it FAILS to
-               build — the expected outcome until its duplicates are merged —
-               and is reported with the values in the way, its invalid
-               leftover index dropped.
+PER DATABASE. Each install has its own identifier namespaces, so the pairs are
+named here, on the command line, for the database the server is configured
+for; the index in that database is the only record of a declaration.
+
+    --report             every pair in use: rows, rows still without
+                         entity_type_id, the values held by MORE THAN ONE
+                         active entity of that type — exactly what blocks a
+                         declaration — and whether it is declared. Read-only.
+    --apply TYPE:NS ...  build each pair's index, CONCURRENTLY (no write lock on
+                         the table). A pair whose data still contradicts it
+                         FAILS to build — the expected outcome until its
+                         duplicates are merged — and is reported with the
+                         values in the way, its invalid leftover index dropped.
+    --drop TYPE:NS ...   undeclare: drop the pair's index (CONCURRENTLY).
 
 A declaration is only ever made true by the data: there is no option to force
 one, and no bypass for internal writes. A bulk correction drops the index, runs,
 and re-applies — the rebuild fails loudly if the correction broke it.
 
     python apps/entity_registry/declare_unique_identifiers.py --report
-    python apps/entity_registry/declare_unique_identifiers.py --apply
+    python apps/entity_registry/declare_unique_identifiers.py --apply business:SF_ACCOUNT_ID
 """
 
 import argparse
@@ -76,8 +81,15 @@ async def _read_only_pool(prefix: str, use_ssl: bool):
         init=_init)
 
 
+def parse_pair(text: str):
+    """`TYPE:NAMESPACE` -> (type_key, namespace). The namespace may hold ':'."""
+    type_key, sep, ns = text.partition(":")
+    if not sep or not type_key or not ns:
+        raise argparse.ArgumentTypeError(f"expected TYPE:NAMESPACE, got {text!r}")
+    return type_key, ns
+
+
 async def report(pool) -> int:
-    declared = set(S.DECLARED_UNIQUE_IDENTIFIERS)
     async with pool.acquire() as conn:
         has_col = await conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE "
@@ -104,8 +116,6 @@ async def report(pool) -> int:
                 "AND entity_type_id IS NULL", p['ns'])) if has_col else None
             state = await _index_state(conn, S.declared_index_name(p['type_key'], p['ns']))
             mark = {None: "", True: "IN FORCE", False: "INVALID INDEX"}[state]
-            if (p['type_key'], p['ns']) in declared and state is not True:
-                mark = "DECLARED, NOT BUILT"
             ut = f"{untyped:>8,}" if untyped is not None else f"{'n/a':>8}"
             print(f"{p['type_key']:12} {p['ns']:22} {p['n']:>9,} {ut} "
                   f"{dup_n:>10,}  {mark}")
@@ -113,13 +123,10 @@ async def report(pool) -> int:
     return 0
 
 
-async def apply(pool) -> int:
+async def apply(pool, pairs) -> int:
     failed = 0
-    if not S.DECLARED_UNIQUE_IDENTIFIERS:
-        print("No pairs declared (EntityRegistrySchema.DECLARED_UNIQUE_IDENTIFIERS is empty).")
-        return 0
     async with pool.acquire() as conn:
-        for type_key, ns in S.DECLARED_UNIQUE_IDENTIFIERS:
+        for type_key, ns in pairs:
             type_id = await conn.fetchval(
                 "SELECT type_id FROM entity_type WHERE type_key = $1", type_key)
             if type_id is None:
@@ -156,21 +163,36 @@ async def apply(pool) -> int:
     return 1 if failed else 0
 
 
+async def drop(pool, pairs) -> int:
+    async with pool.acquire() as conn:
+        for type_key, ns in pairs:
+            name = S.declared_index_name(type_key, ns)
+            if await _index_state(conn, name) is None:
+                print(f"- ({type_key}, {ns}): not declared")
+                continue
+            await conn.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+            print(f"✓ ({type_key}, {ns}): {name} dropped — no longer declared")
+    return 0
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--report", action="store_true")
-    g.add_argument("--apply", action="store_true")
+    g.add_argument("--apply", nargs="+", type=parse_pair, metavar="TYPE:NAMESPACE")
+    g.add_argument("--drop", nargs="+", type=parse_pair, metavar="TYPE:NAMESPACE")
     ap.add_argument("--db", metavar="PREFIX",
                     help="--report only: read PREFIX_DB_HOST/_PORT/_NAME/_USER/_PASSWORD, "
                          "read-only, instead of the server config")
     ap.add_argument("--ssl", action="store_true", help="SSL for --db")
     a = ap.parse_args()
-    if a.db and a.apply:
-        ap.error("--db is for --report; --apply uses the server's own config")
+    if a.db and not a.report:
+        ap.error("--db is for --report; --apply and --drop use the server's own config")
     pool = await (_read_only_pool(a.db, a.ssl) if a.db else get_pool())
     try:
-        return await (report(pool) if a.report else apply(pool))
+        if a.report:
+            return await report(pool)
+        return await (apply(pool, a.apply) if a.apply else drop(pool, a.drop))
     finally:
         await pool.close()
 

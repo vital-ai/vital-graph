@@ -5,7 +5,7 @@ Global tables (not per-space) for tracking real-world entities
 with unique identifiers, aliases, external identifiers, and same-as mappings.
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 from .entity_status import STATUS_SETS
 
@@ -512,25 +512,25 @@ class EntityRegistrySchema:
     # DECLARED UNIQUE IDENTIFIERS (`issues/227`)
     # ------------------------------------------------------------------
     #
-    # A (type_key, namespace) pair listed here is declared UNIQUE: at most one
-    # ACTIVE identifier row per value for entities of that type. The declaration
-    # IS a partial unique index on `entity_identifier`, so every write path —
+    # A (type_key, namespace) pair is declared UNIQUE: at most one ACTIVE
+    # identifier row per value for entities of that type. The declaration IS a
+    # partial unique index on `entity_identifier`, so every write path —
     # `create_entity`, `add_identifier`, `resolve_or_create_entity` — is held to
     # it, and `resolve_or_create_entity` works only for a declared pair.
     #
-    # Everything NOT listed keeps today's semantics: identifiers are pointers,
+    # Everything NOT declared keeps today's semantics: identifiers are pointers,
     # not identity, and `lookup_by_identifier` returns a list. A blanket unique
     # constraint would reject legitimate data (one Salesforce lead is a person
     # AND a business; a contact and its company share a phone).
     #
-    # EMPTY ON PURPOSE. A pair can be declared only when no existing row
-    # contradicts it — the index build refuses otherwise, and that refusal IS the
-    # precondition check. On the data measured for `issues/227` every
-    # identity-bearing pair still holds duplicates, each to be MERGED by a
-    # decision, not by picking the oldest. Run
-    # `apps/entity_registry/declare_unique_identifiers.py --report` to see what
-    # blocks each pair; add a pair here once it reports clean.
-    DECLARED_UNIQUE_IDENTIFIERS: List[Tuple[str, str]] = []
+    # PER DATABASE, NOT IN CODE. Each install has its own identifier namespaces
+    # and its own duplicates to merge, so which pairs are declared is that
+    # install's data: the index's existence in that database is the whole
+    # record (`is_identifier_declared`). There is no list here. An operator
+    # declares a pair with
+    # `apps/entity_registry/declare_unique_identifiers.py --apply TYPE:NAMESPACE`,
+    # which refuses while any existing row contradicts it — that refusal IS the
+    # precondition check; `--report` shows what blocks each pair.
 
     @staticmethod
     def declared_index_name(type_key: str, namespace: str) -> str:

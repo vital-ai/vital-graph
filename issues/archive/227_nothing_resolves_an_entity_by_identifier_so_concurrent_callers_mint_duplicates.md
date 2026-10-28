@@ -1,10 +1,8 @@
 # 227 — Nothing resolves an entity by identifier, so concurrent callers mint duplicates
 
-## Status: OPEN — mechanism BUILT 2026-10-04 (`03a4afa6`, released in 0.0.45);
-## NOTHING DECLARED yet. Production needs `migrate.py` BEFORE the 0.0.45 server
-## deploy and the backfill after it; then business SF_ACCOUNT_ID can be the first
-## declaration. Every other pair needs its duplicates merged first, by decision.
-## See "As built" at the end, and the production counts there.
+## Status: RESOLVED 2026-10-28 — the mechanism is built (`03a4afa6`, released in 0.0.45) and declarations are now PER DATABASE: `declare_unique_identifiers.py --apply TYPE:NAMESPACE` on each install, no list in code. Which pairs to declare, and merging their duplicates first, is each install's operational decision, not repo work. Verified on the vg test stack: apply / drop / report against the test database, `test_entity_resolve_contract` (6) and the unit tests.
+##
+## Was: OPEN — mechanism built, nothing declared; the pairs were a list in code (`EntityRegistrySchema.DECLARED_UNIQUE_IDENTIFIERS`), so declaring one meant a release for every install.
 
 **Related:** `issues/173` (the same check-then-act race one layer up, in the KG
 entity upsert — and the source of this repo's concurrency primitive),
@@ -367,6 +365,31 @@ not candidates.
 **To put it in force:** (1) `migrate.py` then `backfill_identifier_entity_type.py`
 on the database; (2) merge a pair's duplicates via `entity_same_as` (decided
 per group, not `MIN(created_time)`), retracting the merged entity's identifiers;
-(3) add the pair to `DECLARED_UNIQUE_IDENTIFIERS`; (4) `--apply`. Business
+(3) [removed 2026-10-28: there is no list in code]; (4) `--apply TYPE:NAMESPACE`. Business
 SF_ACCOUNT_ID needs only (1), (3), (4).
 
+
+## Per database, 2026-10-28
+
+The declarations were a list in code, `EntityRegistrySchema.DECLARED_UNIQUE_IDENTIFIERS`,
+read only by `declare_unique_identifiers.py`. Runtime never used it: every write
+path and `resolve_or_create_entity` ask the database (`is_identifier_declared`,
+the index is VALID). But a list in code ships to every install, and each install
+has its own identifier namespaces and its own duplicates, so declaring a pair on
+one database meant editing code and releasing it to all of them.
+
+The list is gone. The pairs are named on the command line, for the database the
+server is configured for:
+
+    declare_unique_identifiers.py --report
+    declare_unique_identifiers.py --apply business:SF_ACCOUNT_ID
+    declare_unique_identifiers.py --drop  business:SF_ACCOUNT_ID
+
+`--apply` keeps its refusals (untyped rows; contradicting data, listed). `--drop`
+undeclares, which is also the first step of a bulk correction. The
+`IdentifierNotDeclared` message names the command. `--report` marks each pair by
+its index state alone (IN FORCE / INVALID INDEX), the database being the record.
+
+So the production table above is one install's starting point, not a plan for
+this repo: on that install, `migrate.py` + the backfill, then `--apply` for each
+pair its operators decide on, after merging that pair's duplicates.

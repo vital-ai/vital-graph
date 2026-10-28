@@ -1,5 +1,7 @@
 """The DDL that IS a uniqueness declaration (`issues/227`)."""
 
+import pytest
+
 from vitalgraph.entity_registry.entity_registry_schema import EntityRegistrySchema as S
 
 
@@ -29,7 +31,23 @@ def test_a_quote_in_a_namespace_cannot_break_out():
     assert "identifier_namespace = 'O''BRIEN'" in S.declared_index_sql("business", "O'BRIEN", 2)
 
 
-def test_nothing_is_declared_until_its_duplicates_are_merged():
-    # Every identity-bearing pair measured for issues/227 still holds
-    # duplicates; a pair is added only once `--report` shows it clean.
-    assert S.DECLARED_UNIQUE_IDENTIFIERS == []
+def test_declarations_are_per_database_not_in_code():
+    # Each install has its own identifier namespaces: the index in THAT
+    # database is the declaration, named on the command line, never a list in
+    # code that every install would ship.
+    assert not hasattr(S, "DECLARED_UNIQUE_IDENTIFIERS")
+
+
+def test_a_pair_is_named_type_colon_namespace():
+    import argparse
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[2] / "apps/entity_registry/declare_unique_identifiers.py"
+    spec = importlib.util.spec_from_file_location("declare_unique_identifiers", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.parse_pair("business:SF_ACCOUNT_ID") == ("business", "SF_ACCOUNT_ID")
+    assert mod.parse_pair("person:urn:x") == ("person", "urn:x")
+    for bad in ("business", ":NS", "business:"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            mod.parse_pair(bad)

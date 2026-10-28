@@ -425,8 +425,9 @@ class EntityRegistryImpl(
                 raise IdentifierNotDeclared(
                     f"({type_key}, {namespace}) is not declared unique, so an "
                     f"identifier can name several entities and there is nothing to "
-                    f"resolve to. Declare it (EntityRegistrySchema."
-                    f"DECLARED_UNIQUE_IDENTIFIERS) once its duplicates are merged.")
+                    f"resolve to. Declare it in this database "
+                    f"(declare_unique_identifiers.py --apply {type_key}:{namespace}) "
+                    f"once its duplicates are merged.")
             holder = await holder_of(conn, namespace, value, type_id)
             if holder:
                 return await self.get_entity(holder), False
