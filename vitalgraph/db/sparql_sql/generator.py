@@ -1640,7 +1640,8 @@ async def generate_sql(
         result = await _generate_sql(
             compile_result, space_id, conn_params=conn_params, conn=conn,
             graph_lock_uri=graph_lock_uri, default_graph=default_graph,
-            multi_vector_config=multi_vector_config)
+            multi_vector_config=multi_vector_config,
+            use_stored_verdicts=planner_verdicts)
         if planner_ext and result is not None and result.ok:
             result.plan_advice = _pext.render()
     if result is not None and result.declines is None:
@@ -1659,6 +1660,7 @@ async def _generate_sql(
     graph_lock_uri: Optional[str] = None,
     default_graph: Optional[str] = None,
     multi_vector_config: Optional[Dict[str, Any]] = None,
+    use_stored_verdicts: bool = True,
 ) -> GenerateResult:
     """Generate SQL from a compiled SPARQL query using the v2 pipeline.
 
@@ -1839,13 +1841,19 @@ async def _generate_sql(
                 # the zero-row guard it needs.
                 try:
                     from .edge_type_agreement import (
-                        frame_type_absorbable,
+                        frame_type_absorbable, ACCEPTED_GUARD as _ETA_GUARD,
                         RDF_TYPE_URI as _ETA_RDF, VITALTYPE_URI as _ETA_VT)
                     _t0 = time.monotonic()
+                    _ETA_GUARD.set(None)
                     aliases.frame_type_absorbable = {
-                        tp: await frame_type_absorbable(space_id, tp, conn)
+                        tp: await frame_type_absorbable(space_id, tp, conn,
+                                                        use_stored=use_stored_verdicts)
                         for tp in (_ETA_RDF, _ETA_VT)
                     }
+                    # a TRUE stored verdict accepted under the write log: the
+                    # executor re-checks it in the query's snapshot (issues/302)
+                    if aliases.frame_type_absorbable.get(_ETA_RDF):
+                        aliases.type_agreement_guard = _ETA_GUARD.get()
                     # A gate that answers TRUE because the table it checks is
                     # EMPTY is the `edge_type_absorbable` failure — vacuously
                     # true, then eight tests returning zero rows. Record the
@@ -2565,7 +2573,9 @@ async def _generate_sql(
         # switch on AND the `qtree` feature only; otherwise a no-op and the SQL
         # above is today's, byte for byte).
         plan_source = None
-        verdict_guard = None
+        # a stored type-agreement verdict the plan relies on (issues/302), unless
+        # the planner's own plan replaces it below
+        verdict_guard = getattr(aliases, "type_agreement_guard", None)
         qtree_pin = True
         if not provably_empty:
             from . import planner_ext as _pext
@@ -2574,7 +2584,7 @@ async def _generate_sql(
             if _q is not None:
                 sql_str = prepend_ctes(substitute_constants(_q.sql, aliases), aliases, term_table)
                 plan_source = "qtree"
-                verdict_guard = getattr(_q, "verdict_guard", None)
+                verdict_guard = getattr(_q, "verdict_guard", None) or verdict_guard
                 qtree_pin = getattr(_q, "pin", True)
 
         # One structured line per query: which rewrites fired, which declined

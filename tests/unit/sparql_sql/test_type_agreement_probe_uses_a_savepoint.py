@@ -52,6 +52,8 @@ class _Conn:
         return _Savepoint(self)
 
     async def fetchval(self, *args, **kwargs):
+        if args and str(args[0]).startswith("SELECT to_regclass($1) IS NOT NULL"):
+            return False        # the space has no write log (issues/302)
         self.fetchval_calls += 1
         if self.raises:
             raise self.raises

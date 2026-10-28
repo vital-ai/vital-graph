@@ -1,6 +1,6 @@
 # 302 — The type-agreement change token lags a committed write by up to ten seconds
 
-## Status: OPEN (reproduced 2026-10-24 on the planner stack, PostgreSQL 18.4)
+## Status: FIXED 2026-10-28 on the default path (option 1, the write log). Open until the vg test stack runs the full suite on the rebuilt image; live per space once `scripts/install_write_log.py` has run there.
 
 **Related:** `issues/182` and `issues/183` (what the absorption is worth),
 `edge_type_agreement.py` (`_stored_verdict`, `refresh_type_agreement`),
@@ -67,3 +67,38 @@ behind, so a reader later sees a higher count and declines.
    call it. Not a fix.
 
 (1) is the one that closes the window.
+
+## Fix (2026-10-28) — option 1
+
+`edge_type_agreement`, on the default path (and the planner's, which reads the same verdict):
+
+- **The token.** Where the space has the write log, `change_token` and the reader's in-query token
+  carry the log's write count and the quad table's oid (`<churn>:<relfilenode>|w<writes>:<oid>`),
+  read in the same statement as the verdict. A reader sees a committed quad write's log row
+  exactly when it sees its rows, so the verdict is declined at once. A log whose trigger is
+  missing or disabled gives `|wnone`, which no stored token matches. The refresh's before / after
+  tokens carry it too, so a quad write during the scan marks the verdict born stale.
+- **The planning gap.** A TRUE verdict accepted under the log hands `(space, writes, oid)` to the
+  generation result as `verdict_guard` (`ACCEPTED_GUARD`, per task). The executor's existing hook
+  (`pattern_verdict.guard_holds`) re-checks it in the REPEATABLE READ snapshot the query runs in,
+  and re-plans without stored verdicts (`planner_verdicts=False`, now honoured by
+  `frame_type_absorbable` / `edge_type_absorbable` as `use_stored`) when a write landed between
+  planning and running.
+- **Without the log**, the reader runs today's query unchanged: the window stays there until the
+  log is installed. Not "no log, no verdict": that would turn absorption off on every space at
+  deploy.
+
+Residual: the derived table's own churn (`frame_slot` / `edge`) is still the statistics token; a
+write to it alone (a resync, with no quad write) lags as before. Every write path that changes
+which frames carry which types writes quads in the same transaction.
+
+**Deploy step**: `python scripts/install_write_log.py --all`, then refresh the type-agreement
+verdicts (the maintenance job, or an explicit refresh): a verdict stored before the log has no
+write-log part and is declined once the log is present.
+
+## Test
+
+`tests/integration/test_type_agreement_verdict_sees_a_write_at_once.py`: a stored TRUE verdict,
+then a write that makes `rdf:type` disagree with `vitaltype`, read at once from another
+connection: declined. On the code before the fix it is still TRUE (`assert True is None`). And
+the guard handed to the executor moves with a later write (`guard_holds` false).

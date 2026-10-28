@@ -100,7 +100,7 @@ class _RefreshConn:
 
 
 def test_a_timed_out_refresh_is_recorded_as_unknown(monkeypatch):
-    async def token(conn, table):
+    async def token(conn, table, space_id=None):
         return "tok"
     monkeypatch.setattr(eta, "change_token", token)
     conn = _RefreshConn()

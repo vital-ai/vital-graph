@@ -120,6 +120,7 @@ def clear_cache() -> None:
     _COUNT_MEMO.clear()
     _UNKNOWN.clear()
     _NO_VERDICT.clear()
+    _WLOG_PRESENT.clear()
 
 
 #: Returned by `_stored_verdict` when the space has no `type_agreement` table,
@@ -132,7 +133,42 @@ _SOURCES = {"frame": ("frame_slot", "frame_type_uuid"),
             "edge": ("edge", "edge_type_uuid")}
 
 
-async def change_token(conn, table: str) -> Optional[str]:
+#: The write log (`write_log`), where a script installed it, is what makes a stored
+#: verdict exact (issues/302): a reader sees a write's log row exactly when it sees
+#: the write's rows. The statistics churn below is flushed asynchronously, so a
+#: committed write was missing from it for 10-60 s, and a verdict it had made false
+#: was used in that window: rows dropped or added. Whether the log is there is
+#: cached briefly; both stale directions are safe (a dropped log fails the read and
+#: declines; a new one changes the token, so an older verdict declines until the
+#: maintenance job refreshes it).
+WLOG_PRESENT_TTL_S = 30.0
+_WLOG_PRESENT: dict = {}
+
+#: The write-log state a TRUE stored verdict was accepted under, for the executor
+#: to re-check in the snapshot the query runs in (`GenerateResult.verdict_guard`,
+#: `pattern_verdict.guard_holds`): a write committed between planning and running
+#: then re-plans without the verdict. Per task, so concurrent requests cannot
+#: see each other's.
+import contextvars as _cv
+ACCEPTED_GUARD: "_cv.ContextVar[Optional[tuple]]" = _cv.ContextVar("type_agreement_guard", default=None)
+
+
+async def _wlog_present(conn, space_id: str) -> bool:
+    from . import write_log
+    hit = _WLOG_PRESENT.get(space_id)
+    now = _time.monotonic()
+    if hit is not None and now - hit[0] < WLOG_PRESENT_TTL_S:
+        return hit[1]
+    try:
+        present = bool(await conn.fetchval("SELECT to_regclass($1) IS NOT NULL",
+                                           write_log.table_name(space_id)))
+    except Exception:
+        return False
+    _WLOG_PRESENT[space_id] = (now, present)
+    return present
+
+
+async def change_token(conn, table: str, space_id: Optional[str] = None) -> Optional[str]:
     """A cheap reading of "has this table changed since", or None.
 
     Tuple churn plus `relfilenode`, both from the catalog and the statistics
@@ -141,6 +177,12 @@ async def change_token(conn, table: str) -> Optional[str]:
     it only has to CHANGE when the table does. A statistics reset moves it, and
     so does a TRUNCATE (new relfilenode); both then read as "unknown", which is
     the conservative answer rather than a wrong one.
+
+    With `space_id` and the space's write log installed, the token also carries
+    the log's write count and the quad table's oid (`|w<writes>:<oid>`), read in
+    the caller's snapshot: exact for every quad write, where the churn lags
+    (issues/302). A log whose trigger is missing or disabled vouches for nothing:
+    `|wnone`, which no stored verdict matches.
     """
     try:
         row = await conn.fetchrow(
@@ -153,7 +195,16 @@ async def change_token(conn, table: str) -> Optional[str]:
         return None
     if row is None or row["relfilenode"] is None:
         return None
-    return f"{row['churn']}:{row['relfilenode']}"
+    token = f"{row['churn']}:{row['relfilenode']}"
+    if space_id is not None and await _wlog_present(conn, space_id):
+        from . import write_log
+        try:
+            st = await write_log.guard_state(conn, space_id)
+        except Exception as exc:
+            logger.debug("type agreement: write log read failed for %s: %s", space_id, exc)
+            return None
+        token += f"|w{st[0]}:{st[1]}" if st is not None else "|wnone"
+    return token
 
 
 async def _stored_verdict(conn, space_id: str, kind: str, predicate_uri: str):
@@ -190,6 +241,7 @@ async def _stored_verdict(conn, space_id: str, kind: str, predicate_uri: str):
     # A row comes back only when a verdict exists AND still describes the table;
     # "no verdict", "unsure" and "the table moved" are all absence, and all mean
     # do not absorb.
+    wlog = False
     try:
         # INSIDE A SAVEPOINT, because this probe is allowed to fail and the
         # caller's transaction is not. A failed statement aborts the whole
@@ -204,24 +256,48 @@ async def _stored_verdict(conn, space_id: str, kind: str, predicate_uri: str):
         # then died, because the abort is server-side state, not an exception
         # you can decline. Nested on an open transaction, asyncpg's
         # `transaction()` is a SAVEPOINT, so only the probe rolls back.
-        async with conn.transaction():
-            agrees = await conn.fetchval(
-                # The stat functions are called on ONE oid rather than
-                # filtering `pg_stat_all_tables`, which is a view that
-                # evaluates every table in the database before the filter
-                # applies. Measured server-side on production: 0.31 ms for the
-                # view form, 0.11 ms for this one.
-                "SELECT ta.agrees FROM type_agreement ta, LATERAL ("
-                "  SELECT pg_stat_get_tuples_inserted(c.oid)"
-                "       + pg_stat_get_tuples_updated(c.oid)"
-                "       + pg_stat_get_tuples_deleted(c.oid) AS churn,"
-                "         c.relfilenode"
-                "  FROM pg_class c WHERE c.oid = to_regclass($4)) t "
-                "WHERE ta.space_id = $1 AND ta.kind = $2 AND ta.predicate_uri = $3 "
-                "  AND ta.agrees IS NOT NULL "
-                "  AND ta.change_token = t.churn || ':' || t.relfilenode",
-                space_id, kind, predicate_uri, f"{space_prefix(space_id)}_{suffix}")
+        wlog = await _wlog_present(conn, space_id)
+        base = (
+            # The stat functions are called on ONE oid rather than
+            # filtering `pg_stat_all_tables`, which is a view that
+            # evaluates every table in the database before the filter
+            # applies. Measured server-side on production: 0.31 ms for the
+            # view form, 0.11 ms for this one.
+            "SELECT ta.agrees FROM type_agreement ta, LATERAL ("
+            "  SELECT pg_stat_get_tuples_inserted(c.oid)"
+            "       + pg_stat_get_tuples_updated(c.oid)"
+            "       + pg_stat_get_tuples_deleted(c.oid) AS churn,"
+            "         c.relfilenode"
+            "  FROM pg_class c WHERE c.oid = to_regclass($4)) t "
+            "WHERE ta.space_id = $1 AND ta.kind = $2 AND ta.predicate_uri = $3 "
+            "  AND ta.agrees IS NOT NULL "
+            "  AND ta.change_token = t.churn || ':' || t.relfilenode")
+        args = (space_id, kind, predicate_uri, f"{space_prefix(space_id)}_{suffix}")
+        if not wlog:
+            async with conn.transaction():
+                agrees = await conn.fetchval(base, *args)
+        else:
+            # The token as `change_token` builds it with the write log, in this
+            # statement's snapshot (issues/302); the log's state comes back for
+            # the executor's guard. A missing or disabled trigger: `|wnone`,
+            # which no stored token matches.
+            from . import write_log
+            sql = (f"WITH g AS ({write_log._state_sql(space_id)}) "
+                   + base.replace("SELECT ta.agrees FROM type_agreement ta,",
+                                  "SELECT ta.agrees, g.writes, g.quad_oid, g.trigger_ok "
+                                  "FROM type_agreement ta, g,")
+                   + " || CASE WHEN g.trigger_ok THEN '|w' || g.writes || ':' || g.quad_oid "
+                     "ELSE '|wnone' END")
+            async with conn.transaction():
+                row = await conn.fetchrow(sql, *args)
+            agrees = row["agrees"] if row is not None else None
+            if agrees and row["trigger_ok"]:
+                ACCEPTED_GUARD.set((space_id, int(row["writes"]), int(row["quad_oid"])))
     except asyncpg.UndefinedTableError:
+        if wlog:
+            # the write log went away since it was seen: unknown, not "not migrated"
+            _WLOG_PRESENT.pop(space_id, None)
+            return None
         return NOT_MIGRATED
     except Exception as exc:
         # Reachable table, unreadable row. Unknown, not "fall back to the
@@ -246,7 +322,7 @@ def _remember_unknown(key) -> None:
 
 
 async def frame_type_absorbable(space_id: str, type_predicate: str,
-                                conn) -> Optional[bool]:
+                                conn, use_stored: bool = True) -> Optional[bool]:
     """True when `?f <type_predicate> <T>` can be read off `frame_slot.frame_type_uuid`.
 
     Same question as `edge_type_absorbable`, asked of frames. The column is
@@ -263,6 +339,10 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
     if type_predicate == VITALTYPE_URI:
         return True
     if type_predicate != RDF_TYPE_URI:
+        return None
+    if not use_stored:
+        # re-planning because the space moved since a verdict was accepted
+        # (the executor's guard): no verdict at all, not the fallback check
         return None
 
     t_fs = f"{space_prefix(space_id)}_frame_slot"
@@ -389,7 +469,7 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
 
 
 async def edge_type_absorbable(space_id: str, type_predicate: str,
-                               conn) -> Optional[bool]:
+                               conn, use_stored: bool = True) -> Optional[bool]:
     """True when `?e <type_predicate> <T>` can be read off `edge_type_uuid`.
 
     `vitaltype` is True without asking — that is what the column holds.
@@ -400,6 +480,8 @@ async def edge_type_absorbable(space_id: str, type_predicate: str,
     if type_predicate == VITALTYPE_URI:
         return True
     if type_predicate != RDF_TYPE_URI:
+        return None
+    if not use_stored:
         return None
 
     t_edge = f"{space_prefix(space_id)}_edge"
@@ -566,7 +648,7 @@ async def _refresh_not_needed(conn, space_id: str, kind: str,
             return (f"cannot hold a verdict at this write rate; retried in "
                     f"{int(BORN_STALE_BACKOFF_S - age)}s")
         return None
-    token = await change_token(conn, table)
+    token = await change_token(conn, table, space_id)
     if token is not None and token == row["change_token"]:
         return "verdict still current"
     return None
@@ -618,7 +700,7 @@ async def refresh_type_agreement(conn, space_id: str, force: bool = False) -> li
                     record["skipped"] = skip
                     out.append(record)
                     continue
-            token = await change_token(conn, table)
+            token = await change_token(conn, table, space_id)
             if token is None:
                 record["skipped"] = "no such table"
                 out.append(record)
@@ -676,7 +758,7 @@ async def refresh_type_agreement(conn, space_id: str, force: bool = False) -> li
             # data that no longer exists and every reader would decline it, so
             # it is stored as unknown and this space is left alone rather than
             # rescanned next cycle to produce the same unusable row.
-            after = await change_token(conn, table)
+            after = await change_token(conn, table, space_id)
             if after is not None and after != token:
                 logger.info(
                     "type agreement: %s %s BORN STALE -- the table moved during "

@@ -36,6 +36,8 @@ class _Conn:
         self.agreements = 0
 
     async def fetchval(self, sql, *args):
+        if sql.startswith("SELECT to_regclass($1) IS NOT NULL"):
+            return False        # the space has no write log (issues/302)
         if "FROM type_agreement" in sql:
             # This double models an UNMIGRATED database, so the legacy in-query
             # check is what runs. The stored-verdict path has its own below.
@@ -132,6 +134,8 @@ class _StoredConn(_Conn):
         self.reads = 0
 
     async def fetchval(self, sql, *args):
+        if sql.startswith("SELECT to_regclass($1) IS NOT NULL"):
+            return False        # the space has no write log (issues/302)
         if "FROM type_agreement" in sql:
             # The real query compares the token IN SQL and returns a row only
             # when it still matches, so the double does the same.
@@ -204,6 +208,8 @@ class TestTheRefreshRaisesBOTHFences:
 
         class _Conn:
             async def fetchval(self, sql, *args, timeout=None):
+                if sql.startswith("SELECT to_regclass($1) IS NOT NULL"):
+                    return False        # the space has no write log (issues/302)
                 if sql.startswith("SELECT count(*)") or "IS DISTINCT FROM" in sql:
                     seen.append((sql.split()[1], timeout))
                     return 5 if sql.startswith("SELECT count(*)") else None
@@ -293,6 +299,8 @@ class TestABusySpaceIsBackedOffNotRescanned:
             return {"churn": self.churn, "relfilenode": 7}
 
         async def fetchval(self, sql, *args, timeout=None):
+            if sql.startswith("SELECT to_regclass($1) IS NOT NULL"):
+                return False        # the space has no write log (issues/302)
             if sql.startswith("SELECT count(*)"):
                 return 3_000_000
             if sql.strip().startswith("SELECT term_uuid"):
