@@ -6,9 +6,9 @@ Found by a differential sweep against Oxigraph, on the default path:
   sorted on NULLs, so the order (and a LIMIT's page) came from the next key alone.
 - `ORDER BY` a variable nothing binds failed with an SQL error.
 
-Kept as they are (issues/324): an unbound value sorts last ascending, first
-descending (the app's sequence ordering relies on it); equal numbers in different
-lexical forms (10, 1.0E1) are ordered by their text before the next key.
+An unbound value sorts lowest, first ascending and last descending (SPARQL 15.1,
+issues/326). Kept as they are (issues/324): equal numbers in different lexical
+forms (10, 1.0E1) are ordered by their text before the next key.
 """
 
 from __future__ import annotations
@@ -54,16 +54,16 @@ async def test_order_by_a_dropped_variable_pages(space, sparql_execute):
     assert _last(rows, "s") == ["i1", "i3"]                      # delta, charlie
 
 
-async def test_unbound_sorts_last_ascending(space, sparql_execute):
+async def test_unbound_sorts_first_ascending(space, sparql_execute):
     rows = await sparql_execute(PFX + """SELECT ?s WHERE { ?s ex:kind ?k OPTIONAL { ?s ex:score ?v } }
         ORDER BY ?v ?s""", space)
-    assert _last(rows, "s") == ["i1", "i3", "i2", "i4"]          # 5, 1.0E1 / 10 (by text), none
+    assert _last(rows, "s") == ["i4", "i1", "i3", "i2"]          # none, 5, 1.0E1 / 10 (by text)
 
 
-async def test_unbound_sorts_first_descending(space, sparql_execute):
+async def test_unbound_sorts_last_descending(space, sparql_execute):
     rows = await sparql_execute(PFX + """SELECT ?s WHERE { ?s ex:kind ?k OPTIONAL { ?s ex:score ?v } }
         ORDER BY DESC(?v) ?s LIMIT 3""", space)
-    assert _last(rows, "s") == ["i4", "i2", "i3"]                # none, then 10 / 1.0E1 (by text)
+    assert _last(rows, "s") == ["i2", "i3", "i1"]                # 10 / 1.0E1 (by text), 5; none last
 
 
 async def test_order_by_a_variable_nothing_binds(space, sparql_execute):

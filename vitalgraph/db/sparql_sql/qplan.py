@@ -3859,9 +3859,11 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
         out_keys = sorted(set(out_keys) | set(late_vars))
     # ORDER BY / LIMIT on the keys, values decoded after
     sort_joins, sort_cols = [], []
-    from .emit_order import variable_order_keys
+    from .emit_order import variable_order_parts
     from .sql_type_generation import ColumnInfo as _CI
     for n, (v, d) in enumerate(q.order):
+        # an unbound value lowest, as the generator's keys (issues/326)
+        dn = "DESC NULLS LAST" if d == "DESC" else "ASC NULLS FIRST"
         if (v in agg_vars and general) or v in cvars:
             # a computed value or an aggregate result: the generator's own keys over its
             # companion columns (`variable_order_keys`), by its typed lane
@@ -3873,15 +3875,14 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
                 ainfo = gctx.types.get(agg_vars[v])
                 lane = None if ainfo is None or ainfo._sql_has_companions else ainfo.typed_lane
             info = _CI.simple_output(v, f"c_{v}", typed_lane=lane)
-            sort_cols += [(k, d) for k in variable_order_keys("o", info, v, "ASC")]
+            sort_cols += variable_order_parts("o", info, v, d)
         elif v in agg_vars:
             sort_cols.append((f"o.a_{_ph(agg_vars[v])}", d))
         elif (v in r.early_done or v in reuse) and v in names and not q.synth_order:
             # decoded at the keys level (`_early_cols`, or the FILTER level's `r_<var>`):
             # the generator's own keys over those columns, as today's SQL sorts
             sn = names[v] if v in r.early_done else f"r_{v}"
-            sort_cols += [(k, d) for k in variable_order_keys("o", _CI.simple_output(v, sn, from_triple=True),
-                                                             v, "ASC")]
+            sort_cols += variable_order_parts("o", _CI.simple_output(v, sn, from_triple=True), v, d)
         elif q.synth_order:
             # the generator's own stable-paging order is by the term's UUID: the same
             # here, so consecutive pages agree whichever path renders each of them
@@ -3895,7 +3896,7 @@ def render(q: Query, names: Dict[str, str], ctx, main_tree: Optional[Node] = Non
             # As the generator's keys (`variable_order_keys`): the value, the date, the
             # text, plain columns (issues/324)
             from .collation import collate
-            sort_cols += [(f"{ts}.num_val", d), (f"{ts}.dt_val", d), (collate(f"{ts}.term_text"), d)]
+            sort_cols += [(f"{ts}.num_val", dn), (f"{ts}.dt_val", dn), (collate(f"{ts}.term_text"), dn)]
     # The page's tiebreak, after the user's keys: each variable's term uuid (issues/312).
     # Under a late cut, the page is cut on the required part's variables; the OPTIONALs'
     # are added to the final order, so both give one total order.

@@ -47,8 +47,11 @@ SEQ_SENTINEL = 2147483647
 #
 # Still a defect: an EXPRESSION sort key. Mixing a text-lane variable with a
 # numeric literal in COALESCE casts every argument to TEXT
-# (emit_expressions.py), so a COALESCE sentinel still sorts lexically. The two
-# tests below that sort on COALESCE keep the strict xfail.
+# (emit_expressions.py), so a COALESCE sentinel still sorts lexically. The
+# tests below that sort on COALESCE keep the strict xfail. The BIND form joined
+# them with issues/326: its sentinel rows have no numeric value, and once an
+# unbound value sorted lowest their place among the numbers came from that
+# defect, no longer from where PostgreSQL happened to put NULLs.
 xfail_lexical_order = pytest.mark.xfail(
     strict=True,
     reason="a COALESCE sort key casts its arguments to TEXT and compares "
@@ -161,13 +164,16 @@ class TestIntegerSequenceOrdering:
 # ---------------------------------------------------------------------------
 
 class TestCoalesceInOrderBy:
-    """Missing sequence values must sort last in ascending order.
+    """Where an unsequenced subject sorts.
 
     Sequence is optional on both KGFrame and KGSlot, so the sort key is an
-    OPTIONAL and is frequently unbound.  ``ORDER BY ?seq ?subject`` handles
-    that in one construct: sequenced subjects sort by sequence, unsequenced
-    ones fall to the end and order among themselves by subject URI.  No
-    sentinel and no mode switch — see test_unsequenced_fall_back_to_subject.
+    OPTIONAL and is frequently unbound.  A bare ``ORDER BY ?seq ?subject``
+    follows SPARQL 15.1: an unbound value is LOWEST, so unsequenced subjects
+    come first ascending and last descending (issues/326; it sorted last
+    ascending before, PostgreSQL's NULLs).  The app's "missing last in both
+    directions" contract is stated explicitly, with an ``IF(BOUND(?seq), 0, 1)``
+    leading key (`KGSparqlUtils.build_sort_clauses`;
+    test_missing_flag_puts_unsequenced_last_descending), not left to that.
 
     The COALESCE sentinel tests below are retained to document why the
     obvious alternative is worse.
@@ -187,15 +193,12 @@ class TestCoalesceInOrderBy:
         await sparql_update(
             f"{PREFIXES}\nINSERT DATA {{\n{triples}\n{names}\n}}", test_space)
 
-    async def test_unbound_optional_already_sorts_last_ascending(
+    async def test_unbound_sorts_first_ascending(
         self, test_space, sparql_execute
     ):
-        """A bare OPTIONAL sort key ALREADY puts unbound values last on ASC.
+        """A bare OPTIONAL sort key puts unbound values FIRST on ASC.
 
-        Unbound sort keys reach SQL as NULL, and PostgreSQL's default for
-        ASC is NULLS LAST — which is exactly the missing-sequence-last
-        behavior the frontend's Infinity fallback emulates.  So on ascending
-        sorts no sentinel is needed at all.
+        SPARQL 15.1 orders an unbound value lowest (issues/326).
         """
         bindings = await sparql_execute(f"""
         {PREFIXES}
@@ -207,8 +210,8 @@ class TestCoalesceInOrderBy:
 
         assert len(bindings) == 5
         assert len(_values(bindings, "seq")) == 3
-        assert all("seq" not in b for b in bindings[3:]), (
-            "expected unsequenced frames last; got "
+        assert all("seq" not in b for b in bindings[:2]), (
+            "expected unsequenced frames first; got "
             f"{[b.get('seq', {}).get('value') for b in bindings]}"
         )
 
@@ -217,9 +220,9 @@ class TestCoalesceInOrderBy:
     ):
         """Unsequenced subjects order among themselves by subject URI.
 
-        The whole ordering contract in one query: ORDER BY ?seq ?subject
-        gives sequence order for the sequenced subjects, then subject order
-        for the rest.  Total order, so it is safe to page.
+        ORDER BY ?seq ?subject: the unsequenced subjects (lowest) in subject
+        order, then the sequenced ones by sequence.  Total order, so it is safe
+        to page.
         """
         bindings = await sparql_execute(f"""
         {PREFIXES}
@@ -230,11 +233,10 @@ class TestCoalesceInOrderBy:
         """, test_space)
 
         frames = [_local(v) for v in _values(bindings, "frame")]
-        assert frames[:3] == ["optFrame1", "optFrame2", "optFrame3"]
-        # the unsequenced tail is in subject order, not arbitrary order
-        tail = frames[3:]
-        assert tail == ["optFrame4", "optFrame5"], tail
-        assert tail == sorted(tail)
+        # the unsequenced head is in subject order, not arbitrary order
+        head = frames[:2]
+        assert head == ["optFrame4", "optFrame5"], head
+        assert frames[2:] == ["optFrame1", "optFrame2", "optFrame3"]
 
     async def test_unsequenced_subject_fallback_is_stable(
         self, test_space, sparql_execute
@@ -277,16 +279,11 @@ class TestCoalesceInOrderBy:
         assert len(seen) == 5
         assert len(set(seen)) == 5, f"paging duplicated rows: {seen}"
 
-    async def test_current_descending_puts_unsequenced_first(
+    async def test_descending_puts_unsequenced_last(
         self, test_space, sparql_execute
     ):
-        """CURRENT behavior: DESC leads with the unsequenced frames.
-
-        PostgreSQL defaults to NULLS FIRST on DESC.  Pinned so the change in
-        test_unsequenced_sort_last_descending is visible as a deliberate
-        behavior change rather than an accident.  Delete this test when that
-        one goes green.
-        """
+        """DESC ends with the unsequenced frames: an unbound value is lowest
+        (SPARQL 15.1, issues/326), so last when descending."""
         bindings = await sparql_execute(f"""
         {PREFIXES}
         SELECT ?frame ?seq WHERE {{
@@ -296,8 +293,8 @@ class TestCoalesceInOrderBy:
         """, test_space)
 
         assert len(bindings) == 5
-        assert all("seq" not in b for b in bindings[:2]), (
-            "expected unsequenced frames first on DESC; got "
+        assert all("seq" not in b for b in bindings[3:]), (
+            "expected unsequenced frames last on DESC; got "
             f"{[b.get('seq', {}).get('value') for b in bindings]}"
         )
 
@@ -375,6 +372,7 @@ class TestCoalesceInOrderBy:
         )
         assert [int(v) for v in _values(bindings, "seq")] == [1, 2, 3]
 
+    @xfail_lexical_order
     async def test_bind_workaround_sorts_missing_last(
         self, test_space, sparql_execute
     ):

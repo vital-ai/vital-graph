@@ -77,39 +77,47 @@ def variable_order_keys(alias: str, info, var: str, direction: str,
     same keys: it sorted on plain text, and that is the order the query
     actually returned.
     """
+    return [f"{e} {m}".rstrip() for e, m in variable_order_parts(alias, info, var, direction, stable)]
+
+
+def variable_order_parts(alias: str, info, var: str, direction: str,
+                         stable: bool = False) -> list:
+    """`variable_order_keys` as (expression, direction) pairs, for an emitter that
+    selects the expressions as columns and orders by them (the qtree planner)."""
     from .collation import collate
     sn = info.sql_name if info else var
-    suffix = " DESC" if direction == "DESC" else ""
+    plain = "DESC" if direction == "DESC" else ""
     if stable:
         # Synthesized for stable paging: any total order, and uuid is the one
         # the paging emitters can produce from an index (issues/075, 078).
-        return [f"{alias}.{sn}__uuid{suffix}"]
+        return [(f"{alias}.{sn}__uuid", plain)]
     from .ir import TiebreakVar
     if isinstance(var, TiebreakVar) and info is not None and info.has_term_identity():
         # A page's tiebreak (`collect._add_paging_tiebreak`, issues/312): the term's
         # identity, a total order over stored terms; a computed value keeps its
         # value keys below
-        return [f"{alias}.{sn}__uuid{suffix}"]
+        return [(f"{alias}.{sn}__uuid", plain)]
+    # An UNBOUND value sorts LOWEST (SPARQL 15.1): first ascending, last descending.
+    # It is NULL in every key, so NULLS FIRST / LAST on each places it, in plain
+    # columns: an expression key (a kind rank, a CASE) made every ordered query
+    # 10-59% slower, the outer ORDER BY no longer matching the inner one's sorted
+    # output (issues/324). Left to PostgreSQL it sorted last ascending (issues/326).
+    # Within one kind of value nothing else moves; a variable mixing numbers and
+    # strings now orders the strings first ascending, which SPARQL leaves undefined.
+    mod = "DESC NULLS LAST" if direction == "DESC" else "ASC NULLS FIRST"
     if info is not None and info.typed_lane:
         # A computed variable on the numeric or boolean lane — ORDER BY over a
         # COUNT, for instance. `sn` is not a text column there and PostgreSQL
         # raises "collations are not supported by type numeric" rather than
         # ignoring the clause. Caught by DAWG aggregates/COUNT 8b.
-        return [f"{alias}.{sn}{suffix}"]
-    keys = []
+        return [(f"{alias}.{sn}", mod)]
+    parts = []
     if info is None or getattr(info, "_sql_has_companions", True):
-        keys += [f"{alias}.{sn}__num{suffix}", f"{alias}.{sn}__dt{suffix}"]
-    # Plain columns only (issues/324): a kind rank (SPARQL 15.1: blank node, IRI,
-    # literal) or a text key confined to non-numeric values (10 and 1.0E1 tying to
-    # the next key) is an EXPRESSION, and an expression key made the ordered queries
-    # 10-59% slower: the outer ORDER BY no longer matched the inner one's sorted
-    # output and sorted again. Both deviations are rare; the cost was not. An
-    # unbound value sorts last ascending (PostgreSQL's NULLs), which the app's
-    # sequence ordering relies on (test_sequence_ordering.py).
+        parts += [(f"{alias}.{sn}__num", mod), (f"{alias}.{sn}__dt", mod)]
     # Pinned, not inherited: SPARQL orders strings by code point and PostgreSQL
     # orders by the cluster's collation. Only the text column takes it.
-    keys.append(f"{collate(f'{alias}.{sn}')}{suffix}")
-    return keys
+    parts.append((collate(f"{alias}.{sn}"), mod))
+    return parts
 
 
 def _scoped_expr(expr, plan, ctx):

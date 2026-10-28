@@ -263,9 +263,19 @@ class KGSparqlUtils:
             return (patterns, f"?{missing_var} ?{num_var}",
                     f"ORDER BY ?{missing_var} {order_term} ?{anchor}")
 
-        patterns = f"OPTIONAL {{ ?{anchor} <{sort_by}> ?{val_var} . }}"
+        # The same leading `?missing` key as a sequence property: without it the
+        # subjects missing the property were placed by the ENGINE's unbound ordering,
+        # first on a descending sort, against this contract and against the SQL fast
+        # paths (`NULLS LAST` both ways), so a listing's order depended on the path
+        # serving it (issues/326).
+        missing_var = f"{var_prefix}_missing"
+        patterns = (
+            f"OPTIONAL {{ ?{anchor} <{sort_by}> ?{val_var} . }}\n"
+            f"                BIND(IF(BOUND(?{val_var}), 0, 1) AS ?{missing_var})"
+        )
         order_term = f"?{val_var}" if direction == "ASC" else f"DESC(?{val_var})"
-        return patterns, f"?{val_var}", f"ORDER BY {order_term} ?{anchor}"
+        return (patterns, f"?{missing_var} ?{val_var}",
+                f"ORDER BY ?{missing_var} {order_term} ?{anchor}")
 
     @staticmethod
     def build_graph_clause(graph_id: str) -> str:

@@ -120,20 +120,24 @@ class TestSequenceSort:
 
 
 class TestNonSequenceSort:
-    """Ordinary properties keep the simpler lexical construct."""
+    """Ordinary properties sort lexically, with the missing subjects last both ways.
+
+    The leading `?missing` key states that (issues/326): left to the engine's
+    ordering of an unbound value, a descending sort put the subjects missing
+    the property first, against this contract and the SQL fast paths."""
 
     def test_lexical_sort_has_no_numeric_cast(self):
         patterns, projection, order = KGSparqlUtils.build_sort_clauses("?frame", NAME_PROP)
 
         assert f"OPTIONAL {{ ?frame <{NAME_PROP}> ?sort_val . }}" in patterns
         assert "xsd:integer" not in patterns
-        assert "BOUND" not in patterns
-        assert projection == "?sort_val"
-        assert order == "ORDER BY ?sort_val ?frame"
+        assert "BIND(IF(BOUND(?sort_val), 0, 1) AS ?sort_missing)" in patterns
+        assert projection == "?sort_missing ?sort_val"
+        assert order == "ORDER BY ?sort_missing ?sort_val ?frame"
 
     def test_lexical_descending(self):
         _, _, order = KGSparqlUtils.build_sort_clauses("?frame", NAME_PROP, "desc")
-        assert order == "ORDER BY DESC(?sort_val) ?frame"
+        assert order == "ORDER BY ?sort_missing DESC(?sort_val) ?frame"
 
     def test_anchor_still_tiebreaks(self):
         _, _, order = KGSparqlUtils.build_sort_clauses("?frame", NAME_PROP, "desc")
