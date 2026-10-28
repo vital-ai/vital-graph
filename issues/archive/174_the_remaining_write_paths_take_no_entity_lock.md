@@ -1,12 +1,8 @@
 # 174 — The remaining write paths take no entity lock
 
-## Status: OPEN — items 1, 2, 3 and 5 LANDED; 4 superseded by `175`. ONE item remains:
-## 6, `PUT /objects` (`objects_impl.update_objects_batch`) is atomic and takes NO
-## entity lock — checked against the code 2026-10-11. Index corrected the same day.
-## LATENT, not live: production made ZERO calls to any objects write route in
-## the 10 days to 2026-10-11 (access logs), so nothing is racing through it today.
+## Status: RESOLVED 2026-10-28 — item 6, the last one, fixed: `PUT /objects` takes the entity lock. Items 1, 2, 3 and 5 landed earlier; 4 superseded by `175`. Verified on the vg test stack rebuilt for the fix: unit, DAWG conformance, integration and API suites, 0 failures.
 ##
-## Was: OPEN
+## Was: OPEN — item 6 (`PUT /objects`, atomic and UNLOCKED) remained; latent (no production calls to the objects write routes in the 10 days to 2026-10-11).
 
 **Raised:** 2026-09-07, from the cleanup in issues/173
 **Related:** issues/173 (the race that corrupted 243 subjects and the lock that
@@ -626,6 +622,33 @@ it means either rewriting the touch as direct SQL in a locked transaction
 graph) or giving the SPARQL update path a way to run on a caller's connection.
 
 ### 6. NEW 2026-09-21 — `PUT /objects` is atomic and unlocked, and was missing from this list
+
+**RESOLVED 2026-10-28.** `objects_impl.update_objects_batch` now locks, reads,
+deletes and inserts in ONE transaction, answering the three design questions
+below:
+
+* **What to lock:** every subject's own URI, plus every entity it belongs to
+  (`hasKGGraphURI`), both the STORED groupings and the INCOMING ones (an update
+  that moves an object into an entity locks that entity). One sorted
+  `lock_entities` call, so a multi-entity batch cannot deadlock another.
+* **The resolve-before-lock read:** the existing quads are read again UNDER the
+  lock, and those are what get deleted (before, they were read before the
+  transaction opened, so a concurrent writer's replacement could be deleted from
+  a stale snapshot). If a subject's grouping changed in between, the
+  transaction rolls back and retries with the new set (3 retries) rather than
+  taking one more lock out of order.
+* **Ungrouped subjects** are locked by their own URI: not refused, and two
+  `/objects` writes of one subject now serialise.
+
+`tests/api/test_objects_update_takes_the_entity_lock.py` (4): an update WAITS
+while a separate connection holds the member's entity lock, the target entity's
+lock when moving an object in, and an ungrouped subject's own lock; the control
+— an unrelated lock — does not block. Each would fail on the old code.
+
+Not changed, and not a locking matter: the delete-then-insert is per WHOLE
+subject, so `PUT` is a replace (a partial object loses what it omitted).
+
+#### The original write-up
 
 Found while answering `issues/225`, not by auditing: someone looking for a way
 to write an entity node and a frame slot together finds this endpoint

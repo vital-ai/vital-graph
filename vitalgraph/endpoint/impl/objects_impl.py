@@ -28,6 +28,29 @@ from ...utils.data_format_utils import (
     batch_graphobjects_to_quads
 )
 
+HAS_KG_GRAPH_URI = 'http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI'
+
+# How many times `update_objects_batch` re-takes its locks when a subject's
+# entity changed between its first read and the lock. Each retry needs a
+# concurrent re-grouping of the same subjects, so more than one is rare.
+_REGROUP_RETRIES = 3
+
+
+def _groupings(quads) -> set:
+    """The entities the quads' subjects belong to: their `hasKGGraphURI` values."""
+    return {str(q[2]) for q in quads if str(q[1]) == HAS_KG_GRAPH_URI}
+
+
+class _Regrouped(ImplConflictError):
+    """Under the lock, a subject belonged to an entity that was not locked.
+
+    An `ImplConflictError` so `execute_with_transaction` re-raises it as is,
+    after rolling the transaction back."""
+
+    def __init__(self, groups: set):
+        super().__init__("objects regrouped during update")
+        self.groups = groups
+
 
 class ObjectsImpl:
     """Implementation for generic VitalSigns object operations using proper VitalGraph patterns."""
@@ -307,45 +330,74 @@ class ObjectsImpl:
                     raise ImplValidationError(f"Object at index {i} missing URI")
                 subject_uris.append(uri)
             
-            # Step 2: Get existing quads for all objects
-            existing_quads = await batch_get_existing_quads_for_uris(
-                self.space_manager, space_id, graph_id, subject_uris
-            )
-            
-            if not existing_quads:
-                raise ImplValidationError("No objects found for update")
-            
-            # Verify all objects exist by checking which URIs have quads
-            existing_uris = set(str(quad[0]) for quad in existing_quads)
-            missing_uris = [uri for uri in subject_uris if uri not in existing_uris]
-            if missing_uris:
-                raise ImplValidationError(f"Objects not found: {', '.join(missing_uris)}")
-            
-            # Step 3: Convert GraphObjects to new quads
+            # Step 2: Convert GraphObjects to new quads
             new_quads = await batch_graphobjects_to_quads(graph_objects, graph_id)
-            
-            # Step 4: Execute batch update in transaction (delete old + insert new)
-            async def update_operation(transaction):
-                from .impl_utils import get_db_space_impl
-                db_space_impl = await get_db_space_impl(self.space_manager, space_id)
-                
-                # Remove existing quads
-                removed_count = await db_space_impl.db_ops.remove_rdf_quads_batch(
-                    space_id, existing_quads, auto_commit=False, transaction=transaction
-                )
-                
-                # Add new quads
-                added_count = await db_space_impl.db_ops.add_rdf_quads_batch(
-                    space_id, new_quads, auto_commit=False, transaction=transaction
-                )
-                
-                self.logger.info(f"Updated {len(subject_uris)} objects: removed {removed_count}, added {added_count} quads")
-                return subject_uris
-            
-            result = await execute_with_transaction(
-                self.space_manager, space_id, update_operation
-            )
-            
+            incoming_groups = _groupings(new_quads)
+
+            # Step 3: lock, read, delete, insert, in one transaction
+            # (`issues/174` item 6).
+            #
+            # Every other write path holds the entity lock; this one held none,
+            # and read the quads it deletes BEFORE its transaction. So it could
+            # rewrite an entity's members while a locked writer believed it had
+            # the entity to itself, and delete a snapshot another writer had
+            # already replaced.
+            #
+            # WHAT to lock: each subject, and every entity it belongs to
+            # (`hasKGGraphURI`), stored or incoming. `/objects` is given subjects,
+            # not entities, so the stored groupings come from a read before the
+            # lock; the read is repeated under the lock, and if a grouping
+            # appeared in between the transaction is retried rather than taking
+            # one more lock out of order, which could deadlock. A subject with
+            # no grouping is locked by its own URI.
+            from ...db.sparql_sql.entity_lock import lock_entities
+
+            stored_groups = _groupings(await batch_get_existing_quads_for_uris(
+                self.space_manager, space_id, graph_id, subject_uris))
+
+            for attempt in range(_REGROUP_RETRIES + 1):
+                lock_set = set(subject_uris) | incoming_groups | stored_groups
+
+                async def update_operation(transaction):
+                    from .impl_utils import get_db_space_impl
+                    db_space_impl = await get_db_space_impl(self.space_manager, space_id)
+
+                    await lock_entities(transaction.connection, lock_set)
+
+                    existing_quads = await batch_get_existing_quads_for_uris(
+                        self.space_manager, space_id, graph_id, subject_uris
+                    )
+                    if not existing_quads:
+                        raise ImplValidationError("No objects found for update")
+                    existing_uris = set(str(quad[0]) for quad in existing_quads)
+                    missing_uris = [uri for uri in subject_uris if uri not in existing_uris]
+                    if missing_uris:
+                        raise ImplValidationError(f"Objects not found: {', '.join(missing_uris)}")
+                    now_groups = _groupings(existing_quads)
+                    if not now_groups <= lock_set:
+                        raise _Regrouped(now_groups)
+
+                    removed_count = await db_space_impl.db_ops.remove_rdf_quads_batch(
+                        space_id, existing_quads, auto_commit=False, transaction=transaction
+                    )
+                    added_count = await db_space_impl.db_ops.add_rdf_quads_batch(
+                        space_id, new_quads, auto_commit=False, transaction=transaction
+                    )
+
+                    self.logger.info(f"Updated {len(subject_uris)} objects: removed {removed_count}, added {added_count} quads")
+                    return subject_uris
+
+                try:
+                    result = await execute_with_transaction(
+                        self.space_manager, space_id, update_operation
+                    )
+                    break
+                except _Regrouped as e:
+                    stored_groups = e.groups
+            else:
+                raise ImplValidationError(
+                    "Objects moved between entities while being updated; not written")
+
             self.logger.info(f"Successfully updated {len(result)} objects")
             return result
             
