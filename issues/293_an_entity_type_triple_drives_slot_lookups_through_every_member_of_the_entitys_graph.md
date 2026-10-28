@@ -168,7 +168,15 @@ hash anti-join in `issues/320` (production, read-only: 4,890 -> 497 ms).
 **Open, 2026-10-28:**
 - `mql_edge_count`: the model's order cuts 919,000 loops to 100,000 but predicts
   only 1.8x, inside the 10x gate, so it is not enforced.
-- A regression test at the UW shape, asserting the ratio rather than a time.
+- ~~A regression test at the UW shape~~ DONE 2026-10-28:
+  `tests/integration/test_type_anchored_slot_query_is_not_driven_through_every_member.py`.
+  60 entities x 300-member graphs; asserts busiest-loops / rows < 20 under the
+  executor's settings, AND that with both rewrites off the same data runs
+  > 100 (the control: without it a ratio test passes on any fixture
+  PostgreSQL plans well by itself, which the first version of this fixture
+  was: 60 loops for 60 rows with everything off, because the decisions
+  dominated the object column and PostgreSQL's fan-out estimate was right).
+  Measured: 60 loops for 60 rows as shipped; 18,000 with the rewrites off.
 - The `edge_fanout` maintenance decision (below).
 - Release, then re-measure the dashboard on production.
 - **Re-measure plan for the semi-join on edge mode** (decided 2026-10-28): rerun
@@ -1126,6 +1134,6 @@ bindings identical to the current plan's.
 
 ## Not done
 
-- A regression test at that shape asserting the ratio, not a wall-clock time.
+- ~~A regression test at that shape asserting the ratio~~ done 2026-10-28 (see the stage table's open list).
 - Whether other spaces' dashboards and listings hit the same shape. Any space
   with wide entity graphs and a type-anchored slot query will.
