@@ -1,6 +1,6 @@
 # 323 — SELECT DISTINCT drops a sub-SELECT's LIMIT, and its ORDER BY without a LIMIT
 
-## Status: FIXED 2026-10-27 on the default path. Open until the vg test stack runs the full suite on the rebuilt image.
+## Status: RESOLVED 2026-10-27. Verified on the vg test stack rebuilt for the fix: DAWG conformance, integration and API suites, 0 failures; unit, 0 failures once the issue file was committed (the index check).
 
 ## Defects
 
