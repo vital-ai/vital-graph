@@ -24,9 +24,10 @@ entries, which arrived later. So the type count shows WHAT grows and cannot say
 who holds it; the attribute walk names the holder whatever its generation.
 
 OPT-IN. `VG_HEAP_CENSUS_INTERVAL_S` (seconds; 0, the default, registers
-nothing). A pass holds the event loop for about as long as a gen-2 collection;
-its duration is in the log line. Use 15 minutes or more, and turn it off once
-the cause is known.
+nothing). A pass holds the event loop for about three gen-2 collections: it
+runs two (one cold, one after the walk, both timed) and visits every referent
+once. Its duration is in the log line. Use 15 minutes or more, and turn it off
+once the cause is known.
 
 ONE TASK. Registered with `single_runner=True`, not because the heap is shared
 — each task has its own — but so the cost lands on one task and the answer
@@ -74,6 +75,23 @@ def _type_name(t: type) -> str:
 
 def count_types(objs) -> collections.Counter:
     return collections.Counter(_type_name(type(o)) for o in objs)
+
+
+def fan_out(objs, top: int) -> Tuple[int, List[Tuple[str, int]]]:
+    """(total referents, the `top` objects by referent count as (type, count)).
+
+    A collection visits every referent of every object it scans, so its cost
+    follows the referent total, not the object count: one dict of 600,000
+    entries costs as much as 600,000 small objects and counts as one."""
+    total = 0
+    big: List[Tuple[int, str]] = []
+    for o in objs:
+        n = len(gc.get_referents(o))
+        total += n
+        if n >= HEAP_CENSUS_MIN_LEN:
+            big.append((n, _type_name(type(o))))
+    big.sort(reverse=True)
+    return total, [(t, n) for n, t in big[:top]]
 
 
 def _attrs(obj):
@@ -212,14 +230,24 @@ class HeapCensusJob:
         self._passes = 0
 
     async def run(self) -> Dict:
+        # A full collection before the walk touches anything: the cost of the
+        # automatic ones, which find the heap as the requests left it.
+        t_cold = time.monotonic()
+        gc.collect(2)
+        cold_ms = (time.monotonic() - t_cold) * 1000
         t0 = time.monotonic()
         objs = gc.get_objects()
         try:
             counts = count_types(objs)
             tracked = len(objs)
+            referents, widest = fan_out(objs, self._top)
         finally:
             del objs
         t_types = time.monotonic() - t0
+        # And again with the heap just walked: the scan alone.
+        t_gc = time.monotonic()
+        gc.collect(2)
+        gc_ms = (time.monotonic() - t_gc) * 1000
         roots = {name: m for name, m in list(sys.modules.items())
                  if m is not None and (name == _ROOT_PREFIX
                                        or name.startswith(_ROOT_PREFIX + "."))}
@@ -263,6 +291,9 @@ class HeapCensusJob:
             "%.2fs (types %.2fs). Most numerous: %s", n, tracked,
             gc.get_freeze_count(), seconds, t_types,
             ", ".join(f"{t}={c}" for t, c in top))
+        logger.info("heap census #%d full collection %.0f ms cold, %.0f ms warm, over "
+                    "%d referents; widest objects: %s", n, cold_ms, gc_ms, referents,
+                    ", ".join(f"{t}={c}" for t, c in widest) or "none")
         logger.info("heap census #%d largest holders: %s", n,
                     "; ".join(f"{p} {t} len={ln}" for p, (t, ln) in biggest) or "none")
         logger.info("heap census #%d holders by kind (instances, total len): %s", n,
@@ -274,6 +305,7 @@ class HeapCensusJob:
                         ", ".join(f"{p}+{d}" for p, d in holder_growth) or "none",
                         ", ".join(f"{k}+{d}" for k, d in kind_growth) or "none")
         return {"pass": n, "tracked": tracked, "frozen": gc.get_freeze_count(),
+                "referents": referents, "widest": widest, "gc_ms": round(gc_ms, 1), "gc_cold_ms": round(cold_ms, 1),
                 "top": top, "type_growth": type_growth, "holders": biggest,
                 "holder_growth": holder_growth, "kinds": kind_rows,
                 "kind_growth": kind_growth, "seconds": round(seconds, 3)}

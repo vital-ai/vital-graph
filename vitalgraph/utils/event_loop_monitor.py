@@ -11,6 +11,7 @@ Does NOT manipulate GC behavior — Python's automatic GC remains in control.
 import asyncio
 import gc
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -39,6 +40,7 @@ class EventLoopMonitor:
         self._max_stall_s = 0.0
         # GC tracking
         self._gc_start_time: Optional[float] = None
+        self._gc_start_cpu = 0.0
         self._gc_total_pause_s = 0.0
         self._gc_count = 0
         self._gc_max_pause_s = 0.0
@@ -112,8 +114,10 @@ class EventLoopMonitor:
         """Called by the GC at the start and end of each collection."""
         if phase == "start":
             self._gc_start_time = time.monotonic()
+            self._gc_start_cpu = time.thread_time()
         elif phase == "stop" and self._gc_start_time is not None:
             duration = time.monotonic() - self._gc_start_time
+            cpu = time.thread_time() - self._gc_start_cpu
             self._gc_start_time = None
             self._gc_count += 1
             self._gc_total_pause_s += duration
@@ -123,10 +127,16 @@ class EventLoopMonitor:
             collected = info.get("collected", 0)
             uncollectable = info.get("uncollectable", 0)
             if duration > self._threshold_s:
+                # The thread names who paid: a collection in a worker thread
+                # stalls the loop only through the GIL. `cpu` is the thread's
+                # own CPU time: far below the wall time, the pause was spent
+                # waiting (GIL, paging, a starved container), not scanning
+                # (issues/278).
                 logger.warning(
                     f"⚠️ GC PAUSE: gen{generation} took {duration*1000:.0f}ms "
+                    f"(cpu {cpu*1000:.0f}ms) "
                     f"(collected={collected}, uncollectable={uncollectable}) "
-                    f"[gc #{self._gc_count}]"
+                    f"[gc #{self._gc_count}, thread {threading.current_thread().name}]"
                 )
             elif duration > 0.010:
                 logger.info(

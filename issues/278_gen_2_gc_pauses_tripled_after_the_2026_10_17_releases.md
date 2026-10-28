@@ -1,6 +1,36 @@
 # 278 — Gen-2 GC pauses tripled after the 2026-10-17 releases
 
-## Status: OPEN — diagnostic added 2026-10-19 (not yet released). Cause not yet identified.
+## Status: OPEN — the per-minute pauses are removed by 269's fix (2026-10-28, not yet released). After deploy: confirm the remaining gen-2 collections in production logs, then archive or continue.
+
+## 2026-10-28: the minute timer is gone
+
+Every pause in the table below is one of `issues/269`'s timed full collections:
+VitalSigns' background thread calling `gc.collect()` every 60 s, now stopped at
+startup. That removes the pauses' FREQUENCY; what this issue measured is their
+LENGTH, which is the cost of scanning the heap that is not frozen.
+
+What the vg test stack shows for that length (census, idle server, ~100,000
+referents unfrozen):
+
+* a full collection run right after the census walked the heap: 8-19 ms;
+* one run first, on the heap as the requests left it: 45-214 ms, cpu = wall.
+
+So the scan is cheap and the time is touching cold memory. The local numbers
+are inflated: the Mac was 33 GB into swap, under the Docker VM. Production has
+no swap but the same shape: a cache filled over six hours (more cold objects) is
+consistent with the climb.
+
+Without the timer, CPython runs a full collection only when the objects
+promoted since the last one reach 25 % of the long-lived heap, so these become
+rare, and rarer as the heap grows. Under load the vg test stack still shows
+natural gen-2 collections that free tens of thousands of objects, which is the
+collector doing its job.
+
+**After deploy:** count `GC PAUSE: gen2` per task-hour on production streams
+(`ecs/vitalgraph/` prefix) against the table below. The line now names the
+thread and the CPU time. If long pauses remain, set `VG_HEAP_CENSUS_INTERVAL_S=900`.
+Each pass now also logs a cold and a warm full collection, the referent total,
+and the widest objects.
 
 **Related:** `issues/269` (the once-a-minute gen-2 collection, ~160 ms then),
 the event-loop monitor (`vitalgraph/utils/event_loop_monitor.py`) that logs the

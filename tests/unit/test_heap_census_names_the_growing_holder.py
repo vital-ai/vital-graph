@@ -149,3 +149,15 @@ def test_the_census_does_not_report_its_own_state(fake_module):
     out = _run(job)
     assert not any("_prev_" in p for p, _ in out["holders"]), out["holders"]
     assert not any("HeapCensusJob" in k for k, _c, _t in out["kinds"]), out["kinds"]
+
+
+def test_a_wide_object_is_priced_by_its_referents():
+    """A collection visits every referent: one dict of many entries costs what
+    that many objects cost and counts as one, so the census reports the
+    referent total, the widest objects, and a measured full collection."""
+    wide = {f"k{i}": [i] for i in range(5000)}
+    out = _run(H.HeapCensusJob(min_len=1000))
+    assert out["referents"] >= len(wide)
+    assert ("dict", 5000) in out["widest"]          # str keys are not visited
+    assert out["gc_ms"] >= 0 and out["gc_cold_ms"] >= 0
+    del wide

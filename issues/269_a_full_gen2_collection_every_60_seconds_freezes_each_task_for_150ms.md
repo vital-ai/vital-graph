@@ -1,6 +1,29 @@
 # 269 — A full gen-2 garbage collection every 60 seconds freezes each task for ~150 ms
 
-## Status: OPEN — measured 2026-10-12 on production (v0.0.85). Not a regression; trigger not yet identified.
+## Status: FIXED 2026-10-28 — the trigger is VitalSigns' 60 s `gc.collect()` thread, stopped at server startup. Not yet released; confirm in production logs after deploy.
+
+## Cause (2026-10-28)
+
+The `VitalSigns` singleton (`vital_ai_vitalsigns/vitalsigns.py`, 0.1.55) starts a
+daemon thread, `BackgroundTaskMixin.background_task`, whose tick calls
+`gc.collect()` — a FULL collection — every `GC_INTERVAL_SECONDS = 60`. Its
+purpose there is to clear GraphObject reference cycles sooner than CPython's own
+gen-2 trigger. In the server it is the whole of this issue: a full collection on
+a timer, holding the GIL, finding a few hundred dead objects.
+
+How it was found, on the vg test stack: the GC-pause line now names the thread
+and the thread's own CPU time. Every 60 s pause was `thread Thread-1
+(background_task)` with cpu = wall (scanning, not waiting). The earlier search
+missed it because it grepped `vitalgraph/` only.
+
+**Fix.** `startup_event` (`vitalgraph/impl/vitalgraphapp_impl.py`) calls
+`VitalSigns().stop()` before the startup `gc.freeze()`. CPython's own collector
+still clears cycles.
+
+**Measured, vg test stack, idle server (same image, before / after):** before,
+an automatic gen-2 every 60.2 s, 101-288 ms (cpu 104-214 ms). After, no
+automatic gen-2 collection in 10 minutes; the only full collections were the
+heap census's own.
 
 **Related:** the event-loop monitor (`vitalgraph/utils/event_loop_monitor.py`) that
 reports it; the startup `gc.freeze()` in `vitalgraph/impl/vitalgraphapp_impl.py`.
@@ -31,7 +54,7 @@ gen-2 objects frozen` and `GC thresholds: gen0=700, gen1=10, gen2=10` at boot. S
 the scan cost is objects that became long-lived AFTER startup (caches filling,
 pools, compiled plans), not the startup set.
 
-## The trigger is not known
+## The trigger was not known (as of 2026-10-12)
 
 The exact 60.15 s cadence on both tasks looks like a timer, not organic
 allocation. Checked and ruled out:
