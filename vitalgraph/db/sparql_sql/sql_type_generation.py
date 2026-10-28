@@ -253,6 +253,10 @@ class TypedExpr:
     # Optional per-suffix overrides for produce_companions.
     # Maps suffix (e.g. '__type') → raw SQL expression.
     _companion_overrides: Optional[Dict[str, str]] = None
+    # A value known numeric whose datatype is a COLUMN (a SUM / AVG, typed per group,
+    # issues/325): `is_numeric` cannot read that from the datatype, and without it the
+    # value lost its numeric lane and `__num` companion where it was re-registered
+    numeric_hint: bool = False
 
     @property
     def type_sql(self) -> str:
@@ -284,6 +288,8 @@ class TypedExpr:
     @property
     def is_numeric(self) -> bool:
         """True if the datatype is a known XSD numeric type."""
+        if self.numeric_hint:
+            return True
         if self.datatype is None or self.datatype_is_sql:
             return False
         return self.datatype.startswith(f"{XSD}") and any(
@@ -886,6 +892,7 @@ def infer_expr_type(expr: Any, registry: TypeRegistry) -> TypedExpr:
                 datatype_is_sql=dt_is_sql,
                 lang=lang,
                 lang_is_sql=lang_is_sql,
+                numeric_hint=dt_is_sql and info.typed_lane == "num",
             )
         return TypedExpr(sql="")
 

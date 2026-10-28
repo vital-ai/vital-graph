@@ -140,8 +140,38 @@ def aggregate_columns(agg_var: str, agg_expr, g_alias: str, ctx: EmitContext, *,
                     agg_select.append(f"{_null} AS {agg_sn}{suffix}")
                 _minmax_companions = True
 
+        # SUM / AVG of a variable: the result's datatype is the inputs' promoted type,
+        # per group (XSD numeric promotion: integer < decimal < float < double; AVG
+        # at least decimal). A constant xsd:integer / xsd:decimal answered a group
+        # holding a double as "119"^^xsd:integer where SPARQL gives
+        # "119.0E0"^^xsd:double (issues/325). Carried like MIN / MAX's companions.
+        _sumavg_companions = False
+        if agg_name in ("SUM", "AVG") and input_var:
+            inp_info = ctx.types.get(input_var)
+            if (inp_info and inp_info.sql_name and not inp_info.is_unbound
+                    and getattr(inp_info, "_sql_has_companions", True) and not inp_info.typed_lane):
+                from .sql_type_generation import _promotion_rank_sql, _RANK_TO_DT
+                rank = f"MAX({_promotion_rank_sql(f'{g_alias}.{inp_info.sql_name}__datatype')})"
+                if agg_name == "AVG":
+                    rank = f"GREATEST({rank}, 1)"
+                whens = " ".join(f"WHEN {r} THEN '{uri}'" for r, uri in sorted(_RANK_TO_DT.items(), reverse=True))
+                agg_select += [
+                    f"'L' AS {agg_sn}__type",
+                    f"NULL::uuid AS {agg_sn}__uuid",
+                    f"NULL AS {agg_sn}__lang",
+                    f"(CASE {rank} {whens} END) AS {agg_sn}__datatype",
+                    f"{agg_sql} AS {agg_sn}__num",
+                    f"NULL::boolean AS {agg_sn}__bool",
+                    f"NULL::timestamp AS {agg_sn}__dt",
+                ]
+                _sumavg_companions = True
+
         info = ctx.types.register_aggregate(agg_var, agg_name,
                                              agg_sn, input_var)
+        if _sumavg_companions:
+            # only the datatype: the value column is numeric (its lane), and as a
+            # whole companion set it was ordered like MIN / MAX's text value
+            info.dt_col = f"{agg_sn}__datatype"
 
         if _minmax_companions:
             info.type_col = f"{agg_sn}__type"
