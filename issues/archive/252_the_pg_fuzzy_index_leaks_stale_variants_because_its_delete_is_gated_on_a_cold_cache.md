@@ -4,7 +4,9 @@
 ## contains this fix (`c38ba726`, 2026-10-01 10:18 EDT); dated from the deploy notes, as that build's commit
 ## is in the build repository. The "FIXED LOCALLY" below predates it.
 ##
-## REVIEWED 2026-10-11 — STAYS OPEN: the fix is in production (see DEPLOYED above), so "FIXED LOCALLY" is out of date. REMAINS: the page-boundary alias under-indexing it "noticed, not fixed" is still in `entity_fuzzy_pg.py` `_do_initialize`.
+## RESOLVED 2026-10-28 — the page-boundary alias under-indexing below is fixed (not yet released); nothing else remains.
+##
+## Was (REVIEWED 2026-10-11) — STAYS OPEN: the fix is in production (see DEPLOYED above), so "FIXED LOCALLY" is out of date. REMAINS: the page-boundary alias under-indexing it "noticed, not fixed" is still in `entity_fuzzy_pg.py` `_do_initialize`.
 ##
 ## Status: FIXED LOCALLY 2026-09-29, verified end to end.
 ## **PRODUCTION INDEXES BUILT 2026-09-29** — both valid, both owned by
@@ -452,6 +454,17 @@ Verified: 21 + 21 stale rows injected for `e_dd1kf9fu5g::9`, `fuzzy check`
 reported the drift, `fuzzy sync --since-hours` cleared it, and both tables came
 back to zero stale rows with the check clean. Before this change the incremental
 path left them untouched.
+
+**FIXED 2026-10-28** (was "noticed, not fixed"): `_do_initialize` now pages
+by ENTITY — a CTE takes the next `page_size` entity ids (type join included,
+so a dropped entity cannot shorten a page and end the loop early), and all of
+their alias rows come with them. `page_size` is a parameter (default 50,000)
+so the boundary can be tested. `tests/integration/test_fuzzy_index_pages_by_entity.py`:
+2-entity pages against one page, full rebuild and incremental, identical band
+rows. Checked against the old code: with 2-row pages it lost 210 of the
+fixture's band rows. Production impact: at most one entity per 50,000-row page
+boundary per rebuild lost its trailing aliases; a full rebuild with the fix
+(`migrate_fuzzy_redis_to_pg.py --rebuild`) restores any. The original note:
 
 **Noticed, not fixed** — `last_entity_id = rows[-1]['entity_id']` with
 `entity_id > last_entity_id` on the next page means an entity straddling a page

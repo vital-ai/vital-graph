@@ -573,7 +573,8 @@ class EntityFuzzyIndexPG:
 
     async def initialize(self, pool=None, since=None, chunk_size: int = 5000,
                          skip_lock: bool = False,
-                         skip_if_populated: bool = False) -> int:
+                         skip_if_populated: bool = False,
+                         page_size: int = 50000) -> int:
         """Load entities from the database and build the LSH index.
 
         For full rebuild: truncates band tables, streams all entities,
@@ -616,12 +617,14 @@ class EntityFuzzyIndexPG:
                 raise RuntimeError("Could not acquire advisory lock for fuzzy initialize")
 
         try:
-            return await self._do_initialize(pool, since=since, chunk_size=chunk_size)
+            return await self._do_initialize(pool, since=since, chunk_size=chunk_size,
+                                             page_size=page_size)
         finally:
             if not skip_lock:
                 await self.storage.release_advisory_lock()
 
-    async def _do_initialize(self, pool, since=None, chunk_size: int = 5000) -> int:
+    async def _do_initialize(self, pool, since=None, chunk_size: int = 5000,
+                             page_size: int = 50000) -> int:
         """Inner initialization logic."""
         start = _time_mod.time()
 
@@ -639,37 +642,42 @@ class EntityFuzzyIndexPG:
         phonetic_buffer: List[Tuple[int, bytes, str]] = []
         hash_buffer: Dict[str, str] = {}
 
-        PAGE_SIZE = 50000
+        PAGE_SIZE = page_size
         last_entity_id = ''
 
         while True:
+            # PAGED BY ENTITY, not by joined row (`issues/252`). The rows are
+            # one per (entity, alias), and the page used to be `LIMIT` over
+            # those rows while the next page started at `entity_id >` the last
+            # one: an entity whose alias rows straddled the cut lost the rest,
+            # and its trailing aliases were never indexed. The CTE picks the
+            # next PAGE_SIZE ENTITIES; all of their aliases come with them.
             if since is not None:
-                page_sql = (
-                    "SELECT e.entity_id, e.primary_name, et.type_key, "
-                    "e.country, e.region, e.locality, ea.alias_name, "
-                    "e.is_placeholder_name, ea.is_placeholder_name AS alias_is_placeholder "
-                    "FROM entity e "
-                    "JOIN entity_type et ON et.type_id = e.entity_type_id "
-                    "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
-                    f"AND ea.status != '{RETRACTED}' "
-                    f"WHERE e.status != '{DELETED}' AND e.updated_time >= $1 "
-                    "AND e.entity_id > $2 "
-                    "ORDER BY e.entity_id LIMIT $3"
-                )
+                page_filter = "e.updated_time >= $1 AND e.entity_id > $2"
                 page_args = [since, last_entity_id, PAGE_SIZE]
+                limit_arg = "$3"
             else:
-                page_sql = (
-                    "SELECT e.entity_id, e.primary_name, et.type_key, "
-                    "e.country, e.region, e.locality, ea.alias_name, "
-                    "e.is_placeholder_name, ea.is_placeholder_name AS alias_is_placeholder "
-                    "FROM entity e "
-                    "JOIN entity_type et ON et.type_id = e.entity_type_id "
-                    "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
-                    f"AND ea.status != '{RETRACTED}' "
-                    f"WHERE e.status != '{DELETED}' AND e.entity_id > $1 "
-                    "ORDER BY e.entity_id LIMIT $2"
-                )
+                page_filter = "e.entity_id > $1"
                 page_args = [last_entity_id, PAGE_SIZE]
+                limit_arg = "$2"
+            page_sql = (
+                # The type join is IN the page too: an entity it would drop must
+                # not take a page slot, or a short page would end the loop early.
+                "WITH page AS ("
+                "SELECT e.entity_id FROM entity e "
+                "JOIN entity_type et ON et.type_id = e.entity_type_id "
+                f"WHERE e.status != '{DELETED}' AND {page_filter} "
+                f"ORDER BY e.entity_id LIMIT {limit_arg}) "
+                "SELECT e.entity_id, e.primary_name, et.type_key, "
+                "e.country, e.region, e.locality, ea.alias_name, "
+                "e.is_placeholder_name, ea.is_placeholder_name AS alias_is_placeholder "
+                "FROM page p "
+                "JOIN entity e ON e.entity_id = p.entity_id "
+                "JOIN entity_type et ON et.type_id = e.entity_type_id "
+                "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
+                f"AND ea.status != '{RETRACTED}' "
+                "ORDER BY e.entity_id"
+            )
 
             async with pool.acquire() as conn:
                 rows = await conn.fetch(page_sql, *page_args)
@@ -739,7 +747,7 @@ class EntityFuzzyIndexPG:
                         'is_placeholder_name': row['alias_is_placeholder']})
 
             last_entity_id = rows[-1]['entity_id']
-            if len(rows) < PAGE_SIZE:
+            if len({r['entity_id'] for r in rows}) < PAGE_SIZE:
                 break
 
         # Process last entity
