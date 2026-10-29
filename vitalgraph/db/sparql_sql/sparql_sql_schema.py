@@ -300,6 +300,50 @@ def assert_identifiers_fit(statements, context: str = "") -> None:
         f"supports is {max_space_id_bytes()}.")
 
 
+def quad_po_statistics_sql(space_id: str, quad_table: str) -> str:
+    """Exactly one (predicate_uuid, object_uuid) extended-statistics object on
+    the quad table, named for the space's CURRENT prefix, at target 1000.
+
+    Reconciles rather than creates, because this DDL is replayed on existing
+    spaces (`ensure_space_indexes.py`, the schema migrations) and a space
+    created before storage keys carries the object under its id-based name
+    (`stat_<space id>_quad_po`) on a keyed table. `CREATE STATISTICS IF NOT
+    EXISTS stat_<key>_quad_po` on such a space created a SECOND object on the
+    same columns, and every ANALYZE then built both 1,000-entry MCV lists on
+    the biggest table (found 2026-10-28: 26 old-named objects and one
+    duplicate on the vg test stack). Matched by table and columns, not by
+    name: an old-named object is renamed, a duplicate dropped, and one is
+    created only when the table has none.
+    """
+    name = f"stat_{space_prefix(space_id)}_quad_po"
+    return f"""DO $vg_stat$
+DECLARE
+    rel oid := '{quad_table}'::regclass;
+    cols int2vector;
+    keep text;
+    other record;
+BEGIN
+    SELECT string_agg(a.attnum::text, ' ' ORDER BY a.attnum)::int2vector INTO cols
+      FROM pg_attribute a
+     WHERE a.attrelid = rel AND a.attname IN ('predicate_uuid', 'object_uuid');
+    SELECT stxname INTO keep FROM pg_statistic_ext
+     WHERE stxrelid = rel AND stxkeys = cols
+     ORDER BY (stxname = '{name}') DESC, stxname LIMIT 1;
+    FOR other IN SELECT stxname FROM pg_statistic_ext
+                  WHERE stxrelid = rel AND stxkeys = cols AND stxname <> keep LOOP
+        EXECUTE format('DROP STATISTICS %I', other.stxname);
+    END LOOP;
+    IF keep IS NULL THEN
+        EXECUTE 'CREATE STATISTICS {name} (mcv, ndistinct) '
+                'ON predicate_uuid, object_uuid FROM {quad_table}';
+    ELSIF keep <> '{name}' THEN
+        EXECUTE format('ALTER STATISTICS %I RENAME TO {name}', keep);
+    END IF;
+    EXECUTE 'ALTER STATISTICS {name} SET STATISTICS 1000';
+END
+$vg_stat$"""
+
+
 def max_space_id_bytes() -> int:
     """The longest space id the schema can name objects for.
 
@@ -1802,9 +1846,7 @@ class SparqlSQLSchema:
             # and picks all nested loops -> 60s timeouts. Extended (mcv, ndistinct)
             # stats at a raised target teach it the correlation -> correct estimate ->
             # hash joins. Stats-only, non-destructive; takes effect on ANALYZE.
-            f"CREATE STATISTICS IF NOT EXISTS stat_{space_prefix(space_id)}_quad_po (mcv, ndistinct) "
-            f"ON predicate_uuid, object_uuid FROM {t['rdf_quad']}",
-            f"ALTER STATISTICS stat_{space_prefix(space_id)}_quad_po SET STATISTICS 1000",
+            quad_po_statistics_sql(space_id, t['rdf_quad']),
             # Per-column targets for the heavily-skewed UUID columns (mitigation §5).
             f"ALTER TABLE {t['rdf_quad']} "
             f"ALTER COLUMN predicate_uuid SET STATISTICS 1000, "

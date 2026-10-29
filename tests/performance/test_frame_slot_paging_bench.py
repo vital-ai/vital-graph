@@ -85,8 +85,15 @@ async def paging_space(perf_client, perf_pool):
     # own estimates are current too. Without both, this bench measures plans
     # chosen on absent numbers and reports the timings as if they meant
     # something.
+    from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
     from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
     async with perf_pool.acquire() as conn:
+        # The SERVER created the space (through the API) under a key this
+        # process has never seen: `perf_pool` loaded the keys at session
+        # start, before the space existed. Without this the names below fall
+        # back to the id (`perf_frame_slot_page_rdf_quad`), the setup fails,
+        # and the teardown that deletes the space never runs.
+        await load_storage_keys(conn, SPACE_ID)
         await recompute_stats_tables(conn, SPACE_ID)
         await conn.execute(f"ANALYZE {space_prefix(SPACE_ID)}_rdf_quad")
         await conn.execute(f"ANALYZE {space_prefix(SPACE_ID)}_term")

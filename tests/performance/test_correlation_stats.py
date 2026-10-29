@@ -40,11 +40,13 @@ async def _pick_loaded(conn):
 
 
 def _stats_ddl(space_id):
-    stat = f"stat_{space_prefix(space_id)}_quad_po"
-    return (
-        f"CREATE STATISTICS IF NOT EXISTS {stat} (mcv, ndistinct) "
-        f"ON predicate_uuid, object_uuid FROM {space_prefix(space_id)}_rdf_quad",
-        f"ALTER STATISTICS {stat} SET STATISTICS 1000")
+    """The schema's own statement: exactly one (predicate, object) statistics
+    object, under the space's current name. A hand-written CREATE ... IF NOT
+    EXISTS here used to add a SECOND object beside one named before storage
+    keys, and the DROP below then removed only that second one, so the
+    "without" arm still had statistics (est = actual, 4,170)."""
+    from vitalgraph.db.sparql_sql.sparql_sql_schema import quad_po_statistics_sql
+    return quad_po_statistics_sql(space_id, f"{space_prefix(space_id)}_rdf_quad")
 
 
 @pytest.mark.bench("query.stats.correlated_leaf_estimate")
@@ -54,7 +56,7 @@ async def test_extended_stats_fix_correlation_estimate(perf_pool, perf_record):
         if not space_id:
             pytest.skip("no realistic lead dataset loaded")
         stat = f"stat_{space_prefix(space_id)}_quad_po"
-        create, tune = _stats_ddl(space_id)
+        ensure = _stats_ddl(space_id)
 
         p_slot = _generate_term_uuid(SLOT_PRED, "U")
         # The most common object of the slot predicate is the correlated value.
@@ -68,8 +70,7 @@ async def test_extended_stats_fix_correlation_estimate(perf_pool, perf_record):
                f"WHERE predicate_uuid = $1 AND object_uuid = $2")
         try:
             # WITH extended stats.
-            await conn.execute(create)
-            await conn.execute(tune)
+            await conn.execute(ensure)
             await conn.execute(f"ANALYZE {space_prefix(space_id)}_rdf_quad")
             plan = await explain_json(conn, sql, p_slot, o_val)
             est_with, act = estimated_rows(plan), actual_rows(plan)
@@ -94,6 +95,5 @@ async def test_extended_stats_fix_correlation_estimate(perf_pool, perf_record):
                 f"expected a large underestimate without stats; est={est_without} actual={act}")
         finally:
             # Restore the stats so the shared space is left improved, not degraded.
-            await conn.execute(create)
-            await conn.execute(tune)
+            await conn.execute(ensure)
             await conn.execute(f"ANALYZE {space_prefix(space_id)}_rdf_quad")

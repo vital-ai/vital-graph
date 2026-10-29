@@ -44,24 +44,32 @@ FRAME_TYPE = "urn:Edge_WordnetHyponym"
 SRC = "urn:hasSourceEntity"
 DEST = "urn:hasDestinationEntity"
 
-GROUND_TRUTH_SQL = f"""
+
+def _ground_truth_sql() -> str:
+    """Built when the test runs, NOT at import: `space_prefix` reads the
+    storage keys the session loads (`perf_pool`), and at import time none are
+    loaded yet, so a module-level f-string froze the pre-key name
+    (`wordnet_frames_rdf_quad`) into the SQL while the skip check, evaluated
+    later, found the keyed table and let the test run into it."""
+    p = space_prefix(SPACE)
+    return f"""
 SELECT count(DISTINCT val.object_uuid)
-FROM {space_prefix(SPACE)}_rdf_quad ft
-JOIN {space_prefix(SPACE)}_term pft ON pft.term_uuid = ft.predicate_uuid
+FROM {p}_rdf_quad ft
+JOIN {p}_term pft ON pft.term_uuid = ft.predicate_uuid
  AND pft.term_text = '{HALEY}hasKGFrameType'
-JOIN {space_prefix(SPACE)}_term oft ON oft.term_uuid = ft.object_uuid AND oft.term_text = $1
-JOIN {space_prefix(SPACE)}_rdf_quad es ON es.object_uuid = ft.subject_uuid
-JOIN {space_prefix(SPACE)}_term pes ON pes.term_uuid = es.predicate_uuid
+JOIN {p}_term oft ON oft.term_uuid = ft.object_uuid AND oft.term_text = $1
+JOIN {p}_rdf_quad es ON es.object_uuid = ft.subject_uuid
+JOIN {p}_term pes ON pes.term_uuid = es.predicate_uuid
  AND pes.term_text = '{CORE}hasEdgeSource'
-JOIN {space_prefix(SPACE)}_rdf_quad ed ON ed.subject_uuid = es.subject_uuid
-JOIN {space_prefix(SPACE)}_term ped ON ped.term_uuid = ed.predicate_uuid
+JOIN {p}_rdf_quad ed ON ed.subject_uuid = es.subject_uuid
+JOIN {p}_term ped ON ped.term_uuid = ed.predicate_uuid
  AND ped.term_text = '{CORE}hasEdgeDestination'
-JOIN {space_prefix(SPACE)}_rdf_quad st ON st.subject_uuid = ed.object_uuid
-JOIN {space_prefix(SPACE)}_term pst ON pst.term_uuid = st.predicate_uuid
+JOIN {p}_rdf_quad st ON st.subject_uuid = ed.object_uuid
+JOIN {p}_term pst ON pst.term_uuid = st.predicate_uuid
  AND pst.term_text = '{HALEY}hasKGSlotType'
-JOIN {space_prefix(SPACE)}_term role ON role.term_uuid = st.object_uuid
-JOIN {space_prefix(SPACE)}_rdf_quad val ON val.subject_uuid = ed.object_uuid
-JOIN {space_prefix(SPACE)}_term pval ON pval.term_uuid = val.predicate_uuid
+JOIN {p}_term role ON role.term_uuid = st.object_uuid
+JOIN {p}_rdf_quad val ON val.subject_uuid = ed.object_uuid
+JOIN {p}_term pval ON pval.term_uuid = val.predicate_uuid
  AND pval.term_text = '{HALEY}hasEntitySlotValue'
 WHERE ($2::text IS NULL OR role.term_text = $2)
 """
@@ -76,7 +84,7 @@ async def _skip_unless_loaded(conn):
 
 
 async def _ground_truth(conn, role):
-    return await conn.fetchval(GROUND_TRUTH_SQL, FRAME_TYPE, role)
+    return await conn.fetchval(_ground_truth_sql(), FRAME_TYPE, role)
 
 
 async def _entities(conn, role):
