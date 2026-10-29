@@ -190,7 +190,7 @@ async def main_async(args) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--space", required=True)
+    ap.add_argument("--space", action="append", required=True)
     ap.add_argument("--queries", action="append", default=[],
                     help="a .sparql file or a directory of them (repeatable)")
     ap.add_argument("--from-log", help="application log containing slow_query records")
@@ -203,6 +203,10 @@ def main() -> int:
     for opt in ("host", "port", "user", "password", "database"):
         ap.add_argument(f"--{opt}")
     args = ap.parse_args()
+    # ONE space: a repeated --space used to keep only the last, silently.
+    if args.space and len(args.space) > 1:
+        ap.error("--space was given more than once; this script works on one space")
+    args.space = args.space[0] if args.space else None
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     return asyncio.run(main_async(args))
 
