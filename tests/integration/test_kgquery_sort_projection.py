@@ -106,8 +106,7 @@ def _sorted_sparql(order: str, limit: int = 10, offset: int = 0) -> str:
         entity_type=ENTITY_TYPE,
         sort_criteria=[SortCriteria(
             "entity_frame_slot", slot_type=SLOT_TYPE, slot_class_uri=TEXT_SLOT,
-            frame_path=[FRAME_TYPE], sort_order=order, priority=1)],
-        use_edge_pattern=True)
+            frame_path=[FRAME_TYPE], sort_order=order, priority=1)])
     return KGQueryCriteriaBuilder().build_entity_query_sparql(ec, None, limit, offset)
 
 

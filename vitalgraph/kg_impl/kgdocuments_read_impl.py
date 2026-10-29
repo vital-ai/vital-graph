@@ -59,7 +59,7 @@ class KGDocumentsReadProcessor:
             self._ensure_retriever(backend)
 
             triples = await self.retriever.get_object_triples(
-                space_id, graph_id, document_uri, include_materialized_edges=False
+                space_id, graph_id, document_uri
             )
 
             if not triples:
@@ -126,7 +126,6 @@ class KGDocumentsReadProcessor:
             triples, total_count = await self.retriever.list_objects(
                 space_id, graph_id, _KGDOCUMENT_TYPE_URIS,
                 property_filters=property_filters,
-                include_materialized_edges=False,
                 page_size=page_size,
                 offset=offset,
                 search=search,
@@ -207,7 +206,7 @@ class KGDocumentsReadProcessor:
 
             # Get full triples for each segment
             grouped_triples = await self.retriever.get_objects_by_uris(
-                space_id, graph_id, segment_uris, include_materialized_edges=False
+                space_id, graph_id, segment_uris
             )
 
             # Flatten and convert
@@ -323,7 +322,7 @@ class KGDocumentsReadProcessor:
 
             # Fetch full triples for all URIs
             grouped_triples = await self.retriever.get_objects_by_uris(
-                space_id, graph_id, unique_uris, include_materialized_edges=False
+                space_id, graph_id, unique_uris
             )
 
             all_triples = []

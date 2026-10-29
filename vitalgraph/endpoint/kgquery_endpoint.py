@@ -220,6 +220,23 @@ class KGQueriesEndpoint:
                     message=contains_error,
                 )
 
+            # `direct` mode read materialized `vg-direct:` predicates that no
+            # space has and nothing writes, so it returned nothing, silently
+            # (`issues/298`). Removed; refused with a reason rather than ignored,
+            # so a caller still sending it finds out. Only "edge" remains.
+            query_mode = getattr(query_request.criteria, "query_mode", None) or "edge"
+            if query_mode != "edge":
+                return KGQueryResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=(f"query_mode {query_mode!r} is not supported: direct mode was "
+                             f"removed (it read predicates no space has, and returned "
+                             f"nothing). Omit query_mode, or send 'edge'."),
+                    query_type=str(query_type),
+                    total_count=0,
+                    page_size=query_request.page_size,
+                    offset=query_request.offset,
+                )
+
             # Validate query type
             if query_type not in ["relation", "frame", "entity", "frame_query", "document"]:
                 return KGQueryResponse(
@@ -908,8 +925,6 @@ class KGQueriesEndpoint:
                     ) for sc in criteria.sort_criteria
                 ]
             
-            use_edge_pattern = (criteria.query_mode == "edge") if hasattr(criteria, 'query_mode') else True
-            
             # Convert entity property filters from Pydantic to builder dataclass
             builder_entity_property_filters = None
             # Check top-level criteria first, then source_entity_criteria
@@ -999,7 +1014,6 @@ class KGQueriesEndpoint:
                 frame_criteria=builder_frame_criteria,
                 sort_criteria=builder_sort_criteria,
                 entity_property_filters=builder_entity_property_filters,
-                use_edge_pattern=use_edge_pattern,
                 vector_criteria=builder_vector_criteria,
                 multi_vector_criteria=builder_multi_vector_criteria,
                 geo_criteria=builder_geo_criteria,
@@ -1249,14 +1263,10 @@ class KGQueriesEndpoint:
             self.logger.info(f"Converted builder_frame_criteria count: {len(builder_frame_criteria) if builder_frame_criteria else 0}")
             
             # Build entity query criteria
-            # Map query_mode to use_edge_pattern: "edge" -> True, "direct" -> False
-            use_edge_pattern = (criteria.query_mode == "edge") if hasattr(criteria, 'query_mode') else True
-            
             entity_criteria = BuilderEntityQueryCriteria(
                 entity_type=criteria.source_entity_criteria.entity_type if criteria.source_entity_criteria else None,
                 entity_uris=criteria.source_entity_uris,  # Filter by specific entity URIs if provided
                 frame_criteria=builder_frame_criteria,
-                use_edge_pattern=use_edge_pattern  # Use query_mode from request ("edge" or "direct")
             )
             
             self.logger.info(f"Entity criteria: entity_type={entity_criteria.entity_type}, frame_criteria count={len(entity_criteria.frame_criteria) if entity_criteria.frame_criteria else 0}")
@@ -1828,7 +1838,7 @@ class KGQueriesEndpoint:
 
         if criteria.sort_criteria:
             sort_patterns, _, _, _ = self.query_builder._build_sort_bindings(
-                criteria.sort_criteria, anchor_var="frame", use_edge_pattern=True)
+                criteria.sort_criteria, anchor_var="frame")
             where_clauses.extend(sort_patterns)
         
         where_clause = " ".join(where_clauses)

@@ -1,13 +1,10 @@
 """
-Centralized utilities for retrieving graph objects with configurable materialized edge filtering.
+Centralized utilities for retrieving graph objects.
 
-This module provides a single point of control for all graph object retrieval operations,
-ensuring consistent handling of materialized edge predicates across the codebase.
-
-Materialized edge predicates (vg-direct:hasEntityFrame, vg-direct:hasFrame, vg-direct:hasSlot)
-are optimization triples created for query performance. They should be filtered out
-in most operations to prevent VitalSigns conversion errors, but included in deletion and update
-operations to ensure complete cleanup.
+This module provides a single point of control for graph object retrieval.
+(It used to filter the materialized `vg-direct:` edge predicates out of reads;
+no space has them and nothing writes them, so that went with KGQuery's direct
+mode, `issues/298`.)
 """
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
@@ -151,36 +148,6 @@ def _bindings_to_objects(bindings: List[Dict]) -> List[Any]:
         return objs
 
 
-class MaterializedPredicateConstants:
-    """Constants for materialized edge predicates."""
-    
-    MATERIALIZED_PREDICATES = frozenset([
-        'http://vital.ai/vitalgraph/direct#hasEntityFrame',
-        'http://vital.ai/vitalgraph/direct#hasFrame',
-        'http://vital.ai/vitalgraph/direct#hasSlot'
-    ])
-    
-    @classmethod
-    def get_filter_clause(cls, predicate_var: str = "?p") -> str:
-        """
-        Generate SPARQL FILTER clause to exclude materialized predicates.
-        
-        Args:
-            predicate_var: Variable name for predicate (default: "?p")
-            
-        Returns:
-            SPARQL FILTER clause string
-            
-        Example:
-            >>> MaterializedPredicateConstants.get_filter_clause()
-            'FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
-                   ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
-                   ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)'
-        """
-        filters = [f"{predicate_var} != <{pred}>" for pred in cls.MATERIALIZED_PREDICATES]
-        return f"FILTER({' &&\n           '.join(filters)})"
-
-
 class DiscardedOnDeserialise:
     """Predicates `_bindings_to_graph_objects` throws away on arrival.
 
@@ -196,9 +163,7 @@ class DiscardedOnDeserialise:
 
     ONLY FOR READS THAT DESERIALISE. A caller reading quads in order to DELETE
     them needs every one, including these -- filtering there would leave the
-    URIProp quads behind. That is why this is separate from
-    `MaterializedPredicateConstants` and applied per call site rather than
-    folded into the shared `include_materialized_edges` switch.
+    URIProp quads behind. That is why it is applied per call site.
 
     `rdf:type` is deliberately NOT here even though it is redundant with
     `vitaltype` -- both assign the same `type_uri` field, so one of the two is
@@ -219,21 +184,11 @@ class DiscardedOnDeserialise:
 
 class GraphObjectRetriever:
     """
-    Centralized utility for retrieving graph objects with configurable filtering.
-    
-    This class provides a single point of control for all graph object retrieval
-    operations, ensuring consistent handling of materialized edge predicates.
-    
+    Centralized utility for retrieving graph objects.
+
     Usage:
         retriever = GraphObjectRetriever(backend)
-        
-        # Default: filter OUT materialized edges (for VitalSigns conversion)
         triples = await retriever.get_object_triples(space_id, graph_id, uri)
-        
-        # Explicit: include materialized edges (for deletion operations)
-        triples = await retriever.get_object_triples(
-            space_id, graph_id, uri, include_materialized_edges=True
-        )
     """
     
     def __init__(self, backend):
@@ -251,7 +206,6 @@ class GraphObjectRetriever:
         space_id: str,
         graph_id: str,
         object_uri: str,
-        include_materialized_edges: bool = False
     ) -> List[tuple]:
         """
         Retrieve all triples for a single object.
@@ -260,17 +214,10 @@ class GraphObjectRetriever:
             space_id: Space identifier
             graph_id: Graph identifier (full URI)
             object_uri: URI of object to retrieve
-            include_materialized_edges: If False (default), exclude vg-direct:* predicates
             
         Returns:
             List of (subject, predicate, object) triples
-            
-        Use Cases:
-            - include_materialized_edges=False (default): Read operations, VitalSigns conversion
-            - include_materialized_edges=True: Deletion operations, update operations
         """
-        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
-        
         query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
             PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
@@ -278,12 +225,11 @@ class GraphObjectRetriever:
             SELECT ?p ?o WHERE {{
                 GRAPH <{graph_id}> {{
                     <{object_uri}> ?p ?o .
-                    {filter_clause}
                 }}
             }}
         """
         
-        self.logger.debug(f"Retrieving object triples for {object_uri} (include_materialized={include_materialized_edges})")
+        self.logger.debug(f"Retrieving object triples for {object_uri}")
         results = await self.backend.execute_sparql_query(space_id, query)
         
         # Handle dictionary response format (unwrap if needed)
@@ -334,7 +280,6 @@ class GraphObjectRetriever:
         space_id: str,
         graph_id: str,
         entity_uri: str,
-        include_materialized_edges: bool = False
     ) -> List[tuple]:
         """
         Retrieve complete entity graph (entity + all related objects via hasKGGraphURI).
@@ -343,16 +288,10 @@ class GraphObjectRetriever:
             space_id: Space identifier
             graph_id: Graph identifier (full URI)
             entity_uri: URI of entity
-            include_materialized_edges: If False (default), exclude vg-direct:* predicates
             
         Returns:
             List of (subject, predicate, object) triples for entire entity graph
-            
-        Use Cases:
-            - include_materialized_edges=False (default): API responses, VitalSigns conversion
-            - include_materialized_edges=True: Deletion operations
         """
-        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
         
         query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
@@ -369,12 +308,11 @@ class GraphObjectRetriever:
                     # the compensation is what would hide the next breakage.
                     ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
                     ?s ?p ?o .
-                    {filter_clause}
                 }}
             }}
         """
         
-        self.logger.debug(f"Retrieving entity graph for {entity_uri} (include_materialized={include_materialized_edges})")
+        self.logger.debug(f"Retrieving entity graph for {entity_uri}")
         results = await self.backend.execute_sparql_query(space_id, query)
         
         # Handle dictionary response format (unwrap if needed)
@@ -415,7 +353,6 @@ class GraphObjectRetriever:
         space_id: str,
         graph_id: str,
         object_uris: List[str],
-        include_materialized_edges: bool = False
     ) -> Dict[str, List[tuple]]:
         """
         Retrieve triples for multiple objects in a single query (batch operation).
@@ -424,14 +361,9 @@ class GraphObjectRetriever:
             space_id: Space identifier
             graph_id: Graph identifier (full URI)
             object_uris: List of object URIs to retrieve
-            include_materialized_edges: If False (default), exclude vg-direct:* predicates
             
         Returns:
             Dictionary mapping object URI to list of triples
-            
-        Use Cases:
-            - include_materialized_edges=False (default): Batch read operations
-            - include_materialized_edges=True: Batch deletion operations
             
         Performance:
             This method is optimized for batch operations, reducing round trips to the backend.
@@ -439,7 +371,6 @@ class GraphObjectRetriever:
         if not object_uris:
             return {}
         
-        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
         uri_values = ", ".join([f"<{uri}>" for uri in object_uris])
         
         query = f"""
@@ -453,12 +384,11 @@ class GraphObjectRetriever:
                     # magnitude; IN becomes subject_uuid = ANY (...).
                     ?s ?p ?o .
                     FILTER(?s IN ({uri_values}))
-                    {filter_clause}
                 }}
             }}
         """
         
-        self.logger.debug(f"Batch retrieving {len(object_uris)} objects (include_materialized={include_materialized_edges})")
+        self.logger.debug(f"Batch retrieving {len(object_uris)} objects")
         results = await self.backend.execute_sparql_query(space_id, query)
         
         # Handle dictionary response format (unwrap if needed)
@@ -503,7 +433,6 @@ class GraphObjectRetriever:
         space_id: str,
         graph_id: str,
         reference_id: str,
-        include_materialized_edges: bool = False
     ) -> Optional[List[tuple]]:
         """
         Retrieve entity by reference identifier.
@@ -512,16 +441,10 @@ class GraphObjectRetriever:
             space_id: Space identifier
             graph_id: Graph identifier (full URI)
             reference_id: Reference identifier value
-            include_materialized_edges: If False (default), exclude vg-direct:* predicates
             
         Returns:
             List of triples for entity, or None if not found
-            
-        Use Cases:
-            - include_materialized_edges=False (default): API lookups, VitalSigns conversion
-            - include_materialized_edges=True: Deletion by reference ID
         """
-        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
         
         query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
@@ -533,12 +456,11 @@ class GraphObjectRetriever:
                     ?s a haley:KGEntity .
                     ?s aimp:hasReferenceIdentifier "{reference_id}" .
                     ?s ?p ?o .
-                    {filter_clause}
                 }}
             }}
         """
         
-        self.logger.debug(f"Retrieving entity by reference ID '{reference_id}' (include_materialized={include_materialized_edges})")
+        self.logger.debug(f"Retrieving entity by reference ID '{reference_id}'")
         results = await self.backend.execute_sparql_query(space_id, query)
         
         # Handle dictionary response format (unwrap if needed)
@@ -582,7 +504,6 @@ class GraphObjectRetriever:
         space_id: str,
         graph_id: str,
         reference_id: str,
-        include_materialized_edges: bool = False
     ) -> Optional[List[tuple]]:
         """
         Retrieve complete entity graph by reference identifier.
@@ -591,16 +512,10 @@ class GraphObjectRetriever:
             space_id: Space identifier
             graph_id: Graph identifier (full URI)
             reference_id: Reference identifier value
-            include_materialized_edges: If False (default), exclude vg-direct:* predicates
             
         Returns:
             List of triples for entire entity graph, or None if entity not found
-            
-        Use Cases:
-            - include_materialized_edges=False (default): API lookups, VitalSigns conversion
-            - include_materialized_edges=True: Deletion by reference ID
         """
-        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
         
         query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
@@ -615,7 +530,6 @@ class GraphObjectRetriever:
                         ?entity aimp:hasReferenceIdentifier "{reference_id}" .
                         ?entity ?p ?o .
                         BIND(?entity AS ?s)
-                        {filter_clause}
                     }}
                     UNION
                     {{
@@ -625,13 +539,12 @@ class GraphObjectRetriever:
                         ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> ?entity .
                         FILTER(?s != ?entity)
                         ?s ?p ?o .
-                        {filter_clause}
                     }}
                 }}
             }}
         """
         
-        self.logger.debug(f"Retrieving entity graph by reference ID '{reference_id}' (include_materialized={include_materialized_edges})")
+        self.logger.debug(f"Retrieving entity graph by reference ID '{reference_id}'")
         results = await self.backend.execute_sparql_query(space_id, query)
         
         # Handle dictionary response format (unwrap if needed)
@@ -675,10 +588,8 @@ class GraphObjectRetriever:
         space_id: str,
         graph_id: str,
         entity_uri: str,
-        include_materialized_edges: bool = False
     ) -> List[Any]:
         """Retrieve complete entity graph as GraphObjects (fast path, no rdflib)."""
-        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
         
         query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
@@ -695,7 +606,6 @@ class GraphObjectRetriever:
                     # the compensation is what would hide the next breakage.
                     ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
                     ?s ?p ?o .
-                    {filter_clause}
                 }}
             }}
         """
@@ -728,7 +638,6 @@ class GraphObjectRetriever:
         space_id: str,
         graph_id: str,
         object_uris: List[str],
-        include_materialized_edges: bool = False
     ) -> Dict[str, List[Any]]:
         """The objects themselves for a list of URIs, in one query.
 
@@ -742,7 +651,6 @@ class GraphObjectRetriever:
         if not object_uris:
             return {}
 
-        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
         in_list = ", ".join(f"<{u}>" for u in object_uris)
 
         query = f"""
@@ -753,7 +661,6 @@ class GraphObjectRetriever:
                 GRAPH <{graph_id}> {{
                     ?s ?p ?o .
                     FILTER(?s IN ({in_list}))
-                    {filter_clause}
                 }}
             }}
         """
@@ -781,7 +688,6 @@ class GraphObjectRetriever:
         space_id: str,
         graph_id: str,
         entity_uris: List[str],
-        include_materialized_edges: bool = False
     ) -> Dict[str, List[Any]]:
         """Entity graphs for a PAGE of entities, in one query.
 
@@ -804,10 +710,9 @@ class GraphObjectRetriever:
         if not entity_uris:
             return {}
 
-        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
         # Every row this returns is deserialised by `_bindings_to_graph_objects`,
         # which discards URIProp unread. See `DiscardedOnDeserialise`.
-        filter_clause += "\n                    " + DiscardedOnDeserialise.get_filter_clause()
+        filter_clause = DiscardedOnDeserialise.get_filter_clause()
         in_list = ", ".join(f"<{u}>" for u in entity_uris)
 
         # ONE branch, because the entity is a member of its own graph: it
@@ -891,10 +796,8 @@ class GraphObjectRetriever:
         space_id: str,
         graph_id: str,
         reference_id: str,
-        include_materialized_edges: bool = False
     ) -> Optional[List[Any]]:
         """Retrieve complete entity graph by reference ID as GraphObjects (fast path, no rdflib)."""
-        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
         
         query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
@@ -908,7 +811,6 @@ class GraphObjectRetriever:
                         ?entity aimp:hasReferenceIdentifier "{reference_id}" .
                         ?entity ?p ?o .
                         BIND(?entity AS ?s)
-                        {filter_clause}
                     }}
                     UNION
                     {{
@@ -917,7 +819,6 @@ class GraphObjectRetriever:
                         ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> ?entity .
                         FILTER(?s != ?entity)
                         ?s ?p ?o .
-                        {filter_clause}
                     }}
                 }}
             }}
@@ -1076,7 +977,6 @@ class GraphObjectRetriever:
         graph_id: str,
         type_uris: List[str],
         property_filters: Optional[Dict[str, str]] = None,
-        include_materialized_edges: bool = False,
         page_size: int = 100,
         offset: int = 0,
         search: Optional[str] = None,
@@ -1090,7 +990,6 @@ class GraphObjectRetriever:
             graph_id: Graph identifier (full URI)
             type_uris: List of type URIs to filter by (UNION)
             property_filters: Optional dict of property URI -> value URI pairs for additional filtering
-            include_materialized_edges: If False (default), exclude vg-direct:* predicates
             page_size: Number of objects per page
             offset: Number of objects to skip
             search: Optional search text to filter by hasName or URI
@@ -1099,12 +998,11 @@ class GraphObjectRetriever:
         Returns:
             Tuple of (list of RDFLib triples, total count or -1 if include_count=False)
         """
-        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
         subquery_filter = self._build_subject_filters(type_uris, property_filters, search)
         
         # --- Fast default path: page by subject_uuid instead of ORDER BY ?s ---
         # Engages only for the plain type-only listing (no property/search
-        # filters, materialized edges excluded). Keys on rdf:type with the same
+        # filters). Keys on rdf:type with the same
         # type_uris the SPARQL uses, so the page/count equal the SPARQL results;
         # only the page's subjects are resolved to text (avoids resolving every
         # URI to sort). Default order becomes subject_uuid (stable).
@@ -1114,7 +1012,7 @@ class GraphObjectRetriever:
         )
         fast_uris = None
         if (not property_filters and not search
-                and not include_materialized_edges and graph_is_uri(graph_id)):
+                and graph_is_uri(graph_id)):
             fast_uris = await fast_typed_subject_page(
                 self.backend, space_id, graph_id, RDF_TYPE_URI, type_uris,
                 page_size, offset)
@@ -1135,7 +1033,6 @@ class GraphObjectRetriever:
                             # per URI.
                             ?s ?p ?o .
                             FILTER(?s IN ({values}))
-                            {filter_clause}
                         }}
                     }}
                 """
@@ -1161,7 +1058,6 @@ class GraphObjectRetriever:
                             OFFSET {offset}
                         }}
                         ?s ?p ?o .
-                        {filter_clause}
                     }}
                 }}
                 ORDER BY ?s

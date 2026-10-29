@@ -49,7 +49,7 @@ def _sort(slot, order="asc", priority=1):
 def _criteria(*keys, entity_type=_E):
     from vitalgraph.sparql.kg_query_builder import EntityQueryCriteria
     return EntityQueryCriteria(entity_type=entity_type, entity_uris=None,
-                               frame_criteria=[], use_edge_pattern=True,
+                               frame_criteria=[],
                                sort_criteria=list(keys))
 
 

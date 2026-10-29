@@ -42,7 +42,6 @@ class TestFrameNegation(unittest.TestCase):
                     negate=True,
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertIn("FILTER NOT EXISTS", sparql)
@@ -66,7 +65,6 @@ class TestFrameNegation(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertIn("FILTER NOT EXISTS", sparql)
@@ -76,25 +74,6 @@ class TestFrameNegation(unittest.TestCase):
 
     # ── Direct mode ────────────────────────────────────────────────────
 
-    def test_negate_frame_direct_mode(self):
-        """negate=True in direct mode → FILTER NOT EXISTS with vg-direct pattern."""
-        criteria = EntityQueryCriteria(
-            entity_type="http://vital.ai/ontology/haley-ai-kg#KGEntity",
-            frame_criteria=[
-                FrameCriteria(
-                    frame_type="urn:AddressFrame",
-                    negate=True,
-                )
-            ],
-            use_edge_pattern=False,
-        )
-        sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
-        self.assertIn("FILTER NOT EXISTS", sparql)
-        self.assertIn("vg-direct:hasEntityFrame", sparql)
-        self.assertIn("urn:AddressFrame", sparql)
-
-    # ── Mix of negated and non-negated ─────────────────────────────────
-
     def test_mixed_negate_and_normal_frames(self):
         """One negated frame + one normal frame in same query."""
         criteria = EntityQueryCriteria(
@@ -103,7 +82,6 @@ class TestFrameNegation(unittest.TestCase):
                 FrameCriteria(frame_type="urn:ContactFrame", negate=False),
                 FrameCriteria(frame_type="urn:AddressFrame", negate=True),
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         # Should have exactly one FILTER NOT EXISTS (for AddressFrame)
@@ -128,7 +106,6 @@ class TestFrameNegation(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertIn("FILTER NOT EXISTS", sparql)
@@ -158,34 +135,11 @@ class TestSlotNotExists(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertIn("FILTER NOT EXISTS", sparql)
         self.assertIn("urn:ZipCodeSlot", sparql)
         self.assertIn("Edge_hasKGSlot", sparql)
-
-    def test_not_exists_direct_mode(self):
-        """not_exists in direct mode → FILTER NOT EXISTS with vg-direct:hasSlot."""
-        criteria = EntityQueryCriteria(
-            entity_type="http://vital.ai/ontology/haley-ai-kg#KGEntity",
-            frame_criteria=[
-                FrameCriteria(
-                    frame_type="urn:AddressFrame",
-                    slot_criteria=[
-                        SlotCriteria(
-                            slot_type="urn:ZipCodeSlot",
-                            comparator="not_exists",
-                        )
-                    ],
-                )
-            ],
-            use_edge_pattern=False,
-        )
-        sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
-        self.assertIn("FILTER NOT EXISTS", sparql)
-        self.assertIn("vg-direct:hasSlot", sparql)
-        self.assertIn("urn:ZipCodeSlot", sparql)
 
     def test_not_exists_standalone_slot_criteria(self):
         """not_exists as standalone slot_criteria (no frame_type)."""
@@ -197,7 +151,6 @@ class TestSlotNotExists(unittest.TestCase):
                     comparator="not_exists",
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertIn("FILTER NOT EXISTS", sparql)
@@ -216,7 +169,6 @@ class TestSlotNotExists(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertIn("FILTER NOT EXISTS", sparql)
@@ -261,7 +213,6 @@ class TestSlotIsEmpty(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertIn("OPTIONAL", sparql)
@@ -284,7 +235,6 @@ class TestSlotIsEmpty(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertIn("OPTIONAL", sparql)
@@ -310,7 +260,6 @@ class TestSlotIsEmpty(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertIn("OPTIONAL", sparql)
@@ -344,7 +293,6 @@ class TestSlotIsEmpty(unittest.TestCase):
                     comparator="is_empty",
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertIn("OPTIONAL", sparql)
@@ -374,7 +322,6 @@ class TestDoubleNegationValidation(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         with self.assertRaises(ValueError) as ctx:
             self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
@@ -396,7 +343,6 @@ class TestDoubleNegationValidation(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         with self.assertRaises(ValueError) as ctx:
             self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
@@ -419,7 +365,6 @@ class TestDoubleNegationValidation(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         # Should not raise
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
@@ -444,7 +389,6 @@ class TestExistingComparatorsUnchanged(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertNotIn("FILTER NOT EXISTS", sparql)
@@ -461,7 +405,6 @@ class TestExistingComparatorsUnchanged(unittest.TestCase):
                     ],
                 )
             ],
-            use_edge_pattern=True,
         )
         sparql = self.builder.build_entity_query_sparql(criteria, "urn:graph1", 10, 0)
         self.assertNotIn("FILTER NOT EXISTS", sparql)

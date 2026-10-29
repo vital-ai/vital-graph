@@ -87,8 +87,7 @@ async def _sql_at(conn, fx, offset):
         slot_class="http://vital.ai/ontology/haley-ai-kg#KGTextSlot")
     ec = EntityQueryCriteria(
         entity_type=KGENTITY, entity_uris=None,
-        frame_criteria=[_to_builder_frame(f) for f in crit],
-        use_edge_pattern=True)
+        frame_criteria=[_to_builder_frame(f) for f in crit])
     sparql = KGQueryCriteriaBuilder().build_entity_query_sparql(
         ec, fx.graph, PAGE_SIZE, offset)
     client = AsyncSidecarClient(SIDECAR_URL)

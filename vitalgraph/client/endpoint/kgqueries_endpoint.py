@@ -422,7 +422,8 @@ class KGQueriesEndpoint(BaseEndpoint):
             property_projection: Optional list of PropertyProjection columns —
                 DIRECT entity properties, read from the quads and returned in
                 the same entity_values map as the slot columns.
-            query_mode: Query mode: 'edge' or 'direct' (default: 'edge')
+            query_mode: DEPRECATED, always 'edge'. 'direct' was removed from the server
+                (issues/298) and is refused; kept so existing callers still work.
             page_size: Number of results per page (default: 10)
             offset: Offset for pagination (default: 0)
             

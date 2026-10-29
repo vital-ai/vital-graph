@@ -88,7 +88,7 @@ async def _sorted_sql(conn, frame_criteria, fx, sorts, offset=0):
     ec = BuilderEntityQueryCriteria(
         entity_type=KGENTITY, entity_uris=None,
         frame_criteria=[_to_builder_frame(f) for f in frame_criteria],
-        sort_criteria=sorts, use_edge_pattern=True)
+        sort_criteria=sorts)
     sparql = KGQueryCriteriaBuilder().build_entity_query_sparql(
         ec, fx.graph, PAGE_SIZE, offset)
 

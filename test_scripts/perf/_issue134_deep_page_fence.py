@@ -39,8 +39,7 @@ async def gen_sql(conn, fx, crit):
     from vitalgraph.db.jena_sparql.jena_sidecar_client import AsyncSidecarClient
     from vitalgraph.db.sparql_sql.generator import generate_sql
     ec = EntityQueryCriteria(entity_type=gc.KGENTITY, entity_uris=None,
-                             frame_criteria=[_to_builder_frame(f) for f in crit],
-                             use_edge_pattern=True)
+                             frame_criteria=[_to_builder_frame(f) for f in crit])
     sparql = KGQueryCriteriaBuilder().build_entity_query_sparql(ec, fx.graph, gc.PAGE_SIZE, OFFSET)
     client = AsyncSidecarClient(os.environ["VG_TEST_SIDECAR_URL"])
     try:

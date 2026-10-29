@@ -80,7 +80,7 @@ class KGQueryCriteria(BaseModel):
     document_criteria: Optional[DocumentSearchCriteria] = Field(default=None, description="Document-specific criteria for query_type='document'")
     
     # Query mode specification (for frame queries)
-    query_mode: str = Field(default="edge", description="Query mode: 'edge' (use Edge_hasEntityKGFrame) or 'direct' (use vg-direct:hasEntityFrame)")
+    query_mode: str = Field(default="edge", description="Always 'edge' (frames and slots through their edge objects). DEPRECATED: 'direct' was removed (issues/298) and is refused; the field will be dropped")
     
     # Source entity specification
     source_entity_criteria: Optional[EntityQueryCriteria] = Field(default=None, description="Criteria for source entities")

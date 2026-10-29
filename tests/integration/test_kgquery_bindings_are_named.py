@@ -82,8 +82,7 @@ def _criteria_sparql(limit: int, offset: int) -> str:
             frame_type=FRAME_TYPE,
             slot_criteria=[SlotCriteria(slot_type=SLOT_TYPE, value="match_me",
                                         comparator="eq")])],
-        sort_criteria=None,
-        use_edge_pattern=True)
+        sort_criteria=None)
     return KGQueryCriteriaBuilder().build_entity_query_sparql(
         ec, None, limit, offset)
 

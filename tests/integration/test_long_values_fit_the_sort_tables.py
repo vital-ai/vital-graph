@@ -83,7 +83,7 @@ def _criteria(value=None, sort=False):
     from vitalgraph.sparql.kg_query_builder import (
         EntityQueryCriteria, FrameCriteria, SlotCriteria, SortCriteria)
     c = EntityQueryCriteria(entity_type=ENTITY_TYPE, entity_uris=None,
-                            frame_criteria=[], use_edge_pattern=True)
+                            frame_criteria=[])
     if value is not None:
         c.frame_criteria = [FrameCriteria(
             frame_type=FRAME_TYPE,

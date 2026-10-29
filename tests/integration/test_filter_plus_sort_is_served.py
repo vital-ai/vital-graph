@@ -40,7 +40,7 @@ def _criteria(with_filter, comparator="eq"):
     from vitalgraph.sparql.kg_query_builder import (
         EntityQueryCriteria, FrameCriteria, SlotCriteria, SortCriteria)
     c = EntityQueryCriteria(entity_type="urn:t:entity:E", entity_uris=None,
-                            frame_criteria=[], use_edge_pattern=True)
+                            frame_criteria=[])
     if with_filter:
         c.frame_criteria = [FrameCriteria(
             frame_type="urn:t:frame:F",

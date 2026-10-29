@@ -24,14 +24,6 @@ from ...utils.db_retry import SparqlQueryFailed
 
 logger = logging.getLogger(__name__)
 
-# Materialized predicates to filter out (same as kg_graph_retrieval_utils)
-_MATERIALIZED_PREDICATES = frozenset([
-    'http://vital.ai/vitalgraph/direct#hasEntityFrame',
-    'http://vital.ai/vitalgraph/direct#hasFrame',
-    'http://vital.ai/vitalgraph/direct#hasSlot',
-])
-
-
 _XSD = 'http://www.w3.org/2001/XMLSchema#'
 _RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
 _VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
@@ -61,12 +53,6 @@ def _convert_literal(value_str: str, datatype: Optional[str]):
         except ValueError:
             return value_str
     return value_str
-
-
-def _materialized_filter(pred_var: str = "?p") -> str:
-    """SPARQL FILTER clause to exclude materialized predicates."""
-    clauses = [f"{pred_var} != <{p}>" for p in _MATERIALIZED_PREDICATES]
-    return f"FILTER({' && '.join(clauses)})"
 
 
 class SparqlSQLDbObjects:
@@ -443,10 +429,6 @@ class SparqlSQLDbObjects:
                     o_val = r['o']
                     o_type = r['o_type']  # 'U' = uri, 'L'/'S' = literal
 
-                    # Skip materialized predicates
-                    if p in _MATERIALIZED_PREDICATES:
-                        continue
-
                     # Extract type URI
                     if p == _RDF_TYPE or p == _VITALTYPE:
                         subjects[s]['type_uri'] = o_val
@@ -555,7 +537,6 @@ class SparqlSQLDbObjects:
                 GRAPH <{graph_id}> {{
                     VALUES ?s {{ {uri_values} }}
                     ?s ?p ?o .
-                    {_materialized_filter()}
                 }}
             }}
             """

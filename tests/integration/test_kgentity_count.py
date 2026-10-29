@@ -156,7 +156,8 @@ class TestEntityCount:
             f"a sorted listing should now be served from entity_prop_sort, "
             f"returning [] for an empty graph rather than {served!r}")
 
-    async def test_shared_list_objects_fast_path(self, backend_adapter, space_impl, count_space):
+    async def test_shared_list_objects_fast_path(self, backend_adapter, space_impl, count_space,
+                                                 monkeypatch):
         """The generic list_objects fast path (KGTypes/KGRelations) matches SPARQL.
 
         Keys on rdf:type like the SPARQL, orders by subject_uuid, and the count
@@ -217,11 +218,16 @@ class TestEntityCount:
         assert set(subs1) | set(subs2) == created
 
         # Fallback path (fast path disabled) still returns the same subjects.
-        # include_materialized_edges=True disables the fast path per its guard,
-        # so this exercises the original SPARQL subquery branch.
+        # The fast helper declining (None) is what sends `list_objects` to the
+        # original SPARQL subquery branch. (This used to be forced with
+        # `include_materialized_edges=True`, removed with `issues/298`.)
+        from vitalgraph.kg_impl import kg_backend_utils as _kbu
+
+        async def _decline(*a, **k):
+            return None
+        monkeypatch.setattr(_kbu, "fast_typed_subject_page", _decline)
         tr_fb, _ = await retr.list_objects(
-            count_space, graph, [KGTYPE], page_size=50, offset=0,
-            include_materialized_edges=True, include_count=False)
+            count_space, graph, [KGTYPE], page_size=50, offset=0, include_count=False)
         assert set(_subjects_in_order(tr_fb)) == created
 
     async def test_frames_fast_path_by_vitaltype_and_assertion_default(

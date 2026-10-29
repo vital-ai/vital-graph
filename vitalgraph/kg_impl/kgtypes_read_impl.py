@@ -45,7 +45,7 @@ class KGTypesReadProcessor:
             
             # Use centralized retriever (filters OUT materialized edges by default)
             triples = await self.retriever.get_object_triples(
-                space_id, graph_id, kgtype_uri, include_materialized_edges=False
+                space_id, graph_id, kgtype_uri
             )
             
             if not triples:
@@ -102,7 +102,7 @@ class KGTypesReadProcessor:
             
             # Use centralized retriever (filters OUT materialized edges by default)
             grouped_triples = await self.retriever.get_objects_by_uris(
-                space_id, graph_id, kgtype_uris, include_materialized_edges=False
+                space_id, graph_id, kgtype_uris
             )
             
             # Flatten grouped triples into a single list
@@ -823,7 +823,6 @@ OFFSET {offset}
             triples, total_count = await self.retriever.list_objects(
                 space_id, graph_id, kgtype_uris,
                 property_filters=None,
-                include_materialized_edges=False,
                 page_size=page_size,
                 offset=offset,
                 search=search,

@@ -1465,7 +1465,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                          object_uri: str) -> BackendOperationResult:
         try:
             triples = await self.retriever.get_object_triples(
-                space_id, graph_id, object_uri, include_materialized_edges=False
+                space_id, graph_id, object_uri
             )
             if not triples:
                 return BackendOperationResult(success=True, message="Object not found", objects=[])
@@ -1483,7 +1483,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                entity_uri: str) -> BackendOperationResult:
         try:
             objects = await self.retriever.get_entity_graph_as_objects(
-                space_id, graph_id, entity_uri, include_materialized_edges=False
+                space_id, graph_id, entity_uri
             )
             if not objects:
                 return BackendOperationResult(
@@ -1497,7 +1497,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                          reference_id: str) -> BackendOperationResult:
         try:
             triples = await self.retriever.get_entity_by_reference_id(
-                space_id, graph_id, reference_id, include_materialized_edges=False
+                space_id, graph_id, reference_id
             )
             if not triples:
                 return BackendOperationResult(success=True, message="Not found", objects=[])
@@ -1511,7 +1511,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                                reference_id: str) -> BackendOperationResult:
         try:
             objects = await self.retriever.get_entity_graph_by_reference_id_as_objects(
-                space_id, graph_id, reference_id, include_materialized_edges=False
+                space_id, graph_id, reference_id
             )
             if not objects:
                 return BackendOperationResult(

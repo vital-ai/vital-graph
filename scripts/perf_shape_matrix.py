@@ -182,8 +182,7 @@ async def sql_for(conn, criteria, space, graph, entity_type, page_size, sidecar)
 
     ec = EntityQueryCriteria(
         entity_type=entity_type, entity_uris=None,
-        frame_criteria=[_to_builder_frame(f) for f in criteria],
-        use_edge_pattern=True)
+        frame_criteria=[_to_builder_frame(f) for f in criteria])
     sparql = KGQueryCriteriaBuilder().build_entity_query_sparql(
         ec, graph, page_size, 0)
 

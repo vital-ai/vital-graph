@@ -261,8 +261,7 @@ async def _criteria_to_gen(conn, frame_criteria, fx, entity_type=KGENTITY,
 
     entity_criteria = BuilderEntityQueryCriteria(
         entity_type=entity_type, entity_uris=None,
-        frame_criteria=[_to_builder_frame(f) for f in frame_criteria],
-        use_edge_pattern=True)
+        frame_criteria=[_to_builder_frame(f) for f in frame_criteria])
     sparql = KGQueryCriteriaBuilder().build_entity_query_sparql(
         entity_criteria, fx.graph, page_size or PAGE_SIZE, 0)
 

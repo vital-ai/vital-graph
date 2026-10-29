@@ -57,7 +57,7 @@ def _criteria(value, slot_type=SLOT, slot_class_uri=DT_SLOT):
     from vitalgraph.sparql.kg_query_builder import (
         EntityQueryCriteria, FrameCriteria, SlotCriteria)
     c = EntityQueryCriteria(entity_type=ETYPE, entity_uris=None,
-                            frame_criteria=[], use_edge_pattern=True)
+                            frame_criteria=[])
     c.frame_criteria = [FrameCriteria(
         frame_type=FRAME,
         slot_criteria=[SlotCriteria(slot_type=slot_type,

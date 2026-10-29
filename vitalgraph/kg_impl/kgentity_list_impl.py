@@ -49,13 +49,6 @@ _KGENTITY_TYPE_CLAUSE = """{
 
 _KGENTITY_TYPE_CLAUSE_VAR_S = _KGENTITY_TYPE_CLAUSE.replace("?entity", "?s")
 
-_MATERIALIZED_FILTER = (
-    "FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&\n"
-    "       ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&\n"
-    "       ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)"
-)
-
-
 def _extract_bindings(result) -> list:
     """Normalise SPARQL result to a list of binding dicts."""
     # A FAILED query is not an EMPTY one. `execute_sparql_query` returns
@@ -651,7 +644,6 @@ class KGEntityListProcessor:
             f"      OFFSET {offset}\n"
             "    }\n"
             "    ?s ?p ?o .\n"
-            f"    {_MATERIALIZED_FILTER}\n"
             "  }\n"
             "}\n"
             f"ORDER BY {f'{direction}(?sort_val) ?s ?p' if sort_by else '?s ?p'}"
@@ -1094,9 +1086,6 @@ class KGEntityListProcessor:
         query_parts.extend(subquery_parts)
         query_parts.extend([
             "    ?s ?p ?o .",
-            "    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&",
-            "           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&",
-            "           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)",
             "  }",
             "}",
             "ORDER BY ?s ?p"
@@ -1151,17 +1140,11 @@ class KGEntityListProcessor:
             "    {",
             "      ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> ?entity .",
             "      ?s ?p ?o .",
-            "      FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&",
-            "             ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&",
-            "             ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)",
             "    }",
             "    UNION",
             "    {",
             "      ?entity ?p ?o .",
             "      BIND(?entity AS ?s)",
-            "      FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&",
-            "             ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&",
-            "             ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)",
             "    }",
             "  }",
             "}",

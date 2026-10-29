@@ -70,8 +70,7 @@ def _criteria(slot, cls, value):
             frame_type=f"{_NS}:frame:NurtureInfoFrame",
             slot_criteria=[SlotCriteria(slot_type=f"{_NS}:slot:{slot}",
                                         slot_class_uri=_KG + cls,
-                                        value=value, comparator="eq")])],
-        use_edge_pattern=True)
+                                        value=value, comparator="eq")])])
 
 
 @pytest.fixture(scope="module")

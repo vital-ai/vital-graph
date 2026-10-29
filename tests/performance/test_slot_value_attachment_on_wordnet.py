@@ -99,8 +99,7 @@ async def _entities(conn, role):
         EntityQueryCriteria(
             frame_criteria=[FrameCriteria(frame_type=FRAME_TYPE)],
             frame_attachment="slot_value",
-            attachment_slot_type=role,
-            use_edge_pattern=True),
+            attachment_slot_type=role),
         GRAPH, 500_000, 0)
 
     client = AsyncSidecarClient(SIDECAR_URL)

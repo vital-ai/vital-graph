@@ -103,7 +103,6 @@ class KGRelationsReadProcessor:
                     # themselves already follow the requested ordering.
                     grouped = await self.retriever.get_objects_by_uris(
                         space_id, graph_id, ordered_uris,
-                        include_materialized_edges=False,
                     )
                     for uri in ordered_uris:
                         triples.extend(grouped.get(uri, []))
@@ -115,7 +114,6 @@ class KGRelationsReadProcessor:
             triples, total_count = await self.retriever.list_objects(
                 space_id, graph_id, type_uris,
                 property_filters=property_filters if property_filters else None,
-                include_materialized_edges=False,
                 page_size=page_size,
                 offset=offset,
                 include_count=True
@@ -145,7 +143,7 @@ class KGRelationsReadProcessor:
             
             # Use centralized retriever (filters OUT materialized edges by default)
             triples = await self.retriever.get_object_triples(
-                space_id, graph_id, relation_uri, include_materialized_edges=False
+                space_id, graph_id, relation_uri
             )
             
             if not triples:

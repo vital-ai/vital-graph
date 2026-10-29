@@ -469,7 +469,6 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
         entity_criteria = EntityQueryCriteria(
             entity_type="http://vital.ai/ontology/haley-ai-kg#KGEntity",
             frame_criteria=frame_criteria_list,
-            use_edge_pattern=True,
         )
         sparql = query_builder.build_entity_query_sparql(
             entity_criteria, TEST_GRAPH_URI, page_size, offset)
@@ -744,7 +743,6 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
                 ],
             )
         ],
-        use_edge_pattern=True,
     )
     sparql_p1 = query_builder.build_entity_query_sparql(entity_criteria_pg, TEST_GRAPH_URI, 5, 0)
     sparql_p2 = query_builder.build_entity_query_sparql(entity_criteria_pg, TEST_GRAPH_URI, 5, 5)

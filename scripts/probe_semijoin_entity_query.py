@@ -121,8 +121,7 @@ async def main() -> int:
     criteria = EntityQueryCriteria(
         entity_type=ENTITY_TYPE,
         entity_uris=None,
-        frame_criteria=[top],
-        use_edge_pattern=True)
+        frame_criteria=[top])
 
     builder = KGQueryCriteriaBuilder()
     count_mode = os.environ.get("PROBE_COUNT")

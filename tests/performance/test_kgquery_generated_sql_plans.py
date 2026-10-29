@@ -154,7 +154,6 @@ async def _criteria_to_sql(conn, frame_criteria) -> tuple[str, str]:
         entity_type=KGENTITY,
         entity_uris=None,
         frame_criteria=[_to_builder_frame(f) for f in frame_criteria],
-        use_edge_pattern=True,          # query_mode="edge", as the API benches use
     )
     sparql = KGQueryCriteriaBuilder().build_entity_query_sparql(
         entity_criteria, GRAPH_ID, 25, 0)
