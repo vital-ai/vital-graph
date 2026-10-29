@@ -49,6 +49,9 @@ recursive-exclude k8s *
 recursive-exclude bin *
 recursive-exclude devtools *
 recursive-exclude registry *
+# The vg_planner PostgreSQL extension: C sources built into the planner
+# stack's PostgreSQL image, not part of the Python package.
+recursive-exclude pg_extensions *
 
 # Exclude IDE and build artifacts
 recursive-exclude .vscode *

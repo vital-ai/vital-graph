@@ -355,4 +355,9 @@ ignore = [
     # treats it like `scripts/` and `docs/`; this is the matching declaration
     # that keeps check-manifest from asking for it back.
     "devtools/**",
+    # The vg_planner PostgreSQL extension (C sources, regression tests): built
+    # into the planner stack's PostgreSQL image, not shipped in the Python
+    # package. MANIFEST.in excludes it; this keeps check-manifest from asking
+    # for it back (it failed CI once the extension was pushed, 2026-10-29).
+    "pg_extensions/**",
 ]
