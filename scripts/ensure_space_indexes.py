@@ -58,12 +58,16 @@ def pg_env() -> dict:
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--space", required=True)
+    ap.add_argument("--space", action="append", required=True)
     ap.add_argument("--dry-run", action="store_true",
                     help="report what is missing without creating anything")
     ap.add_argument("--no-analyze", action="store_true",
                     help="skip the ANALYZE afterwards")
     a = ap.parse_args()
+    # ONE space: a repeated --space used to keep only the last, silently.
+    if a.space and len(a.space) > 1:
+        ap.error("--space was given more than once; this script works on one space")
+    a.space = a.space[0] if a.space else None
 
     import asyncpg
     from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema

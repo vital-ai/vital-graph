@@ -146,7 +146,7 @@ async def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--space", help="check one space")
+    g.add_argument("--space", action="append", help="check one space")
     g.add_argument("--all", action="store_true", help="sweep every space")
     ap.add_argument("--quiet", action="store_true",
                     help="print only the spaces that are off")
@@ -161,7 +161,7 @@ async def main() -> int:
                 "SELECT table_name FROM information_schema.tables "
                 r"WHERE table_name LIKE '%\_datatype' ORDER BY 1")]
         else:
-            spaces = [a.space]
+            spaces = a.space
 
         bad = []
         for space in spaces:

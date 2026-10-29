@@ -123,7 +123,7 @@ async def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--space")
+    g.add_argument("--space", action="append")
     g.add_argument("--all", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     add_pg_arguments(ap)
@@ -139,7 +139,7 @@ async def main():
     try:
         want = schema_defaults()
         targets = (await geo_config_tables(conn) if a.all
-                   else [f"{space_prefix(a.space)}_geo_config"])
+                   else [f"{space_prefix(sp)}_geo_config" for sp in a.space])
         drifted = 0
         for tbl in targets:
             diffs = await survey_table(conn, tbl, want)

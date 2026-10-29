@@ -198,7 +198,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_pg_arguments(ap)
-    ap.add_argument("--space")
+    ap.add_argument("--space", action="append")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--apply", action="store_true",
                     help="create and populate (default is a dry run)")
@@ -220,7 +220,7 @@ async def main() -> int:
         spaces = ([space_id_for_prefix(r[0]) for r in await conn.fetch(
             "SELECT replace(tablename,'_rdf_quad','') FROM pg_tables "
             "WHERE schemaname='public' AND tablename LIKE '%\\_rdf\\_quad' "
-            "ORDER BY 1")] if args.all else [args.space])
+            "ORDER BY 1")] if args.all else args.space)
         for sp in spaces:
             logger.info("  %s", await migrate_space(conn, sp, args.apply))
         if not args.apply:

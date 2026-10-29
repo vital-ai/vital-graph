@@ -135,7 +135,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     add_pg_arguments(ap)
-    ap.add_argument("--space", help="space id to migrate")
+    ap.add_argument("--space", action="append", help="space id to migrate")
     ap.add_argument("--all", action="store_true", help="every space in the database")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -157,7 +157,7 @@ async def main() -> int:
                 "WHERE schemaname='public' AND tablename LIKE '%\\_rdf\\_stats' "
                 "ORDER BY 1")]
         else:
-            spaces = [args.space]
+            spaces = args.space
         for sp in spaces:
             logger.info("  %s", await migrate_space(conn, sp, dry_run=args.dry_run))
     finally:

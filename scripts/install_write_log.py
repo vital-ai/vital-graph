@@ -48,7 +48,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--space")
+    g.add_argument("--space", action="append")
     g.add_argument("--all", action="store_true")
     ap.add_argument("--apply", action="store_true",
                     help="create what is missing (default is a dry run)")
@@ -66,7 +66,7 @@ async def main() -> int:
         spaces = ([space_id_for_prefix(r[0]) for r in await conn.fetch(
             "SELECT regexp_replace(tablename, '_rdf_quad$', '') FROM pg_tables "
             "WHERE schemaname='public' AND tablename LIKE '%\\_rdf\\_quad' "
-            "ORDER BY 1")] if a.all else [a.space])
+            "ORDER BY 1")] if a.all else a.space)
         if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", pattern_verdict.TABLE):
             logger.info("database: create %s", pattern_verdict.TABLE)
             if a.apply:

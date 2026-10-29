@@ -116,7 +116,7 @@ async def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--space")
+    g.add_argument("--space", action="append")
     g.add_argument("--all", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     add_pg_arguments(ap)
@@ -137,7 +137,7 @@ async def main():
                 "is not immutable. Install the admin DDL first.")
             return 1
 
-        targets = await spaces_on(conn) if a.all else [a.space]
+        targets = await spaces_on(conn) if a.all else a.space
         changed = total_rows = 0
         for sid in targets:
             s = await migrate_space(conn, sid, dry_run=a.dry_run)

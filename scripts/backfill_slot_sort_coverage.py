@@ -153,7 +153,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--space")
+    g.add_argument("--space", action="append")
     g.add_argument("--all", action="store_true")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what is short; change nothing")
@@ -178,7 +178,7 @@ async def main() -> int:
                 "WHERE schemaname='public' "
                 "AND tablename LIKE '%\\_entity\\_slot\\_sort' ORDER BY 1")]
         else:
-            spaces = [args.space]
+            spaces = args.space
         off = 0
         for sp in spaces:
             t0 = time.monotonic()

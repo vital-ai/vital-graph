@@ -206,7 +206,7 @@ async def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--space", help="repair one space")
+    g.add_argument("--space", action="append", help="repair one space")
     g.add_argument("--all", action="store_true",
                    help="repair every space the checker reports as off")
     ap.add_argument("--apply", action="store_true",
@@ -222,7 +222,7 @@ async def main() -> int:
                 "SELECT table_name FROM information_schema.tables "
                 r"WHERE table_name LIKE '%\_datatype' ORDER BY 1")]
         else:
-            spaces = [a.space]
+            spaces = a.space
 
         repaired, failed = 0, 0
         for space in spaces:

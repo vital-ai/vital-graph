@@ -47,9 +47,9 @@ from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa
 
 logger = logging.getLogger("migrate_drop_retired_tables")
 
-async def _spaces(conn, only: str | None) -> list:
+async def _spaces(conn, only: list | None) -> list:
     if only:
-        return [only]
+        return list(only)
     return [r["space_id"] for r in
             await conn.fetch("SELECT space_id FROM space ORDER BY space_id")]
 
@@ -65,7 +65,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_pg_arguments(ap)
-    ap.add_argument("--space", help="one space; default is every space")
+    ap.add_argument("--space", action="append", help="one space; default is every space")
     ap.add_argument("--all", action="store_true", help="every space (explicit)")
     ap.add_argument("--apply", action="store_true",
                     help="actually drop; omitted means dry run")

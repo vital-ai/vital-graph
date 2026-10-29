@@ -219,7 +219,7 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dsn", default=None,
                     help="postgresql://... (defaults to VG_TEST_PG_* env)")
-    ap.add_argument("--space", default=None, help="migrate only this space")
+    ap.add_argument("--space", action="append", help="migrate only this space")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--create-missing", action="store_true",
                     help="also build the index on spaces that never had one")
@@ -228,6 +228,10 @@ def main() -> int:
                          "quad count (the index cannot pay for itself on "
                          "a tiny space)")
     a = ap.parse_args()
+    # ONE space: a repeated --space used to keep only the last, silently.
+    if a.space and len(a.space) > 1:
+        ap.error("--space was given more than once; this script works on one space")
+    a.space = a.space[0] if a.space else None
     return asyncio.run(run(a.dsn or dsn(), a.space, a.dry_run,
                            a.create_missing, a.min_quads))
 

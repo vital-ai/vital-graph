@@ -354,7 +354,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("phase", choices=["plan", "delete", "verify"])
     ap.add_argument("--env", choices=["dev", "prod"], default="prod")
-    ap.add_argument("--space", required=True, help="space to DELETE FROM")
+    ap.add_argument("--space", action="append", required=True, help="space to DELETE FROM")
     ap.add_argument("--graph", default=DEFAULT_GRAPH)
     ap.add_argument("--type", dest="type_uri", default=DEFAULT_TYPE)
     ap.add_argument("--months", default="")
@@ -376,6 +376,10 @@ def main():
                     help="compare every quad against the copy instead of "
                          "checking presence; the copy already verified this")
     a = ap.parse_args()
+    # ONE space: a repeated --space used to keep only the last, silently.
+    if a.space and len(a.space) > 1:
+        ap.error("--space was given more than once; this script works on one space")
+    a.space = a.space[0] if a.space else None
 
     if a.phase == "delete":
         if bool(a.require_copy_in) == bool(a.no_copy_check):

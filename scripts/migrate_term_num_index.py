@@ -146,12 +146,16 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dsn", default=None,
                     help="postgresql://... (defaults to VG_TEST_PG_* env)")
-    ap.add_argument("--space", default=None, help="only this space")
+    ap.add_argument("--space", action="append", help="only this space")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--min-terms", type=int, default=0,
                     help="skip spaces with fewer literal terms than this — the "
                          "index cannot pay for itself on a tiny space")
     a = ap.parse_args()
+    # ONE space: a repeated --space used to keep only the last, silently.
+    if a.space and len(a.space) > 1:
+        ap.error("--space was given more than once; this script works on one space")
+    a.space = a.space[0] if a.space else None
     return asyncio.run(run(a.dsn or dsn(), a.space, a.dry_run,
                            a.min_terms))
 

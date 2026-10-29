@@ -196,7 +196,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="Count KG entities per month via the VitalGraph API")
     ap.add_argument("--env", choices=["dev", "prod"], default="prod")
-    ap.add_argument("--space", default=DEFAULT_SPACE)
+    ap.add_argument("--space", action="append")
     ap.add_argument("--graph", default=DEFAULT_GRAPH)
     ap.add_argument("--type", dest="type_uri", default=DEFAULT_TYPE)
     ap.add_argument("--from", dest="first", help="first month, YYYY-MM")
@@ -209,6 +209,10 @@ def main():
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="show range-search progress on stderr")
     a = ap.parse_args()
+    # ONE space: a repeated --space used to keep only the last, silently.
+    if a.space and len(a.space) > 1:
+        ap.error("--space was given more than once; this script works on one space")
+    a.space = a.space[0] if a.space else DEFAULT_SPACE
 
     env = load_env()
     if a.env == "dev":

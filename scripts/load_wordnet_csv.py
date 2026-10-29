@@ -307,7 +307,7 @@ async def resync_aux(space: str) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--space", required=True)
+    ap.add_argument("--space", action="append", required=True)
     ap.add_argument("--quads-csv", required=True)
     ap.add_argument("--terms-csv", required=True)
     ap.add_argument("--no-truncate", action="store_true")
@@ -319,6 +319,10 @@ def main() -> int:
                          "left without it answers KGQuery frame queries with "
                          "zero rows and no error (issues/041).")
     a = ap.parse_args()
+    # ONE space: a repeated --space used to keep only the last, silently.
+    if a.space and len(a.space) > 1:
+        ap.error("--space was given more than once; this script works on one space")
+    a.space = a.space[0] if a.space else None
     return asyncio.run(run(a.space, a.quads_csv, a.terms_csv,
                            not a.no_truncate, a.keep_indexes, a.skip_resync))
 

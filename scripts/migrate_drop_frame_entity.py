@@ -71,7 +71,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_pg_arguments(ap)
-    ap.add_argument("--space")
+    ap.add_argument("--space", action="append")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--apply", action="store_true",
                     help="actually drop (default is a dry run)")
@@ -95,7 +95,7 @@ async def main() -> int:
         spaces = ([r[0] for r in await conn.fetch(
             "SELECT replace(tablename,'_frame_entity','') FROM pg_tables "
             "WHERE schemaname='public' AND tablename LIKE '%\\_frame\\_entity' "
-            "ORDER BY 1")] if args.all else [args.space])
+            "ORDER BY 1")] if args.all else args.space)
         refused = 0
         for sp in spaces:
             r = await drop_space(conn, sp, args.apply, args.force)

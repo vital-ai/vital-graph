@@ -47,7 +47,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--space")
+    g.add_argument("--space", action="append")
     g.add_argument("--all", action="store_true")
     m = ap.add_mutually_exclusive_group()
     m.add_argument("--round-trip", action="store_true")
@@ -80,7 +80,7 @@ async def main() -> int:
     try:
         spaces = ([r["space_id"] for r in await conn.fetch(
             "SELECT space_id FROM space ORDER BY space_id")]
-            if a.all else [a.space])
+            if a.all else a.space)
         for sp in spaces:
             try:
                 if a.round_trip:

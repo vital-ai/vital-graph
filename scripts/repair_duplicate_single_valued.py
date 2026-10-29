@@ -169,11 +169,15 @@ async def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_pg_arguments(ap)
-    ap.add_argument("--space", required=True, help="space id")
+    ap.add_argument("--space", action="append", required=True, help="space id")
     ap.add_argument("--graph", required=True, help="graph URI")
     ap.add_argument("--apply", action="store_true",
                     help="perform the delete (default is a dry run)")
     args = ap.parse_args()
+    # ONE space: a repeated --space used to keep only the last, silently.
+    if args.space and len(args.space) > 1:
+        ap.error("--space was given more than once; this script works on one space")
+    args.space = args.space[0] if args.space else None
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     print(f"\U0001F5C4  target: {describe_target(args)}", flush=True)
 

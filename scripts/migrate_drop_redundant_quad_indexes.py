@@ -161,9 +161,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dsn", default=None, help="postgresql://... (defaults to VG_TEST_PG_* env)")
-    ap.add_argument("--space", default=None, help="only this space")
+    ap.add_argument("--space", action="append", help="only this space")
     ap.add_argument("--apply", action="store_true", help="drop; without it, report only")
     a = ap.parse_args()
+    # ONE space: a repeated --space used to keep only the last, silently.
+    if a.space and len(a.space) > 1:
+        ap.error("--space was given more than once; this script works on one space")
+    a.space = a.space[0] if a.space else None
     return asyncio.run(run(a.dsn or dsn(), a.space, a.apply))
 
 

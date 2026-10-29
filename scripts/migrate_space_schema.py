@@ -275,7 +275,7 @@ async def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--space", help="space id to migrate")
+    g.add_argument("--space", action="append", help="space id to migrate")
     g.add_argument("--all", action="store_true", help="every space in the database")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would change and make no changes")
@@ -291,7 +291,7 @@ async def main():
     from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
     await load_storage_keys(conn)
     try:
-        targets = await spaces_on(conn) if args.all else [args.space]
+        targets = await spaces_on(conn) if args.all else args.space
         changed = 0
         for sid in targets:
             try:

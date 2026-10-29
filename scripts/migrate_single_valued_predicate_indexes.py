@@ -227,7 +227,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_pg_arguments(ap)
-    ap.add_argument("--space", help="space id")
+    ap.add_argument("--space", action="append", help="space id")
     ap.add_argument("--all", action="store_true", help="every space in the database")
     ap.add_argument("--predicates", nargs="+", metavar="URI",
                     help="index only these, instead of every single-valued "
@@ -254,7 +254,7 @@ async def main() -> int:
                 "WHERE schemaname='public' AND tablename LIKE '%\\_rdf\\_quad' "
                 "ORDER BY 1")]
         else:
-            spaces = [args.space]
+            spaces = args.space
 
         any_blocked = False
         for sp in spaces:

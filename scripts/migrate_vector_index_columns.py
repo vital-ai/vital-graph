@@ -154,7 +154,7 @@ async def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--space")
+    g.add_argument("--space", action="append")
     g.add_argument("--all", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     add_pg_arguments(ap)
@@ -168,7 +168,7 @@ async def main():
                                  password=args.password or None)
     await load_storage_keys(conn)
     try:
-        targets = await spaces_on(conn) if args.all else [args.space]
+        targets = await spaces_on(conn) if args.all else args.space
         changed = 0
         for sid in targets:
             s = await migrate_space(conn, sid, dry_run=args.dry_run)

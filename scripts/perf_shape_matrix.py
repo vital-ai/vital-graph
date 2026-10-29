@@ -299,7 +299,7 @@ async def _fetch(conn, gen):
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--space", required=True)
+    ap.add_argument("--space", action="append", required=True)
     ap.add_argument("--graph", required=True)
     ap.add_argument("--dsn", default=dsn())
     ap.add_argument("--sidecar", default=sidecar_url())
@@ -312,6 +312,10 @@ async def main() -> int:
                          "fixture: a depth-2 base against a depth-1 fixture "
                          "matches nothing and every cell reports VACUOUS.")
     a = ap.parse_args()
+    # ONE space: a repeated --space used to keep only the last, silently.
+    if a.space and len(a.space) > 1:
+        ap.error("--space was given more than once; this script works on one space")
+    a.space = a.space[0] if a.space else None
 
     import asyncpg
     conn = await asyncpg.connect(a.dsn, command_timeout=600)

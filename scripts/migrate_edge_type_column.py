@@ -101,7 +101,7 @@ async def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--space")
+    g.add_argument("--space", action="append")
     g.add_argument("--all", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
@@ -115,7 +115,7 @@ async def main() -> int:
                 "SELECT tablename FROM pg_tables WHERE schemaname='public' "
                 "AND tablename LIKE '%\\_edge' ORDER BY tablename")]
         else:
-            spaces = [a.space]
+            spaces = a.space
 
         worst = 0
         for sp in spaces:
