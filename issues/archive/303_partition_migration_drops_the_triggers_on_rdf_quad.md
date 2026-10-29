@@ -1,6 +1,6 @@
 # 303 — Partition migration drops the triggers on `rdf_quad`
 
-## Status: OPEN, LATENT (reproduced 2026-10-24 on the planner stack). Only `tests/performance/test_partition_pruning.py` calls the migration today.
+## Status: RESOLVED 2026-10-29 (not yet released): the migration carries every trigger on its three tables across the swap. Verified on the vg test stack. Was: OPEN, LATENT (reproduced 2026-10-24 on the planner stack); only `tests/performance/test_partition_pruning.py` calls the migration.
 
 **Related:** `issues/291` (the index-sync trigger), `write_log.py` (the write-log
 trigger), `partition_migrate.py`.
@@ -49,3 +49,25 @@ transaction: `index_sync_trigger.create_sql(space_id)` and, where the space had
 it, `write_log.create_sql(space_id)`. Then test it: the repro script must report
 the same trigger list before and after, and a write after the migration must
 queue a subject and count in the log.
+
+## Fixed, 2026-10-29
+
+Not the two known definitions, as proposed above, but every trigger the
+catalogue holds: `partition_migrate._triggers_of` reads the user-defined
+(non-internal) triggers on `rdf_quad`, `edge` and `frame_slot` with
+`pg_get_triggerdef` before the swap, and replays them after the rename, then
+re-disables any that were disabled. The new table takes the old name, so each
+definition applies unchanged; the trigger functions survive the `DROP ...
+CASCADE`. Any trigger added later, on any of the three tables, comes across
+too, which also settles the "edge and frame_slot were not checked" point above.
+
+Both triggers in use are statement-level with transition tables, which
+PostgreSQL allows on a partitioned parent (they collect the rows of every
+partition), and both derive the space from `TG_TABLE_NAME`, the parent's name.
+
+`tests/integration/test_partition_migration_keeps_the_triggers.py`: the
+trigger list (names and enabled state) is identical after the migration, the
+table is partitioned, and a write afterwards queues its subject for index sync
+and counts in the write log; a disabled trigger stays disabled. Both fail on
+the old code (the list comes back empty). `tests/performance/test_partition_pruning.py`,
+the migration's other caller, passes.

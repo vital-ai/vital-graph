@@ -80,6 +80,19 @@ def _new_core_ddl(t: Dict[str, str], n: int):
     return stmts
 
 
+async def _triggers_of(conn, tables):
+    """`[(table, trigger name, CREATE TRIGGER statement, tgenabled)]` for the
+    user-defined triggers on `tables` (not the internal constraint triggers)."""
+    rows = await conn.fetch(
+        "SELECT c.relname AS tbl, t.tgname, pg_get_triggerdef(t.oid) AS ddl, "
+        "t.tgenabled::text AS enabled "
+        "FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'public' AND c.relname = ANY($1::text[]) "
+        "AND NOT t.tgisinternal ORDER BY c.relname, t.tgname", list(tables))
+    return [(r["tbl"], r["tgname"], r["ddl"], r["enabled"]) for r in rows]
+
+
 async def distinct_quads(conn, space_id: str):
     """Set of distinct (s,p,o,c) — the set-semantics fingerprint of the space."""
     t = SparqlSQLSchema.get_table_names(space_id)
@@ -117,13 +130,29 @@ async def migrate_space_to_partitioned(conn, space_id: str,
     await conn.execute(f"INSERT INTO {f}_new SELECT * FROM {f} ON CONFLICT DO NOTHING")
     new_quads = await conn.fetchval(f"SELECT count(*) FROM {q}_new")
 
-    # 3. swap: drop old (CASCADE frees all index/stat names), rename _new in
+    # 3. swap: drop old (CASCADE frees all index/stat names), rename _new in.
+    #
+    # THE TRIGGERS COME ACROSS (`issues/303`). `LIKE` copies none and the DROP
+    # removes them, so a migrated space silently lost the index-sync outbox
+    # (`issues/291`: vectors and FTS stopped following SPARQL UPDATE, the objects
+    # endpoint and relations) and the write log (`issues/302`). Read from the
+    # catalogue rather than re-created from known definitions, so any trigger
+    # on any of the three tables survives, and in its enabled / disabled state.
+    # The new table takes the old name, so each definition applies unchanged.
+    # Their functions are not dropped with the table, and the definitions are
+    # statement-level (the only kind that may carry transition tables on a
+    # partitioned table), so they fire once on the parent as before.
+    triggers = await _triggers_of(conn, (q, e, f))
     for base in (q, e, f):
         await conn.execute(f"DROP TABLE {base} CASCADE")
         await conn.execute(f"ALTER TABLE {base}_new RENAME TO {base}")
         for i in range(n_partitions):
             await conn.execute(
                 f"ALTER TABLE {base}_new_p{i} RENAME TO {base}_p{i}")
+    for table, name, ddl, enabled in triggers:
+        await conn.execute(ddl)
+        if enabled == "D":
+            await conn.execute(f'ALTER TABLE {table} DISABLE TRIGGER "{name}"')
 
     # 4. rebuild indexes (names freed by the DROP CASCADE); create_space_indexes
     #    is comprehensive — unrelated tables' indexes already exist (IF NOT EXISTS)
