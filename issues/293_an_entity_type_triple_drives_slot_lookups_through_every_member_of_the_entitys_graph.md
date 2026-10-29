@@ -1178,3 +1178,29 @@ bindings identical to the current plan's.
 - ~~A regression test at that shape asserting the ratio~~ done 2026-10-28 (see the stage table's open list).
 - Whether other spaces' dashboards and listings hit the same shape. Any space
   with wide entity graphs and a type-anchored slot query will.
+
+## Production re-measure after v0.0.97 (2026-10-29, read-only)
+
+`prod_explain_ab.py`, production's underwriting space, the current generator,
+5 EXPLAIN ANALYZE runs each, median; compared with the production API timings
+of 2026-10-22 (before v0.0.96) where there are any:
+
+| query | 2026-10-22 API | v0.0.97 exec | rows |
+|---|---:|---:|---:|
+| decision_page | 20,689 ms | **1,019** | 25 |
+| latest_per_deal_by_outcome | 8,069 ms | **1,157** | 3 |
+| category_page | 3,524 ms | **629** | 25 |
+| naics_for_category | 1,866 ms | **307** | 36 |
+| by_reason | 796 ms | **273** | 38 |
+| only_cause | timeout | **586** | 28 |
+| all_of | 223 ms | 272 | 381 (247 then) |
+| by_outcome | 73 ms | 47 | 3 |
+| total | 42 ms | 4 | 1 |
+
+(API times include transfer and the server; EXPLAIN times do not, so the
+comparison is order-of-magnitude. Decisions grew 1,159 -> 1,920.)
+
+**No plan probes a decision's graph members any more**: the fan-out this issue
+is about is gone from production. The two slowest now have a different shape,
+a slot-group CTE rescanned once per outer row, quadratic in decisions:
+`issues/330`.
