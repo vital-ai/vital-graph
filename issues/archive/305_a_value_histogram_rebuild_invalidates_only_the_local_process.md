@@ -1,6 +1,6 @@
 # 305 — A value-histogram rebuild invalidates only the local process
 
-## Status: OPEN — found by reading, 2026-10-24; not reproduced.
+## Status: RESOLVED 2026-10-28 (not yet released); verified on the vg test stack rebuilt for the fix (unit, DAWG conformance, integration and API suites, 0 failures) — reproduced first, then fixed in `resync_value_stats` itself. Was: OPEN, found by reading 2026-10-24, not reproduced.
 
 **Related:** `issues/300` (the same defect for `rdf_stats` / `rdf_pred_stats`,
 fixed), `issues/090` (the value histograms), `issues/264` (TRUNCATE blocking the
@@ -82,3 +82,33 @@ Verify with a test like `test_stats_recompute_invalidates_cache.py`: a listener
 hears it at commit and not on rollback. For the non-atomic claim, also have a
 reader running during a maintenance-style rebuild assert it never sees an empty
 table.
+
+## Reproduced and fixed, 2026-10-28
+
+`tests/integration/test_value_stats_rebuild_is_atomic_and_notifies.py`, 12
+numeric predicates x 400 values, written first and run against the unchanged
+code. All three claims held:
+
+| claim | before |
+|---|---|
+| a reader during the rebuild sees an emptied / partial table | **271 of 284** concurrent reads saw fewer than the 396 rows the table holds before and after, min **0** |
+| other processes are told | no `stats` NOTIFY at all |
+| this process's cache is dropped | not by the function; only by two of its callers |
+
+Fix, in `resync_value_stats` so no caller can skip it (300's shape):
+
+1. One transaction; `DELETE` instead of `TRUNCATE`, so a reader keeps the old
+   histograms under MVCC until COMMIT instead of blocking on ACCESS EXCLUSIVE or
+   reading an empty table. This also settles the "bulk path makes a planner wait
+   for the whole write" point: a DELETE does not block readers.
+2. `pg_notify(CHANNEL_CACHE_INVALIDATE, {"cache_type": "stats", ...})` inside
+   the transaction: delivered at COMMIT, dropped on rollback. The servers'
+   existing handler drops the histograms and freshness verdicts on `stats`.
+3. `invalidate_stats_cache(space_id)` after it, for this process.
+4. The two probes that may fail (`rdf_pred_stats`, the quad-count fallback) run
+   in savepoints, since a failed statement would now abort the rebuild.
+
+After: the same test passes (0 short reads; NOTIFY heard at commit and not on
+rollback; local cache dropped), with the existing value-stats unit and
+integration tests. The callers' own invalidates are now redundant and harmless;
+left in place.

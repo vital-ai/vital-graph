@@ -38,7 +38,9 @@ told.
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from typing import Dict, Optional, Tuple
 from .space_names import space_prefix
 
@@ -69,110 +71,140 @@ async def resync_value_stats(conn, space_id: str,
     quad = f"{space_prefix(space_id)}_rdf_quad"
     term = f"{space_prefix(space_id)}_term"
 
-    await conn.execute(f"TRUNCATE {vstats}")
+    # ONE TRANSACTION, DELETE NOT TRUNCATE (`issues/305`, the shape of
+    # `issues/264` / `300`). It was a TRUNCATE (ACCESS EXCLUSIVE) and then a
+    # separate insert per predicate with no transaction around them, so a
+    # planner reading the histograms in between got an empty or partial table
+    # and cached it: measured, 271 of 284 concurrent reads during a rebuild saw
+    # fewer rows than before or after, most of them none. Inside one
+    # transaction a reader sees the old histograms until COMMIT, then the new.
+    async with conn.transaction():
+        await conn.execute(f"DELETE FROM {vstats}")
 
-    # The freshness reference, captured once per rebuild. See the column comment
-    # in the schema for why this is pred_stats and not total_rows.
-    pred_rows: Dict = {}
-    try:
-        for r in await conn.fetch(
-                f"SELECT predicate_uuid, row_count FROM {space_prefix(space_id)}_rdf_pred_stats"):
-            pred_rows[r["predicate_uuid"]] = r["row_count"]
-    except Exception as exc:
-        logger.debug("resync_value_stats(%s): no pred_stats, freshness "
-                     "reference will be NULL: %s", space_id, exc)
-
-    if not pred_rows:
-        # COUNT FROM THE QUADS INSTEAD. `rdf_pred_stats` is no longer maintained
-        # by the write path -- `recompute_stats_tables` is the only writer
-        # (`issues/142`) and it runs on its own schedule -- so a freshly loaded
-        # space reaches here before the first recompute, with pred_stats empty.
-        #
-        # Falling through with a NULL reference is not a small loss and not a
-        # transient one: `_run_value_stats_refresh` filters on
-        # `vs.pred_rows IS NOT NULL`, so a histogram built without one is
-        # PERMANENTLY invisible to the drift check and never rebuilt. It
-        # silently reverts to the behaviour this column exists to replace, and
-        # "the guard is not running" reads exactly like "the guard found nothing
-        # wrong".
-        #
-        # One grouped aggregate, only when pred_stats is empty, against a
-        # function that is already scanning this table for percentiles. It must
-        # be a real per-predicate count and NOT `total_rows`: total_rows is the
-        # count for one LANE after the typed-value filter, which is a subset.
+        # The freshness reference, captured once per rebuild. See the column comment
+        # in the schema for why this is pred_stats and not total_rows.
+        pred_rows: Dict = {}
+        # A SAVEPOINT each for the two probes that may fail: inside the
+        # rebuild's transaction a failed statement would abort all of it.
         try:
-            for r in await conn.fetch(
-                    f"SELECT predicate_uuid, count(*) AS n FROM {quad} GROUP BY 1"):
-                pred_rows[r["predicate_uuid"]] = r["n"]
-            if pred_rows:
-                logger.info(
-                    "resync_value_stats(%s): rdf_pred_stats is empty, took the "
-                    "freshness reference from the quads for %d predicate(s)",
-                    space_id, len(pred_rows))
+            async with conn.transaction():
+                for r in await conn.fetch(
+                        f"SELECT predicate_uuid, row_count FROM {space_prefix(space_id)}_rdf_pred_stats"):
+                    pred_rows[r["predicate_uuid"]] = r["row_count"]
         except Exception as exc:
-            logger.warning(
-                "resync_value_stats(%s): could not derive a freshness "
-                "reference (%s); histograms built now will be invisible to the "
-                "value-stats drift check until the next rebuild", space_id, exc)
+            logger.debug("resync_value_stats(%s): no pred_stats, freshness "
+                         "reference will be NULL: %s", space_id, exc)
 
-    written = 0
-    counts = {NUM: 0, DT: 0}
+        if not pred_rows:
+            # COUNT FROM THE QUADS INSTEAD. `rdf_pred_stats` is no longer maintained
+            # by the write path -- `recompute_stats_tables` is the only writer
+            # (`issues/142`) and it runs on its own schedule -- so a freshly loaded
+            # space reaches here before the first recompute, with pred_stats empty.
+            #
+            # Falling through with a NULL reference is not a small loss and not a
+            # transient one: `_run_value_stats_refresh` filters on
+            # `vs.pred_rows IS NOT NULL`, so a histogram built without one is
+            # PERMANENTLY invisible to the drift check and never rebuilt. It
+            # silently reverts to the behaviour this column exists to replace, and
+            # "the guard is not running" reads exactly like "the guard found nothing
+            # wrong".
+            #
+            # One grouped aggregate, only when pred_stats is empty, against a
+            # function that is already scanning this table for percentiles. It must
+            # be a real per-predicate count and NOT `total_rows`: total_rows is the
+            # count for one LANE after the typed-value filter, which is a subset.
+            try:
+                async with conn.transaction():
+                    for r in await conn.fetch(
+                            f"SELECT predicate_uuid, count(*) AS n FROM {quad} GROUP BY 1"):
+                        pred_rows[r["predicate_uuid"]] = r["n"]
+                if pred_rows:
+                    logger.info(
+                        "resync_value_stats(%s): rdf_pred_stats is empty, took the "
+                        "freshness reference from the quads for %d predicate(s)",
+                        space_id, len(pred_rows))
+            except Exception as exc:
+                logger.warning(
+                    "resync_value_stats(%s): could not derive a freshness "
+                    "reference (%s); histograms built now will be invisible to the "
+                    "value-stats drift check until the next rebuild", space_id, exc)
 
-    for lane, col in ((NUM, "num_val"), (DT, "dt_val")):
-        # Which predicates carry values in this lane, and how many. Done first
-        # so a predicate with three numeric rows does not get 32 buckets.
-        preds = await conn.fetch(f"""
-            SELECT q.predicate_uuid, count(*) AS n
-            FROM {quad} q
-            JOIN {term} t ON t.term_uuid = q.object_uuid
-            WHERE t.{col} IS NOT NULL
-            GROUP BY 1
-            HAVING count(*) >= $1
-        """, buckets)
+        written = 0
+        counts = {NUM: 0, DT: 0}
 
-        for row in preds:
-            pred, total = row["predicate_uuid"], row["n"]
-            nb = min(buckets, max(2, total // 2))
-
-            src = f"""
-                SELECT t.{col} AS v
+        for lane, col in ((NUM, "num_val"), (DT, "dt_val")):
+            # Which predicates carry values in this lane, and how many. Done first
+            # so a predicate with three numeric rows does not get 32 buckets.
+            preds = await conn.fetch(f"""
+                SELECT q.predicate_uuid, count(*) AS n
                 FROM {quad} q
                 JOIN {term} t ON t.term_uuid = q.object_uuid
-                WHERE q.predicate_uuid = $1 AND t.{col} IS NOT NULL
-            """
-            if total > SAMPLE_THRESHOLD:
-                # ORDER BY random() would sort the whole set, which is the cost
-                # being avoided. A modulo on the uuid text is deterministic,
-                # index-free and uncorrelated with the value.
-                frac = max(1, total // SAMPLE_ROWS)
-                src += f" AND ('x' || substr(q.object_uuid::text, 1, 8))::bit(32)::bigint % {frac} = 0"
+                WHERE t.{col} IS NOT NULL
+                GROUP BY 1
+                HAVING count(*) >= $1
+            """, buckets)
 
-            # nb+1 boundaries: the nb quantile starts AND the maximum. Without
-            # the top boundary the last bucket is open-ended and a value inside
-            # it cannot be interpolated — `score >= 90` estimated 1 row against
-            # 1,547, because nothing was above the highest stored boundary and
-            # the tail collapsed to a single bucket.
-            fracs = [i / nb for i in range(nb)] + [1.0]
-            bounds = await conn.fetchval(
-                f"SELECT percentile_disc($2::float8[]) WITHIN GROUP (ORDER BY v) "
-                f"FROM ({src}) s", pred, fracs)
-            if not bounds:
-                continue
+            for row in preds:
+                pred, total = row["predicate_uuid"], row["n"]
+                nb = min(buckets, max(2, total // 2))
 
-            pr = pred_rows.get(pred)
-            rows = [(pred, lane, i, b, total, pr) for i, b in enumerate(bounds)]
-            if lane == NUM:
-                await conn.executemany(
-                    f"INSERT INTO {vstats} (predicate_uuid, lane, bucket, "
-                    f"lower_num, total_rows, pred_rows) VALUES ($1,$2,$3,$4,$5,$6) "
-                    f"ON CONFLICT DO NOTHING", rows)
-            else:
-                await conn.executemany(
-                    f"INSERT INTO {vstats} (predicate_uuid, lane, bucket, "
-                    f"lower_dt, total_rows, pred_rows) VALUES ($1,$2,$3,$4,$5,$6) "
-                    f"ON CONFLICT DO NOTHING", rows)
-            written += len(rows)
-            counts[lane] += 1
+                src = f"""
+                    SELECT t.{col} AS v
+                    FROM {quad} q
+                    JOIN {term} t ON t.term_uuid = q.object_uuid
+                    WHERE q.predicate_uuid = $1 AND t.{col} IS NOT NULL
+                """
+                if total > SAMPLE_THRESHOLD:
+                    # ORDER BY random() would sort the whole set, which is the cost
+                    # being avoided. A modulo on the uuid text is deterministic,
+                    # index-free and uncorrelated with the value.
+                    frac = max(1, total // SAMPLE_ROWS)
+                    src += f" AND ('x' || substr(q.object_uuid::text, 1, 8))::bit(32)::bigint % {frac} = 0"
+
+                # nb+1 boundaries: the nb quantile starts AND the maximum. Without
+                # the top boundary the last bucket is open-ended and a value inside
+                # it cannot be interpolated — `score >= 90` estimated 1 row against
+                # 1,547, because nothing was above the highest stored boundary and
+                # the tail collapsed to a single bucket.
+                fracs = [i / nb for i in range(nb)] + [1.0]
+                bounds = await conn.fetchval(
+                    f"SELECT percentile_disc($2::float8[]) WITHIN GROUP (ORDER BY v) "
+                    f"FROM ({src}) s", pred, fracs)
+                if not bounds:
+                    continue
+
+                pr = pred_rows.get(pred)
+                rows = [(pred, lane, i, b, total, pr) for i, b in enumerate(bounds)]
+                if lane == NUM:
+                    await conn.executemany(
+                        f"INSERT INTO {vstats} (predicate_uuid, lane, bucket, "
+                        f"lower_num, total_rows, pred_rows) VALUES ($1,$2,$3,$4,$5,$6) "
+                        f"ON CONFLICT DO NOTHING", rows)
+                else:
+                    await conn.executemany(
+                        f"INSERT INTO {vstats} (predicate_uuid, lane, bucket, "
+                        f"lower_dt, total_rows, pred_rows) VALUES ($1,$2,$3,$4,$5,$6) "
+                        f"ON CONFLICT DO NOTHING", rows)
+                written += len(rows)
+                counts[lane] += 1
+
+
+        # EVERY PROCESS, AT COMMIT. Two of the three callers (a large bulk
+        # insert, the maintenance refresh) invalidated only their own process,
+        # so another serving process kept the old histograms and freshness
+        # verdicts. A "stats" NOTIFY is what the servers' handler already
+        # answers by dropping both (`vitalgraphapp_impl.py`); sent inside the
+        # transaction it is delivered at COMMIT and dropped on rollback.
+        from vitalgraph.signal.signal_manager import CHANNEL_CACHE_INVALIDATE
+        await conn.execute(
+            "SELECT pg_notify($1, $2)", CHANNEL_CACHE_INVALIDATE,
+            json.dumps({"cache_type": "stats", "space_id": space_id,
+                        "timestamp": str(time.time())}))
+
+    # And this process, now: the NOTIFY reaches it asynchronously, and a
+    # process with no listener (a script, a test) never hears it.
+    from .generator import invalidate_stats_cache
+    invalidate_stats_cache(space_id)
 
     logger.info("resync_value_stats(%s): %d numeric, %d temporal predicates, "
                 "%d rows", space_id, counts[NUM], counts[DT], written)
