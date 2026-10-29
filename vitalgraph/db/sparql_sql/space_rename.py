@@ -334,6 +334,24 @@ async def object_rename_statements(conn, found: Dict[str, Any],
                           f'ALTER FUNCTION {_quote(name)}({r["args"]}) '
                           f'RENAME TO {_quote(mapped(name))}'))
 
+    # 4b. EXTENDED STATISTICS (`issues/328`). Named for the quad table
+    #     (`stat_<prefix>_quad_po`), so they move WITH it; left behind, every
+    #     re-key stranded the object under the old prefix and a later schema
+    #     replay created a duplicate beside it. Targeted from the TABLE's new
+    #     name rather than by mapping the object's own name, so an object a
+    #     previous re-key already stranded is put right rather than refused.
+    for r in await conn.fetch(
+            "SELECT s.stxname, c.relname AS tbl FROM pg_statistic_ext s "
+            "JOIN pg_class c ON c.oid = s.stxrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])",
+            [t for t in tables if t.endswith("_rdf_quad")]):
+        target = f"stat_{mapped(r['tbl'])[:-len('_rdf_quad')]}_quad_po"
+        if target != r["stxname"]:
+            stmts.append(("statistics",
+                          f'ALTER STATISTICS {_quote(r["stxname"])} RENAME TO '
+                          f'{_quote(target)}'))
+
     # 5. TABLES LAST, including partition children — renaming a partitioned
     #    parent does NOT rename its children (measured).
     for name in tables:

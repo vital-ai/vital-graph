@@ -51,11 +51,30 @@ TABLE AND COLUMNS (`pg_statistic_ext.stxkeys`), not by name:
 then the target is set to 1000. So every replay path now heals an old-named
 space instead of duplicating it. The correlation test uses the same statement.
 
+**Where the old names came from: the re-key and the rename never moved the
+statistics object.** `space_rename.object_rename_statements`, shared by both,
+renamed constraints, triggers, indexes, sequences, functions and tables, not
+`pg_statistic_ext`. So every re-key left `stat_<space id>_quad_po` on the new
+`vgs_<key>_rdf_quad`. It now renames the object with its quad table
+(`stat_<table's new prefix>_quad_po`), targeted from the table's new name so
+an object an earlier re-key stranded is put right, not refused.
+
+The first version of the reconcile statement broke the re-key: its name probe
+creates the schema under the target prefix in a rolled-back savepoint, and on a
+move BACK to the id prefix the space's own stranded object already held
+`stat_<id>_quad_po`. The old `IF NOT EXISTS` skipped silently; the new create
+collided (7 `test_space_rekey` failures). The statement now also handles its
+name held by ANOTHER table's object: renamed to that table's own name, or
+dropped when that table already has one.
+
 ## Verification
 
 `tests/integration/test_quad_statistics_are_reconciled_not_duplicated.py`: a
 new space has exactly one object; an old-named one is renamed; a duplicate is
-dropped; none is created; a replay changes nothing. Applied by hand to the two
+dropped; none is created; a replay changes nothing.
+`tests/integration/test_space_rekey.py` round trips now assert the statistics
+object carries the key's name under the key and the id's name after the move
+back. Applied by hand to the two
 real cases on the vg test stack (`space_lead_dataset_test`: duplicate dropped;
 `sp_lead_dup`: renamed), idempotent on a second run.
 

@@ -373,7 +373,7 @@ gate's unit tests): **0 calls**. Every split in the suite is under a LIMIT, so
 the gate stands aside and keeps it; the 045 bench
 (`test_specific_entity_type_still_pages_cheaply`) passes. The gate cannot have
 changed those shapes. Unrelated failures in the same run, none touching the
-semi-join: three `test_slot_value_attachment_on_wordnet` cases query a
+semi-join, all FIXED 2026-10-28 (b8a9b701 and `issues/328`): three `test_slot_value_attachment_on_wordnet` cases query a
 pre-storage-key table name (`wordnet_frames_rdf_quad`);
 `test_every_space_with_quads_has_predicate_stats` (a space without a
 pred-stats table); `test_extended_stats_fix_correlation_estimate` (Postgres

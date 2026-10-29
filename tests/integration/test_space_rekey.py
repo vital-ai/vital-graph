@@ -124,6 +124,12 @@ class TestARoundTrip:
             seen["left_under_id"] = under_id["total"]
             seen["datatypes"] = await conn.fetchval(
                 f"SELECT count(*) FROM {plan['to_prefix']}_datatype")
+            # The quad statistics move with their table (`issues/328`): left
+            # behind, a later schema replay made a duplicate beside them.
+            seen["stats"] = [r[0] for r in await conn.fetch(
+                "SELECT stxname FROM pg_statistic_ext WHERE stxrelid = $1::regclass",
+                f"{plan['to_prefix']}_rdf_quad")]
+            seen["stats_want"] = f"stat_{plan['to_prefix']}_quad_po"
 
             # Every auto-named object carries what a fresh create under a key of
             # the same length calls it. Compared under a SECOND key because the
@@ -149,6 +155,10 @@ class TestARoundTrip:
         assert report["under_key"]["total"] == before["total"]
         assert report["under_key"]["mismatched"] == []
         assert seen["left_under_id"] == 0
+        assert seen["stats"] == [seen["stats_want"]], seen["stats"]
+        assert [r[0] for r in await pg_conn.fetch(
+            "SELECT stxname FROM pg_statistic_ext WHERE stxrelid = $1::regclass",
+            f"{sp}_rdf_quad")] == [f"stat_{sp}_quad_po"], "statistics not moved back"
         assert all(report["restored"].values()), report["restored"]
         assert seen["differ"] == [], seen["differ"][:5]
         assert seen["compared"] > 100

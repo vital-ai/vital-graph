@@ -333,6 +333,21 @@ BEGIN
                   WHERE stxrelid = rel AND stxkeys = cols AND stxname <> keep LOOP
         EXECUTE format('DROP STATISTICS %I', other.stxname);
     END LOOP;
+    -- The name held by ANOTHER table's object (one a re-key stranded under
+    -- this prefix): that object is misnamed for its own table. It takes its
+    -- table's name, or is dropped when its table already has that one.
+    FOR other IN SELECT s.stxname, c.relname FROM pg_statistic_ext s
+                   JOIN pg_class c ON c.oid = s.stxrelid
+                  WHERE s.stxname = '{name}' AND s.stxrelid <> rel LOOP
+        IF other.relname LIKE '%\\_rdf\\_quad'
+           AND NOT EXISTS (SELECT 1 FROM pg_statistic_ext WHERE stxname =
+                 'stat_' || left(other.relname, -length('_rdf_quad')) || '_quad_po') THEN
+            EXECUTE format('ALTER STATISTICS %I RENAME TO %I', other.stxname,
+                 'stat_' || left(other.relname, -length('_rdf_quad')) || '_quad_po');
+        ELSE
+            EXECUTE format('DROP STATISTICS %I', other.stxname);
+        END IF;
+    END LOOP;
     IF keep IS NULL THEN
         EXECUTE 'CREATE STATISTICS {name} (mcv, ndistinct) '
                 'ON predicate_uuid, object_uuid FROM {quad_table}';
