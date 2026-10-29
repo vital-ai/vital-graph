@@ -73,7 +73,26 @@ MARGIN = 2.0
 NAME = "slot_group_cte"
 _COLS = ("subject_uuid", "predicate_uuid", "object_uuid", "context_uuid")
 
-_fanout_cache: Dict[Tuple[int, str], Optional[float]] = {}
+
+
+class StatsDict(dict):
+    """The loaded `rdf_stats` pairs, carrying memos derived from them.
+
+    The fan-out memo used to be a module dict keyed by `id(quad_stats)`. An id is
+    reused once its object is freed, so a stats dict loaded later (another space,
+    or this space after `invalidate_stats_cache`) could land on a freed one's id
+    and be answered with ITS fan-out: plans priced on another space's numbers,
+    silently (found 2026-10-29 as a CI-only test failure: a fresh empty dict
+    got a freed test dict's id and its cached 1,000). A memo on the object lives
+    exactly as long as the numbers it was derived from. The generator builds
+    the cached stats as one; a plain dict (tests) is computed without a memo.
+    """
+
+    __slots__ = ("memo",)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.memo: Dict[str, Optional[float]] = {}
 
 
 def mean_fanout(quad_stats: dict, pred_uuid: str, pred_stats: Optional[dict] = None,
@@ -88,18 +107,17 @@ def mean_fanout(quad_stats: dict, pred_uuid: str, pred_stats: Optional[dict] = N
     rows = (pred_stats or {}).get(pred_uuid)
     if objects and rows is not None:
         return rows / objects
-    key = (id(quad_stats), pred_uuid)
-    if key in _fanout_cache:
-        return _fanout_cache[key]
+    memo = getattr(quad_stats, "memo", None)
+    if memo is not None and pred_uuid in memo:
+        return memo[pred_uuid]
     n = total = 0
     for (p, _o), rows in quad_stats.items():
         if p == pred_uuid:
             n += 1
             total += rows
     out = (total / n) if n else None
-    if len(_fanout_cache) > 256:
-        _fanout_cache.clear()
-    _fanout_cache[key] = out
+    if memo is not None:
+        memo[pred_uuid] = out
     return out
 
 

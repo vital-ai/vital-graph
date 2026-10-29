@@ -451,7 +451,10 @@ async def _load_quad_stats(
         # Scoped by `lock_uri` there is exactly one row per pair and the sum is
         # that row, so this expression is right in both cases and the consumers
         # below need to know nothing about which one happened.
-        quad_stats: dict = {}
+        # A StatsDict, so the fan-out memo derived from it lives and dies with
+        # it (`slot_group_cte.StatsDict`).
+        from .slot_group_cte import StatsDict
+        quad_stats: dict = StatsDict()
         for r in quad_rows:
             k = (r["predicate_uuid"], r["object_uuid"])
             quad_stats[k] = quad_stats.get(k, 0) + r["row_count"]

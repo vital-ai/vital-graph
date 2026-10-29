@@ -297,3 +297,21 @@ def test_groups_without_a_model_order_set_no_pin(monkeypatch):
     sql, ctx = _emit_with(monkeypatch, model_order=None, with_groups=True)
     assert "AS MATERIALIZED" in sql
     assert not ctx.fixed_join_order
+
+
+def test_a_fanout_is_never_answered_for_a_different_stats_object():
+    """The memo was keyed by `id(quad_stats)`, and an id is reused once its
+    object is freed: a later stats dict could be answered with a freed one's
+    fan-out (it failed this file's no-statistics test on CI, run order only).
+    Pinned without relying on id reuse: a plain dict is recomputed every call,
+    so changing it changes the answer; a StatsDict's memo is its own."""
+    from vitalgraph.db.sparql_sql.slot_group_cte import StatsDict
+    plain = {("p", "a"): 10}
+    assert mean_fanout(plain, "p") == 10
+    plain[("p", "b")] = 30
+    assert mean_fanout(plain, "p") == 20, "answered from a cache keyed by id()"
+
+    one, two = StatsDict({("p", "a"): 1_000}), StatsDict({("p", "a"): 4})
+    assert mean_fanout(one, "p") == 1_000
+    assert mean_fanout(two, "p") == 4
+    assert one.memo == {"p": 1_000} and two.memo == {"p": 4}
