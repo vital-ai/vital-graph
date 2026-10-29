@@ -1,6 +1,6 @@
 # 328 — Replaying the schema duplicated the quad statistics on spaces named before storage keys
 
-## Status: FIXED 2026-10-28, not yet released; verified on the vg test stack rebuilt for the fix (unit, DAWG conformance, integration and API suites, 0 failures). Open for one read-only production check: duplicate or old-named statistics objects.
+## Status: RESOLVED 2026-10-28 (not yet released). Verified on the vg test stack rebuilt for the fix (unit, DAWG conformance, integration and API suites, 0 failures). Production checked read-only: latent there, 0 duplicates, 11 of 11 old-named. DEPLOY NOTE: do not replay the index DDL on production (`ensure_space_indexes.py`, the schema migrations) with pre-328 code.
 
 **Found:** 2026-10-28, while fixing `test_extended_stats_fix_correlation_estimate`
 (it failed with `est = actual = 4,170` where it expected a large underestimate).
@@ -78,9 +78,18 @@ back. Applied by hand to the two
 real cases on the vg test stack (`space_lead_dataset_test`: duplicate dropped;
 `sp_lead_dup`: renamed), idempotent on a second run.
 
-## Remaining
+## Production (2026-10-28, read-only)
 
-* Production, read-only: count `pg_statistic_ext` objects per quad table
-  (more than one = a duplicate made by a replay), and old-named ones. A
-  duplicate is removed by the next replay of the fixed DDL
-  (`ensure_space_indexes.py`); no separate migration is needed.
+`vitalgraph-pg18-prod`, a `default_transaction_read_only` session, one catalog
+query over `pg_statistic_ext` per `*_rdf_quad` table:
+
+| quad tables | statistics objects per table | named for the current prefix | old (space id) name | duplicates |
+|---|---|---|---|---|
+| 11 | 1 each, target 1000 | 0 | **11** | **0** |
+
+Every production space was re-keyed and every statistics object stayed behind,
+so the defect is LATENT there: no replay has run since the re-key. The first
+replay of the index DDL with pre-328 code would put a second object on all 11
+tables, the largest included. With 328 the same replay renames them. Hence the
+deploy note in the status: release first, replay after (or not at all; nothing
+requires it).
