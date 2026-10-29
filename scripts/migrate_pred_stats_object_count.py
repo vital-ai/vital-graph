@@ -104,7 +104,10 @@ async def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     add_pg_arguments(ap)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--space", help="space id to migrate")
+    # REPEATABLE: `--space a --space b`. Single-valued, argparse kept only the
+    # last one silently, so a four-space command migrated one space.
+    g.add_argument("--space", action="append",
+                   help="space id to migrate; repeat for several")
     g.add_argument("--all", action="store_true", help="every space in the `space` table")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-recompute", action="store_true",
@@ -121,7 +124,7 @@ async def main() -> int:
     try:
         spaces = ([r[0] for r in await conn.fetch(
                       "SELECT space_id FROM space ORDER BY space_id")]
-                  if args.all else [args.space])
+                  if args.all else args.space)
         for sp in spaces:
             logger.info("  %s", await migrate_space(
                 conn, sp, dry_run=args.dry_run, recompute=not args.no_recompute))

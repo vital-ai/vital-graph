@@ -1,6 +1,8 @@
 # 269 — A full gen-2 garbage collection every 60 seconds freezes each task for ~150 ms
 
-## Status: FIXED 2026-10-28 — the trigger is VitalSigns' 60 s `gc.collect()` thread, stopped at server startup. Not yet released; confirm in production logs after deploy.
+## Status: RESOLVED — released in v0.0.97; verified on production 2026-10-29: the 60 s forced collection is gone.
+##
+## Was: FIXED 2026-10-28 — the trigger is VitalSigns' 60 s `gc.collect()` thread, stopped at server startup. Not yet released; confirm in production logs after deploy.
 
 ## Cause (2026-10-28)
 
@@ -91,3 +93,14 @@ under stream prefix `ecs-test/`. It contributed 1,909 of the 8,373 warnings in
 the window above, including all the test KG space's lines. Any production log
 analysis must filter on `--log-stream-name-prefix ecs/vitalgraph/`. A separate
 log group for the test task definition belongs to the deploy repo.
+
+## Verified on production, 2026-10-29
+
+Production, v0.0.97 (live 2026-10-29 14:23Z), checked read-only in CloudWatch `/ecs/vitalgraph-prod`, streams `ecs/vitalgraph/`, scoped to the two new tasks (the old tasks drained until ~14:29 and their lines are indistinguishable for this message).
+
+- Both new tasks log `VitalSigns periodic gc.collect() thread stopped` at boot.
+- Every gen-2 pause since is on `MainThread` or `uvloop_0` (never
+  `background_task`), at IRREGULAR intervals (5-94 s apart), with CPU = wall:
+  natural, allocation-triggered collections. No 60 s cadence.
+- What remains is the pause LENGTH and the natural rate, tracked in
+  `issues/278`.

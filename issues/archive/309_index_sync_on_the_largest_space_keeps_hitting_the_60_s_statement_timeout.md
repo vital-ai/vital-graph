@@ -1,6 +1,8 @@
 # 309 — Index sync on the largest space keeps hitting production's 60 s statement timeout
 
-## Status: FIXED 2026-10-25, not yet released (verified read-only against production). Open for: the post-deploy check (`pg_stat_statements` for the lookup, the worker's timeout warnings).
+## Status: RESOLVED — released in v0.0.97 and verified on production 2026-10-29: 0 index-sync statement timeouts on the new tasks over 14:23-15:50Z (65 min steady state from 14:45), against 50-85 an hour before.
+##
+## Was: FIXED 2026-10-25, not yet released (verified read-only against production). Open for: the post-deploy check (`pg_stat_statements` for the lookup, the worker's timeout warnings).
 
 **Related:** `issues/291` (the index-sync queue and its trigger), `issues/294`
 (the consumer deadlock, fixed: 17 `DeadlockDetectedError` in the 29 h before
@@ -236,3 +238,14 @@ one. Each statement needs its own measurement.
   whether it needs to rediscover graphs every cycle, is the question.
 - The coverage probe (#1) also runs ~10,000 times a day: frequency, not just
   plan.
+
+## Verified on production, 2026-10-29
+
+Production, v0.0.97 (live 2026-10-29 14:23Z), checked read-only in CloudWatch `/ecs/vitalgraph-prod`, streams `ecs/vitalgraph/`, scoped to the two new tasks (the old tasks drained until ~14:29 and their lines are indistinguishable for this message).
+
+- **0** `index_sync_worker` statement-timeout lines from either new task, boot
+  to 15:50Z. The 6 seen in the first minutes came from the two OLD tasks while
+  they drained (last at 14:29:11), not from catch-up on the new code.
+- The one timeout on a new task in that window (14:35:59) is the maintenance
+  `edge_integrity` drift probe on the main space — audit item 4 above, a
+  whole-table scan by design, not this issue.

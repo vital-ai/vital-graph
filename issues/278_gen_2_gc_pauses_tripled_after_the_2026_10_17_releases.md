@@ -1,6 +1,6 @@
 # 278 — Gen-2 GC pauses tripled after the 2026-10-17 releases
 
-## Status: OPEN — the per-minute pauses are removed by 269's fix (2026-10-28, not yet released). After deploy: confirm the remaining gen-2 collections in production logs, then archive or continue.
+## Status: OPEN — the 60 s timer is gone (269, verified on production 2026-10-29). Remaining: whether the natural gen-2 collections need a second `gc.freeze()` after warm-up, decided at the 6-hour read with memory (RSS) alongside.
 
 ## 2026-10-28: the minute timer is gone
 
@@ -115,3 +115,16 @@ short containers and `lru_cache` functions are reached; a big container is
 measured, not entered; extra roots are walked; many small caches add up by kind;
 the job is off by default and single-runner. On the vg test stack the census
 registers at a 60 s interval and reports the server's heap under API load.
+
+## Production, first hour after v0.0.97 (2026-10-29)
+
+Both new tasks, 14:45-15:50Z steady state, new-format lines only
+(`"GC PAUSE" "cpu"`): about **44 gen-2 pauses an hour per task at ~190 ms**,
+irregular, CPU = wall, so **~8 s of pause an hour per task**. On Oct 18-19 it was
+~60 x ~480 ms ~= 29 s an hour per task: already ~3.5x less.
+
+Lengths are still climbing (one task 142 -> 194 ms in its first 23 min), as this
+issue recorded for every task: ~6 hours to level off. **Decide at 6 h+**, on
+pause seconds per task-hour, and with RSS over the same window: a second
+`gc.freeze()` after warm-up would shorten the scans, but anything it freezes
+that later becomes cyclic garbage is never collected.

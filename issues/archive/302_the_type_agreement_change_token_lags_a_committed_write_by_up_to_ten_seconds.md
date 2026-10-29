@@ -1,6 +1,8 @@
 # 302 — The type-agreement change token lags a committed write by up to ten seconds
 
-## Status: FIXED 2026-10-28 on the default path (option 1, the write log). Open until the vg test stack runs the full suite on the rebuilt image; live per space once `scripts/install_write_log.py` has run there.
+## Status: RESOLVED — released in v0.0.97; deploy step done on production 2026-10-29: the write log is installed on 11/11 spaces plus `pattern_verdict`, all owned by `vitalgraph_user`, the trigger verified as the app role, 0 write failures, verdicts refreshing on the maintenance cycle.
+##
+## Was: FIXED 2026-10-28 on the default path (option 1, the write log). Open until the vg test stack runs the full suite on the rebuilt image; live per space once `scripts/install_write_log.py` has run there.
 
 **Related:** `issues/182` and `issues/183` (what the absorption is worth),
 `edge_type_agreement.py` (`_stored_verdict`, `refresh_type_agreement`),
@@ -135,3 +137,15 @@ cycle, so production sits near the compacted figure. Compaction needs the
 then a write that makes `rdf:type` disagree with `vitaltype`, read at once from another
 connection: declined. On the code before the fix it is still TRUE (`assert True is None`). And
 the guard handed to the executor moves with a later write (`guard_holds` false).
+
+## Deployed, 2026-10-29
+
+- **Test env** (v0.0.97-test): `pattern_verdict`, 9 write-log tables, 9 enabled
+  triggers; ownership checked.
+- **Production** (v0.0.97-prod): `install_write_log.py --all --apply` as
+  `vitalgraph_user` on all 11 spaces plus `pattern_verdict`; every object owned
+  by `vitalgraph_user`. The trigger fired under the app role in a rolled-back
+  test (insert -> log 0 -> 1 -> ROLLBACK), and 0 write-log / permission errors
+  since the install. 30 `type_agreement` maintenance lines in the first hour:
+  the verdicts are being re-decided against the new token, so absorption comes
+  back space by space.

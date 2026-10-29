@@ -1,6 +1,8 @@
 # 304 — The `object_count` migration runs its recompute under the 60 s `statement_timeout`
 
-## Status: FIXED 2026-10-24, not yet released (hit the same day during the production deploy of `issues/293`; reproduced and verified on the vg test stack). Nothing is wrong in query results; the big spaces just don't get 293's object-count pricing until a recompute fills the column.
+## Status: RESOLVED — `object_count` is filled on every production space (checked 2026-10-29); no manual re-run was needed.
+##
+## Was: FIXED 2026-10-24, not yet released (hit the same day during the production deploy of `issues/293`; reproduced and verified on the vg test stack). Nothing is wrong in query results; the big spaces just don't get 293's object-count pricing until a recompute fills the column.
 
 **Related:** `issues/293` (what added `rdf_pred_stats.object_count`), `issues/275`
 (the same 60 s ceiling, in the analytics job), `issues/136` (in VACUUM).
@@ -135,3 +137,21 @@ so `--all` never reaches it. And an EMPTY space never reads as migrated:
 `test_multivalue` (host) were recomputed, in 0.0 s, on every run. Harmless,
 and FIXED: the probe is now `coalesce(bool_and(…), true)`. `--all --dry-run`
 on both clusters then reports every space `already migrated`.
+
+## Production state, 2026-10-29
+
+Checked read-only on the live cluster: `rdf_pred_stats.object_count` non-NULL
+on every row of every space (main KG space 28/28, actions 21/21, underwriting
+24/24, the two lead spaces 19/19 and 20/20). The script's `--all --dry-run`
+agreed: every space "already migrated".
+
+**Who filled it: the maintenance recompute, not this fix.** `dd37eb47` changed
+only the migration script. The maintenance job's `recompute_stats_tables` has
+always run inside its own `maintenance_timeouts` fence (`issues/136`), hourly
+per space when the data changed, and has written `object_count` since `293`'s
+first stage (in v0.0.96). So each active space was filled by its first
+ordinary recompute after v0.0.96; the earlier belief that the main space was
+still NULL at the v0.0.97 deploy was never checked.
+
+**Also found:** the script's `--space` was single-valued, so `--space a --space
+b` silently migrated only `b`. It is repeatable now.
