@@ -1,13 +1,12 @@
 # 257 — Frame groupings are wrong or missing in real data, and two writers let them in
 
-## Status: OPEN, filed 2026-10-03. The writers are CLOSED and the real data is
-## REPAIRED: dev's six real-data spaces and production's (2026-10-03), census 0,
-## no frame reclassified. No longer blocks `issues/256`. What remains belongs to
-## the deploy and is listed under "STILL TO DO": (1) deploy 0.0.44 or later; (2) straight
-## after, re-run `scripts/repair_frame_groupings.py --apply` on production for
-## anything the old code wrote in between, and confirm the census reads 0;
-## (3) DEFERRED: reload the generated test datasets in both test databases from
-## the fixed generators, and repair the real `sp_sql_lead_dataset` fixture there.
+## Status: OPEN, filed 2026-10-03. Writers CLOSED; real data REPAIRED (2026-10-03) and
+## RE-CHECKED ON PRODUCTION 2026-10-28 (read-only census, after 0.0.44+ is long deployed):
+## 0 in every step on all 10 real-data spaces, so step (2) needs no `--apply`. What remains
+## is (3), DEFERRED: the GENERATED datasets — reload from the fixed generators in both test
+## databases (and repair the real `sp_sql_lead_dataset` fixture there) — and, found by the
+## same census, the WordNet benchmark dataset, which is also loaded IN PRODUCTION and has
+## never conformed (below). Nothing writes to it.
 
 ## The rule (decided 2026-10-03, `issues/256`)
 
@@ -340,8 +339,21 @@ archive and underwriting included, reads 0 in every step. On the way, a
 60s statement timeout on production after running unserialised (lock plan
 resolved no groupings); it rolled back. Ground updates run ~1.25s per batch.
 
-**STILL TO DO.** (1) Deploy 0.0.44 or later (the grouping writers closed,
-`issues/256` frame-graph replace), done separately. (2) Then run the repair again, to catch
+**Production re-check, 2026-10-28** (read-only: the script's own `census_sql`
+on one `default_transaction_read_only` connection to the live cluster, every
+registered space; the production build has carried the closed writers since
+0.0.44): **all 10 real-data spaces read 0 in every step**, `slots linked from
+more than one frame` included. Nothing the old writers wrote got through, so
+no `--apply` was run. The 11th space is the generated WordNet benchmark
+(285,348 frames): step 1b 285,348 (unset form type, ungrouped: Assertion
+today), step 2 285,348, step 3 570,696, step 4 570,696. It was never in the
+2026-10-03 repair (real data only) and is item (3)'s kind of dataset: reload
+from the fixed generator, or drop it from production, rather than ~1.4M
+grouping writes through the production server. No caller writes to it, so its
+frames behave as they always have.
+
+**STILL TO DO.** (1) ~~Deploy 0.0.44 or later~~ (done; production is past it) (the grouping writers closed,
+`issues/256` frame-graph replace), done separately. (2) ~~Then run the repair again~~ (CHECKED 2026-10-28: census 0, nothing to repair), to catch
 anything the old writers wrote in between (`scripts/repair_frame_groupings.py
 --discover-sql ... --apply`). (3) Reload the generated test datasets in both
 test databases from the fixed generators, and repair the real `sp_sql_lead_dataset`
