@@ -1,6 +1,6 @@
 # 328 — Replaying the schema duplicated the quad statistics on spaces named before storage keys
 
-## Status: FIXED 2026-10-28, not yet released. Open until the full suite passes on the rebuilt vg test stack, and production's statistics objects are checked (read-only) for duplicates.
+## Status: FIXED 2026-10-28, not yet released; verified on the vg test stack rebuilt for the fix (unit, DAWG conformance, integration and API suites, 0 failures). Open for one read-only production check: duplicate or old-named statistics objects.
 
 **Found:** 2026-10-28, while fixing `test_extended_stats_fix_correlation_estimate`
 (it failed with `est = actual = 4,170` where it expected a large underestimate).
@@ -80,7 +80,6 @@ real cases on the vg test stack (`space_lead_dataset_test`: duplicate dropped;
 
 ## Remaining
 
-* The full suite on the rebuilt vg test stack.
 * Production, read-only: count `pg_statistic_ext` objects per quad table
   (more than one = a duplicate made by a replay), and old-named ones. A
   duplicate is removed by the next replay of the fixed DDL
