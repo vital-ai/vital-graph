@@ -1,6 +1,8 @@
 # 293 — An entity-type triple drives slot lookups through every member of the entity's graph
 
-## Status: OPEN — tracking the GENERAL solution (2026-10-22). The committed `slot_group_cte` fixes the UW dashboard's shape (six of seven slow queries, identical rows, no perf-suite plan changes) but is a targeted fix: one predicate (`hasKGGraphURI`), one emitter (the flat BGP), and a gate tuned on nine queries. The class (161, 118, 045, 138, 048, 218, this) is open until the generator chooses the driving pattern by selectivity, from statistics it owns. Plan and progress: "General solution" below.
+## Status: OPEN — tracking the GENERAL solution. RELEASED: stages 0-3 (the `slot_group_cte`, fan-out statistics, the cardinality model, the model's join order) and the 2026-10-23 model work in v0.0.96 (live 2026-10-24; `issues/304` was hit deploying them); the later stages (`55e56e4f`, `d438e37f`, `issues/310`'s remainder order) in v0.0.97 (live 2026-10-29). `object_count` is filled on every production space (`issues/304`). Open: `mql_edge_count`'s gate, the `edge_fanout` decision, and a production re-measure of the dashboard. Updated 2026-10-29.
+##
+## Was: OPEN — tracking the GENERAL solution (2026-10-22). The committed `slot_group_cte` fixes the UW dashboard's shape (six of seven slow queries, identical rows, no perf-suite plan changes) but is a targeted fix: one predicate (`hasKGGraphURI`), one emitter (the flat BGP), and a gate tuned on nine queries. The class (161, 118, 045, 138, 048, 218, this) is open until the generator chooses the driving pattern by selectivity, from statistics it owns. Plan and progress: "General solution" below.
 
 **Related:** `planning/planning_performance/uw_decision_reason_sparql_query_plan.md`
 (the dashboard queries, all timings and the per-query breakdown),
@@ -154,8 +156,8 @@ issue in the class, not only this one.
 
 | stage | status |
 |---|---|
-| 0. targeted fix for this shape (`slot_group_cte`) | done, committed, not released |
-| 1. fan-out statistics | done, committed, not released |
+| 0. targeted fix for this shape (`slot_group_cte`) | done, released in v0.0.96 |
+| 1. fan-out statistics | done, released in v0.0.96; `object_count` filled on every production space (304) |
 | 2. cardinality model | done: flat quad BGPs (2026-10-22); EXISTS bodies with their correlated variables bound (60ba280e, 2026-10-23); edge and `frame_slot` tables (06c1422f), the hop-wise path and the absorbed frame type (36dfd53e) |
 | 3. driver by selectivity | done: the model's order, enforced past 10x predicted gain; slot-group CTEs first (03301465); the remainder after them in the model's order (2c7d297e, `issues/310`) |
 | 4. enforcement, generalised | partly: `join_collapse_limit = 1` + `slot_group_cte`; slot-group units priced (2c7d297e) |
@@ -178,7 +180,7 @@ hash anti-join in `issues/320` (production, read-only: 4,890 -> 497 ms).
   dominated the object column and PostgreSQL's fan-out estimate was right).
   Measured: 60 loops for 60 rows as shipped; 18,000 with the rewrites off.
 - The `edge_fanout` maintenance decision (below).
-- Release, then re-measure the dashboard on production.
+- ~~Release~~ (v0.0.96 and v0.0.97); re-measure the dashboard on production.
 - ~~Re-measure the semi-join on edge mode~~ DONE 2026-10-28, below
   ("Stage 6, the semi-join re-measured on edge mode").
 
