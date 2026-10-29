@@ -1,6 +1,8 @@
 # 294 — An index-sync consumer and a stamped write deadlock on the queue
 
-## Status: FIXED 2026-10-22, not yet released: the consumer never waits on a row lock. The defect is in v0.0.95, deployed to production 2026-10-21; production logs not yet checked.
+## Status: RESOLVED — released in v0.0.96 (live 2026-10-24 08:41 EDT) and confirmed in production logs: `DeadlockDetectedError` 17 in the 29 h before v0.0.96, **0** in the 29 h after (CloudWatch `/ecs/vitalgraph-prod`, streams `ecs/vitalgraph/`; counted for `issues/309`, 2026-10-25). Recorded 2026-10-29.
+##
+## Was: FIXED 2026-10-22, not yet released: the consumer never waits on a row lock. The defect was in v0.0.95, deployed to production 2026-10-21.
 
 **Related:** `issues/291` (the queue, its trigger and consumers; its "in key
 order so writers cannot deadlock on the queue rows" is what this contradicts),
