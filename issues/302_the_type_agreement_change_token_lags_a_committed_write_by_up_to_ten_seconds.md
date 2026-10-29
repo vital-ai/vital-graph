@@ -96,6 +96,39 @@ which frames carry which types writes quads in the same transaction.
 verdicts (the maintenance job, or an explicit refresh): a verdict stored before the log has no
 write-log part and is declined once the log is present.
 
+## Measured 2026-10-28: the absorption still fires, and what the log costs
+
+`test_scripts_internal/issue302/absorption_ab.py`, `wordnet_frames` (285,348
+frames) on the vg test stack, the reference frame CONSTRUCT of `issues/178` /
+`182` / `183` (`happy_frame_query.sparql`: `?frame a KGFrame`, `rdf:type`, so
+the STORED verdict decides; `vitaltype` is absorbed unconditionally). Three
+arms, each after a forced verdict refresh; 5 generations each with the verdict
+cache cleared; the guard re-check 20x; then the query under the executor's
+settings. Two full runs; the Mac was swapping, so generation medians moved
+between runs (the `log` arm 48 ms, then 30 ms) and the per-check timing is the
+steadier number. Second run:
+
+| | no log (as before 302) | log, empty | log, 5,000 uncompacted rows |
+|---|---|---|---|
+| absorption fired, `type` verdict | 5/5, TRUE | 5/5, TRUE | 5/5, TRUE |
+| guard to the executor | none | (space, 0, quad oid) | (space, 5000, quad oid) |
+| verdict check ms, min/med/max | 1.7 / 2.1 / 3.2 | 2.3 / 2.5 / 7.5 | 3.3 / 4.3 / 11.8 |
+| generation ms, min/med/max | 24.9 / 25.6 / 2,644 (cold) | 27.5 / 30.5 / 33.5 | 29.0 / 39.4 / 46.9 |
+| guard re-check per execution, ms | — | 0.6 / 1.0 / 2.6 | 0.8 / 1.1 / 1.6 |
+| execution | 10 rows, 22,330 buffers, 322 loops | 10 rows, 22,324, 322 | 10 rows, 22,324, 322 |
+
+Identical result multisets. So: **the absorption fires exactly as before, the
+plan is unchanged**, and the cost of 302 is about +0.4 ms per stored-verdict
+check with a compacted log (this query has two: frame and edge types) plus
+~1 ms for the executor's guard re-check on a query that used a verdict.
+
+The log read sums the log, so it grows with UNCOMPACTED rows: +2.2 ms per check
+at 5,000. Compaction runs in the maintenance cycle (`pattern_verdict.refresh`,
+every 300 s), and the busiest writer measured on production (`issues/253`: 138
+frame writes to one lead in 4 minutes) leaves on the order of 175 rows per
+cycle, so production sits near the compacted figure. Compaction needs the
+`pattern_verdict` table, which `install_write_log.py` installs with the log.
+
 ## Test
 
 `tests/integration/test_type_agreement_verdict_sees_a_write_at_once.py`: a stored TRUE verdict,
