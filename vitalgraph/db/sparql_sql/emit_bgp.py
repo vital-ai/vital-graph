@@ -118,7 +118,9 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
         # A slot group fired here with ?d bound OUTSIDE this BGP (an OPTIONAL
         # field, a VALUES-split join). PostgreSQL underestimates the BGP and
         # re-runs it per outer row, term joins included; materialised, a re-run
-        # is a scan of finished rows (`issues/293`).
+        # is a scan of finished rows (`issues/293`). Still a scan of ALL of
+        # them per row: the join to it is written to be hashed
+        # (`emit_join._hashed_cte_join`, `issues/330`).
         sql = f"WITH bgp_{whole} AS MATERIALIZED (\n{sql}\n) SELECT * FROM bgp_{whole}"
     return sql
 
