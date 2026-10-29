@@ -48,6 +48,42 @@ Read the subtotal as an order of magnitude, not a precise figure: the
 the waste there is the excess rather than the whole. The ANALYZE/VACUUM,
 discovery and probe rows are waste in full — they recompute what did not change.
 
+## Re-measured 2026-10-29: a two-hour rate, not a 57-day fossil
+
+`pg_stat_statements` was never reset (still 2026-07-30), so the table above
+cannot be recomputed from one read. Two read-only snapshots instead, 18:11 and
+20:09 UTC, diffed per (queryid, role), with the `postgres` role (my own EXPLAIN
+runs) excluded and no entry evicted in between
+(`internal_data/pgss_20261029/`). Production on v0.0.97, with `264`
+(one maintenance runner) live.
+
+**1,479 s of execution in 1.97 h: ~5% of the 4 vCPUs.**
+
+| work | seconds | share | was (57 days) |
+|---|---:|---:|---:|
+| integrity / drift probes | 670.3 | 45.3% | ~11.5% |
+| write path (quads, terms, derived tables; one space ingesting) | 459.0 | 31.0% | |
+| prewarm (`issues/271`, new since the baseline) | 201.4 | 13.6% | |
+| user reads (SPARQL, listings) | 110.4 | 7.5% | |
+| vector / FTS segments | 15.1 | 1.0% | 14.8% |
+| `ANALYZE` / `VACUUM` | 6.7 | 0.5% | 21.1% |
+| entity advisory-lock wait | 0.2 | 0.0% | 7.2% |
+| stats recompute | 0.1 | 0.0% | 1.5% |
+| other | 18.6 | 1.3% | |
+
+What moved: `ANALYZE`/`VACUUM` (`236`, `264`) and the lock wait are
+essentially gone; the latter fits `238`'s scan having been what held it, as
+suggested below, though only 83,532 waits fell in the window. The probes are now the
+largest bucket, and **379 s of them (25.6% of all execution) rescanned four
+spaces with no write of any kind in the window**: filed as `issues/331`. The
+rest of the probe time (279 s) is `frame_slot_drift` on the one space taking
+an ingest, a full count every cycle while it is written: `143` recs 3/4
+(incremental counts), as already recorded.
+
+The vector-segment inserts (91 h in the baseline) are 15 s here. How much
+vectorisation the window held was not measured, so this is not evidence the
+2.3x per-space gap is gone.
+
 ## The members
 
 | # | status | what remains |

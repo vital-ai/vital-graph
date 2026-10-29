@@ -74,7 +74,7 @@ a per-node breakdown of the last plan (`/tmp/claude/vg310/after_only_cause_plan.
 
 ## Production check (2026-10-27, read-only, before deploy)
 
-`prod_explain_ab.py`, the generator at 265e40d4 (before) and 875e375d (after), `cardiff_uw`,
+`prod_explain_ab.py`, the generator at 265e40d4 (before) and 875e375d (after), the production underwriting space,
 three EXPLAIN ANALYZE runs each, the executor's pin, all buffers hit:
 
 | | exec ms (median) | rows | plan |

@@ -1,6 +1,6 @@
 # 278 — Gen-2 GC pauses tripled after the 2026-10-17 releases
 
-## Status: OPEN — the 60 s timer is gone (269, verified on production 2026-10-29). Remaining: whether the natural gen-2 collections need a second `gc.freeze()` after warm-up, decided at the 6-hour read with memory (RSS) alongside.
+## Status: OPEN — the 60 s timer is gone (269, verified on production 2026-10-29). 6-hour read done 2026-10-29: pauses back at the pre-regression level (~200 ms, 8 s per task-hour); no second freeze recommended. Remaining: RSS rises ~12 MB/hour, re-read at 24 h.
 
 ## 2026-10-28: the minute timer is gone
 
@@ -128,3 +128,34 @@ issue recorded for every task: ~6 hours to level off. **Decide at 6 h+**, on
 pause seconds per task-hour, and with RSS over the same window: a second
 `gc.freeze()` after warm-up would shorten the scans, but anything it freezes
 that later becomes cyclic garbage is never collected.
+
+## Production, the 6-hour read (2026-10-29, 14:23-21:15Z)
+
+Both v0.0.97 tasks, every `"GC PAUSE" "cpu"` line since boot (601, all gen 2;
+the logger reports pauses of 100 ms and over), CloudWatch, read-only:
+
+| hour (UTC) | pauses / task | pause s / task | |
+|---|---:|---:|---|
+| 14 (37 min) | 25-29 | 4.1-4.4 | boot, ~140 ms each |
+| 15-17 | 39-48 | 7.6-9.5 | |
+| 18 | 26-29 | 5.1-5.8 | |
+| 19-20 | 43-48 | 8.8-9.7 | |
+
+* **Lengths stopped climbing after the first hour**: median 197 ms, p95 220,
+  max 278 over the whole window. The Oct 18 climb (to 480-545 ms) did not
+  happen. That is back at the pre-Oct-17 level (~185 ms flat).
+* **8.0 s of pause per task-hour**, against ~29 s on Oct 18-19: ~3.6x less.
+* **The scans reclaim nothing**: median 0 objects collected per gen-2 pass, 596
+  of 601 under 1,000. The time is the walk over long-lived objects, so a second
+  `gc.freeze()` after warm-up would remove most of it.
+* **RSS** (Container Insights, task `MemoryUtilized`): 1,335-1,342 MB at boot,
+  1,421-1,422 MB at 21:00, rising a steady ~12 MB an hour on both tasks, 35%
+  of the 4,096 MB reservation. Not levelling off in this window.
+
+**Recommendation: no second freeze for now.** The regression this issue was
+filed for is gone, and what remains is ~200 ms pauses at the pre-regression
+rate. A second freeze buys a few seconds a task-hour at the cost of pinning
+whatever is behind the steady RSS growth, which is not yet explained; freezing
+first would hide it. Read the RSS slope again at 24 h: if it levels off, the
+freeze is safe to reconsider; if it does not, run the heap census (above) to
+name the holder.
