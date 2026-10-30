@@ -315,3 +315,56 @@ def test_a_fanout_is_never_answered_for_a_different_stats_object():
     assert mean_fanout(one, "p") == 1_000
     assert mean_fanout(two, "p") == 4
     assert one.memo == {"p": 1_000} and two.memo == {"p": 4}
+
+
+def _with_label(plan):
+    """+ `?v hasLabel ?l` (q4): a leaf on the slot's value with a variable of its own."""
+    plan.tables.append(TableRef(ref_id="q4", kind="quad", table_name=TABLE, alias="q4"))
+    plan.var_slots["v"].positions.append(("q4", "subject_uuid"))
+    plan.var_slots["l"] = VarSlot(name="l", positions=[("q4", "object_uuid")])
+    plan.tagged_constraints += [
+        ("q4", "q4.subject_uuid = q3.object_uuid"),
+        ("q4", "q4.predicate_uuid = __CONST_c_6__"), ("q4", "q4.context_uuid = __CONST_c_9__"),
+    ]
+    plan.leaf_terms[("q4", "predicate_uuid")] = ("urn:hasLabel", "U")
+    return plan
+
+
+_STAR_CARD = {"q0": 1_159, "q1": 1_000_000, "q2": 9_318, "q3": 2_000_000}
+
+
+def test_a_pure_star_gets_the_size_hint():
+    """`issues/330`: anchor + group on one ?d and nothing else. PostgreSQL sized
+    the CTE at 70 for 1,950 and nested-looped it under the anchor (production
+    decision_page 1.0 s, latest_per_deal 1.5 s); the hint is the pin's count."""
+    from vitalgraph.db.sparql_sql.slot_group_cte import SIZE_HINT_NAME
+    plan, ctx = _shape(), _ctx()
+    (g,) = find_groups(plan, ctx, plan.tables, _STAR_CARD, _uuid_of)
+    assert g.size_hint == 9_318
+    assert any(d.name == SIZE_HINT_NAME and d.fired
+               for d in ctx.aliases.plan_decisions.decisions)
+    *_, cte = apply_groups([g], plan.tables, plan.tagged_constraints,
+                           ["q0.subject_uuid AS d__uuid"], _STAR_CARD, reorder_joins)
+    assert "UNION ALL" in cte
+    assert re.search(r"FROM generate_series\(1, 27954\) AS (\w+)\(n\) WHERE \1\.n < 0", cte)
+    assert cte.count("NULL::uuid") == 3 * 4      # every column of q1..q3
+
+
+def test_no_hint_outside_a_pure_star():
+    """A leaf other than an anchor (here one with a variable of its own) is
+    what a corrected estimate can steer PostgreSQL into: naics_for_category
+    went 308 -> 2,276 ms when its CTE was hinted beside a hasKGGraphURI leaf."""
+    plan, ctx = _with_label(_shape()), _ctx()
+    card = dict(_STAR_CARD, q4=9_318)
+    (g,) = find_groups(plan, ctx, plan.tables, card, _uuid_of)
+    assert g.size_hint is None
+    *_, cte = apply_groups([g], plan.tables, plan.tagged_constraints, [], card, reorder_joins)
+    assert "generate_series" not in cte
+
+
+def test_no_hint_for_an_unanchored_group():
+    """An OPTIONAL field's group: no anchor in the BGP to misplace it under."""
+    plan, ctx = _shape(entity_typed=False), _ctx()
+    (g,) = find_groups(plan, ctx, plan.tables,
+                       {"q1": 1_000_000, "q2": 1_159, "q3": 2_000_000}, _uuid_of)
+    assert g.size_hint is None

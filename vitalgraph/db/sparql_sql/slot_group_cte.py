@@ -31,9 +31,11 @@ constant predicate (the graph link, the pin, the value), is emitted as one CTE:
 Inside, the plan is the pin plus primary-key lookups by subject: the cost is
 the pin's size, whatever the estimates. Outside, the group is a set computed
 ONCE. If PostgreSQL still nests it inside a loop, a re-run is a scan of a
-materialised set, not a repeat of the lookups that made the fence slow. It
-only underestimates SMALL pairs, and a small set is cheap to rescan. A large
-pair is in the MCV list and is estimated well enough to be hashed.
+materialised set, not a repeat of the lookups that made the fence slow -- but
+a scan of ALL of it per outer row, and PostgreSQL chooses that loop whenever
+it sizes the CTE and the entity anchor at a few rows each, which it does for
+~2,000-row pairs (`issues/330`: 1,950 x 1,950 on production). In a pure star
+the CTE is therefore told its size (`_size_hints`).
 
 WHEN IT FIRES. Only when the pinned set is clearly smaller than the expansion
 it replaces, from statistics already loaded:
@@ -171,6 +173,8 @@ class SlotGroup:
     pin: str
     pinned: float
     detail: dict = field(default_factory=dict)
+    #: Rows to tell PostgreSQL the CTE holds, or None (`_size_hints`).
+    size_hint: Optional[int] = None
 
 
 def _refs(sql: str, aliases) -> Set[str]:
@@ -290,10 +294,64 @@ def find_groups(plan, ctx, quad_tables, leaf_card: Dict[str, float],
         # Ends in `_cte`, never in an alias: `reorder_joins` finds references
         # by substring (`"q1." in sql`), so `sg_q1.` would read as one to `q1`.
         name = f"sg_{a}_cte"
-        groups.append(SlotGroup(name, members, pin, pinned, detail))
+        groups.append(SlotGroup(name, members, pin, pinned, dict(detail, d_var=d_var)))
         taken |= members
         rec.fired(NAME, "", **detail)
+    _size_hints(groups, by_alias, taken, leaf_terms, var_at, alias_vars, rec)
     return groups
+
+
+SIZE_HINT_NAME = "slot_group_size_hint"
+
+#: `WHERE g < 0` on a `generate_series` column: PostgreSQL has no statistics
+#: for it and uses DEFAULT_INEQ_SEL, 1/3.
+_INEQ_SEL = 3
+
+
+def _size_hints(groups, by_alias, taken, leaf_terms, var_at, alias_vars, rec) -> None:
+    """Tell PostgreSQL each group's size where the BGP is a pure star (`issues/330`).
+
+    PostgreSQL sizes a group's CTE from its slot-type pin, a mid-frequency
+    `(predicate, object)` pair it underestimates (`issues/293`): 70 rows for
+    1,950 on production. The entity anchor, `?d hasKGEntityType <Decision>`, is
+    the same kind of pair. Two small estimates make a nested loop with the CTE
+    inside cheapest, and a CTE has no index, so it is read whole per anchor
+    row: production's decision_page 1,950 x 1,950 rows (1.0 s),
+    latest_per_deal twice (1.5 s).
+
+    The group's size is known exactly (`pinned`, its pin's `rdf_stats` count),
+    and `apply_groups` hands it over: a `UNION ALL` branch that returns no row
+    but that PostgreSQL estimates at `pinned` rows. Measured on production
+    (read-only, hand-edited SQL, timing off, same rows): decision_page 774 ->
+    356 ms, latest_per_deal 1,027 -> 182 ms.
+
+    ONLY IN A PURE STAR: groups joined on one ?d plus anchors (constant
+    predicate and object, ?d their only variable), nothing else. Everywhere
+    else a corrected estimate moves the plan somewhere worse, which is
+    `issues/119` §9's warning: with an ungrouped `hasKGGraphURI` leaf in the
+    BGP PostgreSQL drives from the CTE into that leaf's per-entity fan-out
+    (estimated 14 rows, 1,094 actual; naics_for_category 308 -> 2,276 ms), and
+    on category_page's mixed BGP every variant tried was slower (+16% to
+    +70%). Not an unanchored group (an OPTIONAL field): no anchor to misplace,
+    and no gain measured.
+    """
+    if not groups:
+        return
+    d_vars = {g.detail.get("d_var") for g in groups}
+    others = [b for b in by_alias if b not in taken]
+    pure = (len(d_vars) == 1 and None not in d_vars
+            and all(g.detail.get("anchor") is not None for g in groups)
+            and bool(others)
+            and all(alias_vars.get(b, set()) == d_vars
+                    and (b, "predicate_uuid") in leaf_terms
+                    and (b, "object_uuid") in leaf_terms
+                    and (b, "context_uuid") not in var_at
+                    for b in others))
+    if not pure:
+        return
+    for g in groups:
+        g.size_hint = max(int(g.pinned), 1)
+        rec.fired(SIZE_HINT_NAME, "", group=g.name, rows=g.size_hint)
 
 
 def apply_groups(groups: List[SlotGroup], quad_tables, tagged, inner_cols: List[str],
@@ -328,6 +386,14 @@ def apply_groups(groups: List[SlotGroup], quad_tables, tagged, inner_cols: List[
                         + (" AND ".join(conds) if conds else "TRUE"))
         if first_conds:
             body.append("WHERE " + " AND ".join(first_conds))
+        if g.size_hint:
+            # No row, and an estimate of `size_hint` rows: PostgreSQL estimates
+            # a constant generate_series exactly and `g < 0` at 1/3, and adds a
+            # UNION ALL's branches. `_size_hints` says when this is safe.
+            nulls = ", ".join(f"NULL::uuid AS {a}__{c}" for a in sorted(g.aliases) for c in _COLS)
+            body += ["UNION ALL",
+                     f"SELECT {nulls} FROM generate_series(1, {_INEQ_SEL * g.size_hint}) "
+                     f"AS {g.name}_pad(n) WHERE {g.name}_pad.n < 0"]
         ctes.append(f"{g.name} AS MATERIALIZED (\n" + "\n".join(body) + "\n)")
 
     new_tables = [t for t in quad_tables if t.alias not in owner_group]
