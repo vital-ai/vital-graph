@@ -30,12 +30,10 @@ constant predicate (the graph link, the pin, the value), is emitted as one CTE:
 
 Inside, the plan is the pin plus primary-key lookups by subject: the cost is
 the pin's size, whatever the estimates. Outside, the group is a set computed
-ONCE. A CTE has no index, though: nested inside a loop, it is read WHOLE per
-outer row, and PostgreSQL chooses that loop whenever it sizes both sides at
-~1 row, which it does for ~1,000-row pairs (`issues/330`: 1,920 x 1,920 rows
-on production). So a leaf that only tests the group's rows joins it inside
-(`_fold_existence_checks`), and a join to a whole materialised BGP is written
-so it can only be hashed (`emit_join._hashed_cte_join`).
+ONCE. If PostgreSQL still nests it inside a loop, a re-run is a scan of a
+materialised set, not a repeat of the lookups that made the fence slow. It
+only underestimates SMALL pairs, and a small set is cheap to rescan. A large
+pair is in the MCV list and is estimated well enough to be hashed.
 
 WHEN IT FIRES. Only when the pinned set is clearly smaller than the expansion
 it replaces, from statistics already loaded:
@@ -295,60 +293,7 @@ def find_groups(plan, ctx, quad_tables, leaf_card: Dict[str, float],
         groups.append(SlotGroup(name, members, pin, pinned, detail))
         taken |= members
         rec.fired(NAME, "", **detail)
-    if groups:
-        _fold_existence_checks(groups, by_alias, taken, leaf_terms, var_at,
-                               var_aliases, alias_vars,
-                               set(getattr(ctx, "correlated_scope", None) or ()), rec)
     return groups
-
-
-FOLD_NAME = "slot_group_fold"
-
-
-def _fold_existence_checks(groups, by_alias, taken, leaf_terms, var_at, var_aliases,
-                           alias_vars, correlated, rec) -> None:
-    """Move into a group's CTE each leaf that only tests the group's rows
-    (`issues/330`).
-
-    `?v hasKGEntityType <Decision>` on a slot's value is such a leaf: a
-    constant predicate, object and context, and one variable, the group's. Left
-    outside it is a join of a type set with the CTE, both underestimated (the
-    CTE from its pin, the pair from `issues/293`), so PostgreSQL nested-loops
-    them and, the CTE having no index, reads the whole CTE per type row:
-    decision_page, 773 x 966 rows locally and 1,920 x 1,920 on production.
-    Inside, it is one primary-key lookup per CTE row, driven from the pin.
-
-    Only a leaf that adds NO variable: each of its positions is a constant or
-    a variable no leaf outside the group shares, other than the group's ?d.
-    Rows are unchanged: every constraint on it references only it and the
-    group, which is the rule for a constraint inside the CTE. Not a correlated
-    variable (an EXISTS body's, bound outside the CTE), and not a GRAPH ?g
-    context, as for members.
-    """
-    by_name = {g.name: g for g in groups}
-    owner = {a: g.name for g in groups for a in g.aliases}
-    for b in sorted(by_alias):
-        if b in taken or (b, "predicate_uuid") not in leaf_terms:
-            continue
-        vars_b = alias_vars.get(b, set())
-        if not vars_b or (vars_b & correlated) or (b, "context_uuid") in var_at:
-            continue
-        others = [var_aliases.get(v, set()) - {b} for v in vars_b]
-        if not all(others):
-            continue                       # a variable of its own
-        linked = {owner.get(c) for o in others for c in o}
-        if len(linked) != 1 or None in linked:
-            continue
-        g = by_name[linked.pop()]
-        if var_at.get((g.detail["alias"], "object_uuid")) in vars_b:
-            # A test of ?d (the entity type) is the ANCHOR, not a test of the
-            # slot's rows: the rest of the BGP joins through it. Folded, the
-            # pinned by_reason went 124 ms -> 33 s, only_cause 0.35 s -> 50 s.
-            continue
-        g.aliases.add(b)
-        taken.add(b)
-        g.detail.setdefault("folded", []).append(b)
-        rec.fired(FOLD_NAME, "", alias=b, group=g.name)
 
 
 def apply_groups(groups: List[SlotGroup], quad_tables, tagged, inner_cols: List[str],

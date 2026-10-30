@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import logging
-import re
-from typing import Optional, Set
+from typing import Set
 
 from ..jena_sparql.jena_types import VarNode
 from .ir import KIND_BGP, PlanV2, KIND_TABLE, KIND_PATH
@@ -116,68 +115,6 @@ def _same_term_kind(l_alias: str, l_sn: str, r_alias: str, r_sn: str) -> str:
             f" AND LOWER({l}__lang) IS NOT DISTINCT FROM LOWER({r}__lang)"
             f" AND ({l}__lang IS NOT NULL OR {l}__type IS DISTINCT FROM 'L'"
             f" OR COALESCE({l}__datatype, {_XSD_STRING}) = COALESCE({r}__datatype, {_XSD_STRING}))")
-
-
-HASHED_CTE_JOIN = "hashed_cte_join"
-
-
-def _hashed_cte_join(left_sql: str, right_sql: str, l_alias: str, r_alias: str,
-                     on_parts, select_cols, is_left: bool) -> Optional[str]:
-    """A join whose right side is a materialised slot-group BGP, as a join
-    PostgreSQL must hash or merge, or None (`issues/330`).
-
-    `emit_bgp` materialises a slot-group BGP whose ?d comes from outside (an
-    OPTIONAL field, a VALUES-split join) as `bgp_sg_*`. The left side binds ?d
-    from the entity type, a mid-frequency pair PostgreSQL estimates at ~1 row
-    for ~1,000 (`issues/293`), and the CTE is sized from its own pin, often
-    as badly. Against a 1-row outer a nested loop is cheapest, and a CTE has no
-    index: the loop reads the whole CTE once per left row. Production, 1,920
-    decisions: 1,920 x 1,920 rows, ~1 s for a 3-row dashboard query.
-
-    A FULL JOIN can only be hashed or merged, never nested-looped. Filtered to
-    the rows with a left side it is exactly the LEFT JOIN; to the rows with
-    both sides and the remaining conditions, exactly the inner join. The filter
-    sits outside an `OFFSET 0` fence because PostgreSQL turns a FULL JOIN back
-    into a LEFT or inner one under any strict condition above it, and the
-    joins above are exactly that. Both sides are read once: the CTE is built
-    whole whatever the plan, and so is the left side. The cost is that a FILTER
-    above no longer narrows the left side before the join.
-
-    The FULL JOIN's ON takes the plain `__uuid` equalities, the only conditions
-    it can hash on. An OPTIONAL needs every condition to be one, as its other
-    conditions cannot move out of the ON; an inner join applies the rest after
-    the fence. A plain equality means no `IS NULL` disjunct, so that side's
-    variable is always bound and its `__uuid` NULL only on a row the other side
-    had alone. The operands' columns leave the fence renamed `<alias>__<col>`,
-    so a name the two sides share cannot collide.
-    """
-    if not right_sql.startswith("WITH bgp_sg_") or not on_parts or not select_cols:
-        return None
-    eq_re = re.compile(rf"^({l_alias}\.\w+__uuid) = ({r_alias}\.\w+__uuid)$")
-    eqs = [m for m in map(eq_re.match, on_parts) if m]
-    rest = [p for p in on_parts if not eq_re.match(p)]
-    if not eqs or (is_left and rest):
-        return None
-    fenced = f"{l_alias}f"
-    ref = re.compile(rf"\b({l_alias}|{r_alias})\.(\w+)\b")
-    l_key, r_key = eqs[0].group(1), eqs[0].group(2)
-    keep = [l_key] if is_left else [l_key, r_key]
-    cols = sorted({m.group(0) for s in select_cols + rest + keep for m in ref.finditer(s)})
-
-    def out(s: str) -> str:
-        return ref.sub(rf"{fenced}.\1__\2", s)
-
-    where = [f"{out(k)} IS NOT NULL" for k in keep] + [out(p) for p in rest]
-    inner = ", ".join(f"{c} AS {c.replace('.', '__', 1)}" for c in cols)
-    return (
-        f"SELECT {', '.join(out(c) for c in select_cols)}\n"
-        f"FROM (SELECT {inner}\n"
-        f"FROM ({left_sql}) AS {l_alias}\n"
-        f"FULL JOIN ({right_sql}) AS {r_alias}\n"
-        f"ON {' AND '.join(m.group(0) for m in eqs)}\n"
-        f"OFFSET 0) AS {fenced}\n"
-        f"WHERE {' AND '.join(where)}"
-    )
 
 
 def emit_join(plan: PlanV2, ctx: EmitContext) -> str:
@@ -603,15 +540,6 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
     ctx.log("join", f"output map: {{{', '.join(f'?{v}→{ctx.types.get(v).sql_name}' for v in producible)}}}")
     ctx.log_scope("join", defined=left_vars | right_vars,
                   optional=right_vars - left_vars if is_left else None)
-
-    if not (is_left and plan.left_join_exprs):
-        hashed = _hashed_cte_join(left_sql, right_sql, l_alias, r_alias,
-                                  on_parts if shared else [], select_cols, is_left)
-        if hashed is not None:
-            from .plan_decisions import recorder_for
-            recorder_for(ctx.aliases).fired(HASHED_CTE_JOIN, "", alias=r_alias,
-                                            join="left" if is_left else "inner")
-            return hashed
 
     join_type = "LEFT JOIN" if is_left else "JOIN"
 
