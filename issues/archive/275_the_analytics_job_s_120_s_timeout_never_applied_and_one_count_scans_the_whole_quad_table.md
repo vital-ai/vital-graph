@@ -1,6 +1,6 @@
 # 275 — The analytics job's 120 s timeout never applied, and one count scans the whole quad table
 
-## Status: FIXED 2026-10-17 (not yet released). Found in production on v0.0.87.
+## Status: FIXED 2026-10-17, RELEASED in v0.0.96 or v0.0.97 (build commit of v0.0.96 unrecorded; `2d78c2af` is an ancestor of `ebd6ba17`). ARCHIVED 2026-10-29. Found in production on v0.0.87.
 
 **Related:** `issues/253` (`SET LOCAL` used where it does not hold, the write
 path), `issues/270` (the index trim this is NOT caused by).

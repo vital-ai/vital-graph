@@ -1,6 +1,6 @@
 # 276 — After a database failover each task stopped hearing the other and served stale cached reads
 
-## Status: FIXED IN CODE 2026-10-17 (not yet released). Production needs a restart until then.
+## Status: FIXED IN CODE 2026-10-17, RELEASED in v0.0.96 or v0.0.97 (build commit of v0.0.96 unrecorded; `fc937856` is an ancestor of `ebd6ba17`). STAYS OPEN for Not done: no sent-vs-received notice metric, and the same keep-alive pattern in the unused `postgresql_signal_manager.py`. The post-release check on a failover or restart is not recorded.
 
 **Related:** `issues/264` (single-runner jobs, the other thing a failover resets),
 the 2026-10-17 RDS instance upgrade (`planning_deploy/deploy_db_r6g_2xlarge_and_gp3_440_20261017.md`).

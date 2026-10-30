@@ -1,6 +1,6 @@
 # 279 — The frame write routes accept edges and slots naming a frame that does not exist
 
-## Status: FIXED IN CODE 2026-10-19 (not yet released). Refuses from the first release.
+## Status: FIXED IN CODE 2026-10-19, RELEASED in v0.0.96 or v0.0.97 (build commit of v0.0.96 unrecorded; `3bab7f6c`, `7bb85a9a` are ancestors of `ebd6ba17`), so production refuses the shape. The client's part is done (below). ARCHIVED 2026-10-29.
 
 **Related:** `issues/212` (the same gap, first seen as 28 schedule slots on the
 main KG space; recorded there in passing and never opened as an item),

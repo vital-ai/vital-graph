@@ -1,6 +1,6 @@
 # 271 — A UW decision write took seconds because it rewrote what it had and wrote each row alone
 
-## Status: FIXED 2026-10-17 (not yet released). Found in production on v0.0.85.
+## Status: FIXED 2026-10-17, RELEASED: deployed as build v0.0.86-prod on 2026-10-17 with `wal_compression = lz4`, `VG_PREWARM_SPACES` and all 27 index drops (`planning_deploy/deploy_write_path_and_index_trim_20261017.md`); every fix commit, including the later `7e9ae240`, is an ancestor of v0.0.97 (`ebd6ba17`). STAYS OPEN for the performance items under Not done: writes still above 1 s under load, the unexplained diff-phase spikes, and `quad_po` vs `quad_ctx_pred` not A/B'd. Found in production on v0.0.85.
 
 **Related:** `issues/270` (the same incident's maintenance and index findings;
 this continues its index trim), `issues/269` (gen-2 GC pauses inside writes),

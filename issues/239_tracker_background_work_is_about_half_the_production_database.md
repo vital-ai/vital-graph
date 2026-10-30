@@ -73,12 +73,23 @@ runs) excluded and no entry evicted in between
 
 What moved: `ANALYZE`/`VACUUM` (`236`, `264`) and the lock wait are
 essentially gone; the latter fits `238`'s scan having been what held it, as
-suggested below, though only 83,532 waits fell in the window. The probes are now the
-largest bucket, and **379 s of them (25.6% of all execution) rescanned four
-spaces with no write of any kind in the window**: filed as `issues/331`. The
-rest of the probe time (279 s) is `frame_slot_drift` on the one space taking
-an ingest, a full count every cycle while it is written: `143` recs 3/4
-(incremental counts), as already recorded.
+suggested below, though only 83,532 waits fell in the window. The probes are
+now the largest bucket. The biggest single one is `frame_slot_drift` on the
+main KG space (`vgs_nb6z72zc`) while it took an ingest: 272 s, a full count
+every cycle while it is written, `143` recs 3/4 (incremental counts), as
+already recorded.
+
+**Two traps in reading these numbers** (`issues/331`, filed from this table
+and retracted the same day):
+
+* **PostgreSQL 18 identifies a statement by its table aliases, not their
+  OIDs.** A probe written `FROM {space}_edge e ...` is ONE entry summed over
+  every space, labelled with whichever space created it (often a pre-rename
+  `lead_data_*` / `testspace_*` name). The buckets above are right; any
+  per-space reading of an aliased probe is not.
+* **The table is full and evicting** (`max` 5,000, 8,908 deallocations since
+  the reset): infrequent statements are undercounted, so every bucket is a
+  floor.
 
 The vector-segment inserts (91 h in the baseline) are 15 s here. How much
 vectorisation the window held was not measured, so this is not evidence the

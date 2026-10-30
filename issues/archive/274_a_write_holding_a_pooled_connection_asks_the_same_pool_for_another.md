@@ -1,6 +1,6 @@
 # 274 — A write holding a pooled connection asks the same pool for another
 
-## Status: FIXED 2026-10-17 (not yet released). Latent: not seen in production.
+## Status: FIXED 2026-10-17, RELEASED in v0.0.96 or v0.0.97 (build commit of v0.0.96 unrecorded; `bf8cc66a` is an ancestor of `ebd6ba17`). ARCHIVED 2026-10-29. Latent: not seen in production.
 
 **Related:** `issues/231` (the request/internal pool split), `issues/253`
 (work inside a write transaction that should not be), `issues/271`.

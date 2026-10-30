@@ -56,7 +56,14 @@
 ## conditional write and part 5's whole-write bound. What remains is verifying in
 ## production that part 5 ended the confirmed losses; nothing here has checked that.
 ##
-## Status: SIX PARTS FIXED 2026-09-29/30, NONE DEPLOYED, and RE-BASED TWICE BY
+## Status (2026-10-29): every `253` commit (`39087fe4` through `2b42eaec`, 2026-09-30/10-01)
+## is RELEASED: in production since build v0.0.78 (see the 2026-10-11 update above) and
+## an ancestor of v0.0.97 (`ebd6ba17`). STAYS OPEN: the client still composes its own
+## message (§1: 0 of the write methods use `build_response_from_server`), the retried-create
+## choice (§3) is not made, and nothing has verified in production that part 5 ended the
+## confirmed losses. The block below is the original status, kept for history.
+##
+## Was: SIX PARTS FIXED 2026-09-29/30, NONE DEPLOYED, and RE-BASED TWICE BY
 ## MEASUREMENT 2026-09-30. A later report of 5 writes that did not stick is
 ## explained in "the 5 failed writes" below: they are CONFIRMED LOSSES, caused by
 ## an unbounded lock wait meeting asyncpg's 60 s `command_timeout`, which kills

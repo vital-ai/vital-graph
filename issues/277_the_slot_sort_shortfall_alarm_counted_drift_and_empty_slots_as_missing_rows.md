@@ -1,6 +1,8 @@
 # 277 — The slot-sort shortfall alarm counted drift and empty slots as missing rows
 
-## Status: FIXED IN CODE 2026-10-17; in production with the current code (reported 2026-10-20). No production repair needed. STAYS OPEN for the nested-frame gap under Not done, which the local vg stack's maintenance job reports live on `probe_nurture` (500 valued slots it cannot attribute, 2026-10-20).
+## Status: FIXED IN CODE 2026-10-17; in production with the current code (reported 2026-10-20). No production repair needed. The nested-frame gap under Not done is FIXED in `77daadb0` (2026-10-24: the repair climbs parent frames; an orphan slot is reported as orphaned, not unattributed), RELEASED by v0.0.97 at the latest (`77daadb0` is an ancestor of `ebd6ba17`; whether v0.0.96 has it is unrecorded). STAYS OPEN only for verification: that commit records its integration tests (`tests/integration/test_slot_sort_shortfall_is_visible.py`: orphan, short edge table, nested frame) as NOT YET RUN, and no later run is recorded.
+##
+## Was: FIXED IN CODE 2026-10-17; in production with the current code (reported 2026-10-20). No production repair needed. STAYS OPEN for the nested-frame gap under Not done, which the local vg stack's maintenance job reports live on `probe_nurture` (500 valued slots it cannot attribute, 2026-10-20).
 
 **Related:** `issues/194` (the `entity_slot_sort` alarm, repair and gate this
 corrects), `issues/268` (the same multi-statement drift in a count), `issues/212`

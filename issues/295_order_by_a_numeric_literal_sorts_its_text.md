@@ -1,6 +1,6 @@
 # 295 — ORDER BY a numeric literal sorts its text
 
-## Status: FIXED 2026-10-22 for bare-variable sort keys, not yet released. Expression sort keys (COALESCE) still sort lexically: see "Not fixed".
+## Status: FIXED 2026-10-22 for bare-variable sort keys, RELEASED in v0.0.96 or v0.0.97 (build commit of v0.0.96 unrecorded; `9afcdcaa` is an ancestor of `ebd6ba17`). STAYS OPEN: expression sort keys (COALESCE) still sort lexically: see "Not fixed".
 
 **Related:** `issues/293` (found while checking a held-out query there),
 `issues/075`/`078` (stable paging orders by uuid, deliberately).

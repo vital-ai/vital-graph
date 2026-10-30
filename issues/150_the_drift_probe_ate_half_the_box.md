@@ -6,7 +6,10 @@
 ##
 ## REVIEWED 2026-10-11 — STAYS OPEN: the fix is in production (see DEPLOYED above). REMAINS: the stats-blindness item is "left open", and no local verification of the gate is recorded.
 ##
-## Status: FIXED in code, UNDEPLOYED. Caused by `478fa06`, which was itself a fix.
+## Status: FIXED in code, RELEASED (`af1c717e` / `4c690d7a`: in production since v0.0.78,
+## and ancestors of v0.0.97 `ebd6ba17`). STAYS OPEN: the stats-blindness item, and no
+## local verification of the gate is recorded (see REVIEWED above).
+## Was: FIXED in code, UNDEPLOYED. Caused by `478fa06`, which was itself a fix.
 
 ## The symptom, as reported
 

@@ -1,6 +1,6 @@
 # 272 — An index left invalid by a failed concurrent build counted as present
 
-## Status: FIXED 2026-10-17 (not yet released). Found in production on v0.0.86.
+## Status: FIXED 2026-10-17, RELEASED in v0.0.96 or v0.0.97 (build commit of v0.0.96 unrecorded; `164719a9`, and the migration's own timeouts `7e9ae240`, are ancestors of `ebd6ba17`). The production repair is done (below). ARCHIVED 2026-10-29. Found in production on v0.0.86.
 
 **Related:** `issues/156` (the missing-index check and the schema-based
 restore this corrects), `issues/270`/`271` (the index migration whose cancelled

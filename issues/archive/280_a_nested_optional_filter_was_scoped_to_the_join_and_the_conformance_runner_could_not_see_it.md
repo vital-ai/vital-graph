@@ -1,6 +1,6 @@
 # 280 — A nested OPTIONAL filter was scoped to the join, and the conformance runner could not see it
 
-## Status: FIXED IN CODE 2026-10-19 (not yet released). The engine, the 25 cases the oracle hid, and the runner check are all done; 2 cases are recorded as known differences.
+## Status: FIXED IN CODE 2026-10-19, RELEASED in v0.0.96 or v0.0.97 (build commit of v0.0.96 unrecorded; `dce5837b` through `720a4e6a` are ancestors of `ebd6ba17`). ARCHIVED 2026-10-29. The engine, the 25 cases the oracle hid, and the runner check are all done; 2 cases are recorded as known differences.
 
 **Related:** `c7caf819` (2026-08-25, which introduced the wrong scoping),
 `issues/128` (the sparql10 categories wired then).

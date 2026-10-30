@@ -1,6 +1,6 @@
 # 313 — In the app, the planner never loads its sub-select estimates (a json codec), so range and IN filters are never driven
 
-## Status: FIXED and VERIFIED in the app at scale, 2026-10-26 (45b83c43). Production picks it up with the next deploy.
+## Status: FIXED and VERIFIED in the app at scale, 2026-10-26 (45b83c43). RELEASED in v0.0.97 (`ebd6ba17`, deployed 2026-10-29). ARCHIVED 2026-10-29.
 
 ## Defect
 

@@ -1,6 +1,6 @@
 # 299 — A VALUES UNDEF row unbinds a variable the other side of the join bound
 
-## Status: FIXED 2026-10-22, not yet released.
+## Status: FIXED 2026-10-22, RELEASED in v0.0.96 or v0.0.97 (build commit of v0.0.96 unrecorded; `a90fac6e` is an ancestor of `ebd6ba17`). ARCHIVED 2026-10-29.
 
 **Related:** `issues/293` (found while testing its VALUES guard rule against an
 oracle), `issues/180` (the same projection rule for a UNION branch),

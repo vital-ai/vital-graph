@@ -1,6 +1,6 @@
 # 270 — A bulk load turned maintenance into a scan loop, and every quad insert into nine index writes
 
-## Status: FIXED 2026-10-16 (not yet released). Found in production on v0.0.85.
+## Status: FIXED 2026-10-16, RELEASED and deployed as build v0.0.86-prod on 2026-10-17 (`bbc59fc1`; `planning_deploy/deploy_write_path_and_index_trim_20261017.md`), and an ancestor of v0.0.97 (`ebd6ba17`). The production index migration ran the same day (0 `quad_pred`/`quad_ctx` left), and the capacity question was settled by the 2026-10-17 instance upgrade. ARCHIVED 2026-10-29. Found in production on v0.0.85.
 
 **Related:** `issues/150` (the drift probe ate half the box: the same class,
 a probe that costs more than it is worth), `issues/236` (need gates for ANALYZE

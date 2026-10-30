@@ -6,7 +6,10 @@
 ##
 ## REVIEWED 2026-10-11 — STAYS OPEN: the fix is in production (see DEPLOYED above), so "UNDEPLOYED" below is out of date. REMAINS: the client-timeout fix is scale-dependent (a 97-133 s probe) and was never verified locally at scale.
 ##
-## Status: FIXED in code, UNDEPLOYED. The listing is slow until this ships and
+## Status: FIXED in code, RELEASED (`478fa06a`: in production since v0.0.78, and an
+## ancestor of v0.0.97 `ebd6ba17`). STAYS OPEN: the scale-dependent client-timeout fix
+## has never been verified locally at scale (see REVIEWED above).
+## Was: FIXED in code, UNDEPLOYED. The listing is slow until this ships and
 ## the backfill runs.
 
 ## The user-visible fact
