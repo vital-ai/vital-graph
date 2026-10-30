@@ -12,8 +12,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from ..auth.role_dependencies import require_space_read
 from ..model.metrics_model import (
     MetricsResponse,
     MetricsTotals,
@@ -31,8 +32,9 @@ class MetricsEndpoint:
     hourly aggregates for 7d/30d.
     """
 
-    def __init__(self, api):
+    def __init__(self, api, auth_dependency):
         self.api = api
+        self.auth_dependency = auth_dependency
         self.router = APIRouter()
         self._setup_routes()
 
@@ -41,14 +43,18 @@ class MetricsEndpoint:
         async def get_space_metrics(
             space_id: str = Query(..., description="Space ID"),
             range: str = Query("realtime", description="Time range: realtime, 24h, 7d, 30d"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
+            require_space_read(current_user, space_id)
             return await self.get_metrics(space_id, range)
 
         @self.router.get("/metrics/slow", response_model=SlowQueriesResponse)
         async def get_slow_queries(
             space_id: str = Query(..., description="Space ID"),
             limit: int = Query(50, ge=1, le=100),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
+            require_space_read(current_user, space_id)
             return await self.get_slow_log(space_id, limit)
 
     async def get_metrics(self, space_id: str, time_range: str) -> MetricsResponse:

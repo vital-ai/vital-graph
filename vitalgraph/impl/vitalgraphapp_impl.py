@@ -19,6 +19,7 @@ import uvicorn
 
 # Import VitalGraph configuration loader
 from vitalgraph.config.config_loader import get_config, ConfigurationError, VitalGraphConfig
+from vitalgraph.api.static_paths import resolve_static_file
 from vitalgraph.api.vitalgraph_api import VitalGraphAPI
 from vitalgraph.auth.vitalgraph_auth import VitalGraphAuth
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
@@ -1484,7 +1485,7 @@ class VitalGraphAppImpl:
         """Initialize query metrics endpoint routes."""
         from vitalgraph.endpoint.metrics_endpoint import MetricsEndpoint
         
-        metrics_endpoint = MetricsEndpoint(self.api)
+        metrics_endpoint = MetricsEndpoint(self.api, self.get_current_user)
         self.app.include_router(metrics_endpoint.router, prefix="/api", tags=["Metrics"])
     
     def _init_frontend_routes(self):
@@ -1545,8 +1546,10 @@ class VitalGraphAppImpl:
         project_root = Path(__file__).parent.parent.parent
         
         # First, try to serve static files from the dist directory (SVGs, favicon, etc.)
-        static_file_path = project_root / "vitalgraph" / "api" / "frontend" / "dist" / path
-        if static_file_path.exists() and static_file_path.is_file():
+        static_file_path = resolve_static_file(
+            project_root / "vitalgraph" / "api" / "frontend" / "dist", path
+        )
+        if static_file_path is not None:
             return FileResponse(static_file_path)
         
         # Only catch routes that don't start with /api or /static for SPA routing

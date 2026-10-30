@@ -51,7 +51,8 @@ COPY --from=python-deps /usr/local/bin /usr/local/bin
 # Copy VitalSigns config and pre-warm registry cache
 COPY vitalhome/ ./vitalhome/
 ENV VITAL_HOME=/app/vitalhome
-RUN python -c "from vital_ai_vitalsigns.vitalsigns import VitalSigns; VitalSigns()"
+RUN python -c "from vital_ai_vitalsigns.vitalsigns import VitalSigns; VitalSigns()" \
+    && chmod -R a+rX /usr/local/lib/python3.12/site-packages/vital_ai_vitalsigns/_vitalsigns_cache
 
 # ---- Bake the paraphrase-multilingual-MiniLM-L12-v2 weights into the image ----
 #
@@ -83,7 +84,8 @@ m='${PARAPHRASE_MODEL}'; d='${PARAPHRASE_MODEL_DIR}'; \
 AutoTokenizer.from_pretrained(m).save_pretrained(d); \
 AutoModel.from_pretrained(m).save_pretrained(d); \
 print('baked', m, '->', d)" \
-    && rm -rf "$HF_HOME"/hub "$HF_HOME"/xet
+    && rm -rf "$HF_HOME"/hub "$HF_HOME"/xet \
+    && chmod -R a+rX "$PARAPHRASE_MODEL_DIR"
 
 # WeaviateLocalVectorizer._sent_tokenize() calls nltk.sent_tokenize, which loads
 # the punkt tables at runtime.  NLTK >= 3.8.2 uses punkt_tab; older releases use
@@ -91,7 +93,8 @@ print('baked', m, '->', d)" \
 # (nltk>=3.8.0).
 RUN python -c "\
 import nltk; \
-[nltk.download(p, download_dir='${NLTK_DATA}') for p in ('punkt', 'punkt_tab')]"
+[nltk.download(p, download_dir='${NLTK_DATA}') for p in ('punkt', 'punkt_tab')]" \
+    && chmod -R a+rX "$NLTK_DATA"
 
 # Everything the runtime needs is now on disk — forbid network fetches so a
 # missing artifact fails loudly at startup instead of silently egressing.
@@ -149,5 +152,24 @@ LABEL org.opencontainers.image.revision=${GIT_COMMIT} \
       org.opencontainers.image.created=${BUILD_TIME}
 
 EXPOSE 8001
+
+# Run as an unprivileged user with no write access to the application. The only
+# runtime writes are to $HOME (ONNX Runtime's cache) and /tmp (import and export
+# staging). The numeric id lets an orchestrator verify the user is not root
+# without reading /etc/passwd.
+#
+# Model downloads and the VitalSigns cache are written owner-only by their
+# libraries, and every earlier RUN is root, so the offline smoke test above
+# cannot see a file this user can't read. Fix permissions in the RUN that
+# creates a file (a chmod here would copy the 470 MB model into a new layer).
+RUN ! find /app /usr/local/lib/python3.12/site-packages \
+        \( -type f ! -perm -o=r \) -o \( -type d ! -perm -o=rx \) | grep . \
+    && groupadd --system --gid 10001 vitalgraph \
+    && useradd --system --uid 10001 --gid 10001 --create-home \
+        --home-dir /home/vitalgraph --shell /usr/sbin/nologin vitalgraph \
+    && mkdir -p /app/data \
+    && chown 10001:10001 /app/data
+ENV HOME=/home/vitalgraph
+USER 10001:10001
 
 CMD ["python", "-m", "vitalgraph.cmd.vitalgraphdb_cmd"]
