@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-246 there, 84 live. An issue is archived only when nothing remains to do:
+247 there, 83 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -104,7 +104,6 @@ caller, which is what makes that file worth a sweep rather than two point fixes.
 
 | | status | |
 |---|---|---|
-| **330** | FIXED 2026-10-30 (not yet released), second attempt: a size hint in pure stars; on production latest_per_deal 1,515 -> 188 ms, decision_page 1,067 -> 375 ms (first fix reverted) | **A slot-group CTE is rescanned once per outer row: quadratic in decisions.** After v0.0.97 the dashboard's two slowest queries (decision_page 1,019 ms, latest_per_deal_by_outcome 1,157 ms on production) each run a Nested Loop whose equality is a join filter over a MATERIALIZED slot-group CTE: 1,920 loops x 1,920 rows. PostgreSQL estimated the outer side at 42 / 1 rows. Work grows with decisions squared |
 | **293** | OPEN — tracking the general solution; stages 0-3 released in v0.0.96, later model stages in v0.0.97; open: the mql gate, `edge_fanout`, a production re-measure | **An entity-type triple drives slot lookups through every member of the entity's graph**, and the CLASS behind it (161, 118, 045, 138, 048, 218): Postgres cannot see a predicate's per-object fan-out (~10 estimated, ~1,000 actual) and underestimates mid-frequency pairs (3 vs 1,159). A targeted fix for the UW dashboard's shape (`slot_group_cte`, local) is done. The general fix, in stages: per-predicate fan-out statistics, a generator cardinality model, choosing the driver by selectivity (161's unbuilt fix), estimate-independent enforcement, and cross-workload verification. **Decision pending:** stop maintaining `edge_fanout` (no measured consumer outcome in the perf suite or 7 days of production slow log); options recorded in the issue |
 | **296** | OPEN — arm C measured: per-BGP `Leading()` not available | **Can `pg_hint_plan` carry 293's cardinality model to Postgres?** Today the model's order is enforced by restructuring SQL (`join_collapse_limit = 1`, `MATERIALIZED` CTEs), which leaves join method, the nodes above the BGP and edge/`frame_slot` BGPs to Postgres' estimates. Four arms on `uw_prodshape`, 119's fixtures and the 293 class: control, `Rows()` alone (expected to reproduce 119 §9's nested-loop→hash flip), `Leading()`+method, and both. Adopt only if it matches or beats today's enforcement everywhere and covers a shape it doesn't; otherwise close as a second confirmation of 119 §9 |
 | **297** | OPEN — step 0 census passed; step 1 not started | **The cardinality model guesses where characteristic sets and pairs would count.** 293's model assumes containment for a constant pin on a bound subject (exact on correlated UW pins, 6x high on uniform leads: 100,000 vs 16,486) and a mean fan-out for a probe by object (6.8M where the answer is 0: child frames are never `hasFrameGraphURI` objects). Typed characteristic sets (members include `vitaltype <T>`, `hasKGSlotType <S>`) and characteristic pairs on link predicates would count both. A tighter model allows lowering `ENFORCE_MIN_GAIN` (10). Gated: a census first, then offline q-error, then tables, recompute and the model |

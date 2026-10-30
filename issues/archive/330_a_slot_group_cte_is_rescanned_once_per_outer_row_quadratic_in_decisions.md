@@ -1,6 +1,6 @@
 # 330 — A slot-group CTE is rescanned once per outer row: quadratic in the number of decisions
 
-## Status: FIXED 2026-10-30 (not yet released), second attempt. The first fix (`a08ad393`, v0.0.98) missed production's shape and was reverted (`2e78ae0b`); this one is accepted on production read-only: latest_per_deal 1,515 -> 188 ms, decision_page 1,067 -> 375 ms, the other seven byte-identical SQL. See the last section.
+## Status: RESOLVED 2026-10-30, RELEASED in v0.0.99 and confirmed on production (read-only A/B: latest_per_deal 1,517 -> 184 ms, decision_page 1,037 -> 379 ms, the other seven unchanged). Second attempt. The first fix (`a08ad393`, v0.0.98) missed production's shape and was reverted (`2e78ae0b`); this one is accepted on production read-only: latest_per_deal 1,515 -> 188 ms, decision_page 1,067 -> 375 ms, the other seven byte-identical SQL. See the last section.
 
 **Related:** `issues/293` (the slot-group CTE this rescans; the misestimate class),
 `issues/320` (the same "CTE scanned per outer row" shape inside a NOT EXISTS,
@@ -234,3 +234,23 @@ Locally (`uw_prodshape2`) the same two queries are hinted, all nine return the
 rows they did before, and the local-only rescans of the other two shapes
 remain: production does not show them, which is why fixing them bought
 nothing there.
+
+## Confirmed on production after v0.0.99 (2026-10-30, read-only)
+
+v0.0.99 (built from `526b64f2`) live on production. The same A/B, the
+generator before 330 (`9768d521`) and `526b64f2`, same data, 5 runs, median ms:
+
+| query | before 330 | v0.0.99 | SQL |
+|---|---:|---:|---|
+| latest_per_deal_by_outcome | 1,517.3 | **184.1** | hinted |
+| decision_page | 1,036.8 | **378.5** | hinted |
+| total | 3.6 | 3.7 | identical |
+| by_outcome | 41.0 | 41.1 | identical |
+| all_of | 267.0 | 263.4 | identical |
+| by_reason | 260.7 | 264.9 | identical |
+| category_page | 642.5 | 656.7 | identical |
+| naics_for_category | 307.2 | 312.3 | identical |
+| only_cause | 540.3 | 526.5 | identical |
+
+Same rows; no CTE Scan with loops > 1 in any of the nine plans. v0.0.98's
+regression (naics_for_category 1,372 ms) is gone.
