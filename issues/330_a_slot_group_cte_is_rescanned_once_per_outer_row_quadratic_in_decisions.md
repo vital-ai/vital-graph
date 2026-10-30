@@ -1,6 +1,6 @@
 # 330 — A slot-group CTE is rescanned once per outer row: quadratic in the number of decisions
 
-## Status: RESOLVED 2026-10-29 (not yet released). Filed from the post-v0.0.97 production re-measure (read-only); fixed and verified locally on `uw_prodshape2`. After release, re-measure the two production queries (`prod_explain_ab.py`) to confirm.
+## Status: REOPENED 2026-10-30. The fix (`a08ad393`, released in v0.0.98) did NOT fix production and made one query 4.5x slower: see "Production after v0.0.98" at the end. The local reproduction never showed production's dominant shape.
 
 **Related:** `issues/293` (the slot-group CTE this rescans; the misestimate class),
 `issues/320` (the same "CTE scanned per outer row" shape inside a NOT EXISTS,
@@ -140,3 +140,42 @@ a leaf with its own variable, a correlated variable);
 `tests/integration/test_hashed_cte_join.py` (same rows as the plain LEFT and
 inner joins on PostgreSQL, unmatched rows on both sides, several matches, a
 NULL in a remaining condition; no Nested Loop in the plan; the declines).
+
+## Production after v0.0.98 (2026-10-30, read-only): no gain, one regression
+
+`prod_explain_ab.py` on the production UW space, the generator before
+(`9768d521`) and after (`a08ad393`), same data (~1,950 decisions), back to back,
+5 runs each, every block a buffer hit, median ms:
+
+| query | before | after |
+|---|---:|---:|
+| by_outcome | 40.6 | 40.7 |
+| latest_per_deal_by_outcome | 1,505.8 | 1,510.1 |
+| decision_page | 1,029.7 | 1,091.1 |
+| category_page | 635.2 | 715.3 |
+| naics_for_category | 303.0 | **1,371.9** |
+
+Same row counts both ways. (latest_per_deal grew 1,157 -> 1,506 ms since the
+v0.0.97 read from the data alone, under both generators.)
+
+**Why the fix missed: production's dominant rescan is a THIRD shape.** The
+entity anchor joined to an ANCHORED slot group in the main BGP,
+`q0.subject_uuid = sg_q4_cte.q4__object_uuid`, Nested Loop Inner, CTE estimated
+70 rows, actual 1,950 x 1,950 loops: in decision_page and, twice
+(`sg_q4_cte`, `sg_q14_cte`), in latest_per_deal. It is the shape this issue
+recorded from production in the first place. On `uw_prodshape2` PostgreSQL
+hashed that join, so the local reproduction showed only the two other shapes,
+and those are what `a08ad393` fixed. Neither change touches this one. The
+local acceptance test was "no CTE loop > 1 on `uw_prodshape2`"; it needed to be
+"production's plan loses its rescan".
+
+**Why naics_for_category regressed: the fence.** Its only difference is one
+`_hashed_cte_join` (same CTEs, no fold). Behind `OFFSET 0` the left side is
+planned alone, without the restriction the joins around it used to supply,
+and becomes a 1,865,999-row nested loop. That is the trade-off recorded under
+"Fix", measured locally as harmless; on production it is 4.5x.
+decision_page and category_page carry 6 and 7 fences and are 6% and 13% slower.
+
+**Next:** a local reproduction that shows production's plan (the anchored
+`q0 x sg_*` nested loop) before any further change, and acceptance measured
+on production read-only with this same A/B.
