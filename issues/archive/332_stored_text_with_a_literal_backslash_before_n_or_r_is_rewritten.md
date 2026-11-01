@@ -1,6 +1,6 @@
 # 332 — Stored text with a literal backslash before `n` or `r` is rewritten
 
-## Status: RESOLVED 2026-11-01, verified on the vg test stack. Not yet released.
+## Status: RESOLVED 2026-11-01 in `8a0cecad`, verified on the vg test stack. RELEASED in 0.0.49 (`b58524a2`, tag `v0.0.49`, on PyPI); not yet deployed.
 
 The fix has to reach the CLIENT as well as the server: responses are parsed in
 the client (`parse_nquads_object`), so an old client keeps altering correct
