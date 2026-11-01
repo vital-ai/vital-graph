@@ -2,6 +2,132 @@
 
 Notable changes per release. Dates are the release date, not the first commit.
 
+## 0.0.49 — 2026-11-01
+
+174 commits since 0.0.48. Stored text with a literal backslash before `n` or `r`
+is no longer rewritten (`332`), which is what this release is for: **move
+clients and servers to it together**, because the client parses responses and
+an old client keeps altering correct stored text. Production builds up to
+v0.0.99 already carry most of the server work below; this is the first PyPI
+release with it. **Servers: run `migrate_space_storage_key.py` BEFORE deploying, with writers
+stopped, then the other per-install migrations below.**
+
+### Fixed — text (client and server)
+
+- **A literal backslash before `n` or `r` survives.** `C:\new` was stored as
+  `C:\`, a line break and `ew`, on KG entity create, `add_triples`, and JSONL
+  and vital-block import, and a read through the client altered correct stored
+  text the same way. LaTeX, regexes and JSON embedded in text were all affected.
+  Writes through SPARQL `INSERT DATA` and reads through SPARQL `SELECT` were not.
+  **Rows already altered are not repaired**, because a backslash before a real
+  line break is also legitimate text and the stored form does not say which is
+  which (`issues/332`).
+- **The other N-Quads escapes are read**: `\t`, `\b`, `\f`, `\'`, `\uXXXX` and
+  `\UXXXXXXXX` stayed as written, so a tab did not survive a JSONL export and
+  re-import (`issues/332`).
+- **`nquads_text_to_quads` splits lines on CR and LF only.** U+2028, form feed
+  and similar characters cut a literal short (`issues/332`).
+
+### Changed — behaviour a caller will see
+
+- **KGQuery `query_mode="direct"` is refused** with `invalid_request`. It read
+  predicates no space holds and returned nothing. `query_mode` stays for one
+  release, deprecated, and is always `edge` (`issues/298`).
+- **Metrics routes require space read access**, as the other space routes do.
+- **The JSON slot class URI in the KGQuery model is `KGJSONSlot`**, as the
+  ontology has it; it was `KGJsonSlot`.
+- **An unbound value sorts lowest**, as SPARQL 15.1 requires: ascending sorts
+  put it first and descending last, the reverse of before. The KG list sort
+  still puts subjects missing the sort property last, now explicitly
+  (`issues/326`).
+- **Ordered pages break ties by term uuid**, so a page boundary inside a run of
+  equal keys is deterministic (`issues/312`).
+- **`ORDER BY` a variable sorts a numeric literal by value**, not by its text
+  (`issues/295`), and works on a variable the projection drops (`issues/324`).
+- **`SUM`, `AVG` and arithmetic in `BIND` report the promoted datatype** of their
+  inputs (`issues/318`, `325`).
+- **Documents:** a vector query returns only scored rows,
+  `exclude_managed_segments` drops paragraph segments, an explicit
+  `search_scope` of `segments` or `summaries` overrides that default, and
+  hybrid search scores through either arm (`issues/288`). `PUT` on a document
+  replaces and re-segments on a content change.
+
+### Fixed — SPARQL results
+
+A value-correctness pass, each with a test: a `VALUES` row joins a stored term
+by the term rather than its text (`316`), and a `VALUES UNDEF` row no longer
+unbinds a variable the other side bound (`299`). `SELECT DISTINCT` keeps a
+sub-SELECT's `LIMIT` and the query's `ORDER BY` (`323`) and a `BIND`'s IRI
+(`317`). `GROUP BY` an expression keeping its input's language groups by it too
+(`314`), and `COUNT` over an expression keeps its variables' text (`315`).
+Numeric, boolean and date `FILTER`s inside `EXISTS` compare typed values (`311`),
+a nested `[NOT] EXISTS` is correlated to the body's row (`319`), and a join on
+`MIN`/`MAX` compares terms (`307`). A relative IRI in a `UNION` branch resolves
+against the query's `BASE` (`321`). A text filter is declared empty only from an
+object-position count (`292`).
+
+### Fixed — server
+
+- **Static files resolve within their root**, and the image runs as a non-root
+  user (uid 10001). A deployment that mounts writable paths into the container
+  has to grant them to that user.
+- **`PUT /objects` takes the entity lock** and deletes what it read under it
+  (`issues/174`).
+- **One ANALYZE lock connection per process**, not one leaked per request
+  (`issues/327`).
+- **VitalSigns' 60 s `gc.collect()` thread is stopped**, which removes a
+  once-a-minute gen-2 pause (`issues/269`, `278`).
+- **A stats recompute and a value-histogram rebuild reach every serving
+  process**, and the rebuild is atomic (`issues/300`, `305`).
+- **The partition migration carries every trigger across the swap**
+  (`issues/303`), and a re-key or rename moves the quad statistics with their
+  table (`issues/328`).
+- **The fuzzy index load pages by entity**, so an entity's aliases never straddle
+  a page (`issues/252`).
+- **The sorted and filtered frame listing reaches its fast path** (`issues/322`).
+
+### Added — server
+
+- **Storage keys.** A space's tables are named by a short generated key
+  (`vgs_<key>_…`) rather than the user-facing space id. Ids and keys are
+  disjoint: creating or renaming a space to a key-shaped id is refused.
+- **Index sync queue.** A statement trigger on `rdf_quad` queues every write's
+  subjects in the write's own transaction, drained by bounded consumers that
+  hold no connection across the embedding call (`issues/291`, `294`).
+- **A generator-owned join cardinality model** with per-predicate fan-out
+  statistics, and slot groups emitted as materialized CTEs where a graph link
+  would fan out (`issues/293`, `330`). On a production underwriting space one
+  latest-per-deal query went from 1,517 ms to 184 ms.
+- **The qtree planner and the `vg_planner` PostgreSQL 18.4 extension**, with a
+  sampling cardinality oracle and stored pattern verdicts. **Off by default**
+  (`VG_PLANNER_EXTENSION`), and only available on a PostgreSQL built with the
+  extension; the planner stack and an EKS + CloudNativePG profile are in the
+  repository. The default path needs neither.
+- **`declare_unique_identifiers.py` takes `TYPE:NAMESPACE` pairs** per database
+  rather than a list in code (`issues/227`).
+
+### Operations
+
+All of these are per install, idempotent, and skip what is already done. Run
+them as the tables' owner, not as a database master role. Most are a dry run
+unless given `--apply`; check each script's `--help`.
+
+- **`scripts/migrate_space_storage_key.py`, BEFORE the deploy:** space creation
+  now writes `space.storage_key`, so the column has to exist first. It adds the
+  column and re-keys every space still named by id. **Run with writers stopped**,
+  then restart the service so every instance loads the keys. It refuses while
+  any space id has a key's shape or starts with `vgs_`.
+- **`scripts/migrate_index_sync_queue.py`:** the queue and its trigger. Order
+  against the deploy does not matter.
+- **`scripts/install_write_log.py`:** the write log and `pattern_verdict`.
+- **`scripts/migrate_pred_stats_object_count.py`:** adds `object_count` to
+  `rdf_pred_stats`. NULL means not yet counted, and the generator falls back.
+- **`scripts/migrate_term_uri_limit.py`:** the URI length constraint. A space
+  holding a longer URI is reported for a decision; new writes are still checked.
+- **Check before deploying** that no space holds `vg-direct:` predicates
+  (`issues/298`).
+- **Packaging:** no dependency changes.
+
 ## 0.0.48 — 2026-10-19
 
 40 commits since 0.0.47. Production builds v0.0.86–v0.0.90 already carry the
