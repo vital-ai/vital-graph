@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from vitalgraph.db.sparql_sql.uri_limit import check_uri
 from vitalgraph.vectorization.index_sync_trigger import suppress as suppress_index_sync
 from vitalgraph.db.sparql_sql.space_names import space_prefix
+from vitalgraph.utils.nquads_string import unescape_nquads_string
 
 logger = logging.getLogger(__name__)
 
@@ -281,15 +282,6 @@ def _classify_node(node, bnode_scope: Optional[str] = None
         return node.value, "U", None, None
 
 
-def _unescape_nquads_string(s: str) -> str:
-    """Unescape N-Quads string escape sequences."""
-    return (s
-            .replace('\\r', '\r')
-            .replace('\\n', '\n')
-            .replace('\\"', '"')
-            .replace('\\\\', '\\'))
-
-
 def _bnode_scope_for(graph_uri: str, file_path: str) -> str:
     """The document scope a blank-node label is interpreted in.
 
@@ -393,7 +385,7 @@ def _parse_nquads_term_typed(
                 break
             i += 1
 
-        lexical = _unescape_nquads_string(term_str[1:i])
+        lexical = unescape_nquads_string(term_str[1:i])
         rest = term_str[i + 1:]
 
         if rest.startswith('@'):

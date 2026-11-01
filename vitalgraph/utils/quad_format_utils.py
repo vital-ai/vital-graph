@@ -16,6 +16,7 @@ Both formats use identical term encoding — conversion between them is mechanic
 """
 
 import logging
+import re
 from typing import List, Optional, Tuple, Any
 
 from rdflib import URIRef, Literal, BNode
@@ -25,6 +26,7 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse
+from vitalgraph.utils.nquads_string import unescape_nquads_string
 
 logger = logging.getLogger(__name__)
 
@@ -81,15 +83,6 @@ def _escape_nquads_string(s: str) -> str:
             .replace('\r', '\\r'))
 
 
-def _unescape_nquads_string(s: str) -> str:
-    """Unescape N-Quads string escape sequences."""
-    return (s
-            .replace('\\r', '\r')
-            .replace('\\n', '\n')
-            .replace('\\"', '"')
-            .replace('\\\\', '\\'))
-
-
 # ---------------------------------------------------------------------------
 # N-Quads string encoding  →  RDFLib term
 # ---------------------------------------------------------------------------
@@ -138,7 +131,7 @@ def nquads_term_to_rdflib(term_str: str,
                 break
             i += 1
 
-        lexical = _unescape_nquads_string(term_str[1:i])
+        lexical = unescape_nquads_string(term_str[1:i])
         rest = term_str[i + 1:]
 
         if rest.startswith('^^<') and rest.endswith('>'):
@@ -547,7 +540,7 @@ def parse_nquads_object(term_str: str) -> Any:
                 break
             i += 1
 
-        lexical = _unescape_nquads_string(term_str[1:i])
+        lexical = unescape_nquads_string(term_str[1:i])
         rest = term_str[i + 1:]
 
         if rest.startswith('^^<') and rest.endswith('>'):
@@ -720,7 +713,9 @@ def nquads_text_to_quads(text: str) -> List[Quad]:
       <s> <p> <o> <g> .       (quad — named graph)
     """
     quads = []
-    for line in text.splitlines():
+    # Not `splitlines()`: it also breaks on U+2028, form feed and others, which
+    # are legal unescaped inside a literal, and cut the literal off there.
+    for line in re.split(r'[\r\n]+', text):
         line = line.strip()
         if not line or line.startswith('#'):
             continue
