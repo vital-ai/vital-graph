@@ -33,7 +33,7 @@ dependencies = [
     #
     # A bound in an extra cannot constrain a transitive dependency of a core
     # one. If the bound is real it belongs here.
-    "datasketch>=1.9.0,<2.0",
+    "datasketch>=1.9.0,<3.0",
     "vital-ai-haley-kg>=0.1.24",
     "python-dotenv",
     "rdflib>=7.0.0",
@@ -44,7 +44,7 @@ dependencies = [
     # in this repo: 0.5.12 (2026-10-18) fixed its nested OPTIONAL FILTER
     # scoping and turned E2E red overnight. Upgrades come as a Dependabot PR
     # and are judged by the DAWG run on that PR.
-    "pyoxigraph==0.5.12",
+    "pyoxigraph==0.5.13",
     "openai>=1.0.0",
     "minio>=7.0.0",
 ]
@@ -82,7 +82,7 @@ server = [
     # Dependabot PR and are judged by that PR's E2E run. Pinned to 0.147.0, the
     # version the test stack ran the full API suite on.
     # No `models` extra: FastAPI has never defined one.
-    "fastapi[standard]==0.147.0",
+    "fastapi[standard]==0.162.0",
     "uvicorn",
     "SQLAlchemy[asyncio]>=2.0.23",
     "psycopg[binary,pool]>=3.1.13",
@@ -164,7 +164,7 @@ dev = [
     # These are the light half of the `server` extra — deliberately NOT the whole
     # extra, which drags in torch via `heavy`, psycopg and SQLAlchemy.
     "asyncpg>=0.29.0",
-    "fastapi==0.147.0",     # same pin as `server` (issues/281)
+    "fastapi==0.162.0",     # same pin as `server` (issues/281)
     "PyJWT>=2.8.0",
     #   tests/unit/test_client_retry.py -> client.vitalgraph_client -> httpx,
     #       and transitively endpoint.files_endpoint  -> aiohttp
