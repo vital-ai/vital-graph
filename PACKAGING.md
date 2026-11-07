@@ -43,7 +43,7 @@ pip install vital-graph[heavy]
 pip install vital-graph[server]
 ```
 **Additional Dependencies**: Full server capabilities
-- FastAPI, uvicorn, starlette, SQLAlchemy, psycopg, asyncpg, alembic
+- FastAPI, uvicorn, starlette, SQLAlchemy, psycopg, asyncpg
 - pgvector, aiofiles, Jinja2, PyJWT, email-validator, click-repl, tabulate
 - pytidb[models], pytidb
 

@@ -57,7 +57,6 @@ def test_server_installation():
         ("sqlalchemy", "Database ORM"),
         ("psycopg", "PostgreSQL driver"),
         ("asyncpg", "Async PostgreSQL driver"),
-        ("alembic", "Database migrations"),
         ("aiofiles", "Async file operations"),
         ("vitalgraph.main.main", "VitalGraph server main"),
         ("vitalgraph.db.postgresql.postgresql_db_impl", "PostgreSQL implementation"),

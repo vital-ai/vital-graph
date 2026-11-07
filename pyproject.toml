@@ -94,7 +94,6 @@ server = [
     # configured". It was satisfied transitively for a long time, so a fresh
     # dependency resolve is what surfaces it, not a code change.
     "aiohttp>=3.9.0",
-    "alembic>=1.12.0",
     "pgvector>=0.2.4",
     "aiofiles>=23.0.0",
     "Jinja2>=3.1.0",

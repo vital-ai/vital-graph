@@ -33,7 +33,7 @@ pip install vital-graph[server]
 This includes all server dependencies:
 - FastAPI web framework and uvicorn server
 - PostgreSQL drivers (psycopg, asyncpg)
-- Database ORM (SQLAlchemy, alembic)
+- Database ORM (SQLAlchemy)
 - Vector database support (pgvector)
 - Authentication (PyJWT, email-validator)
 - ML/vectorization (torch, transformers, sentencepiece)
