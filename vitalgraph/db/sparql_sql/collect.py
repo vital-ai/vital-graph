@@ -241,7 +241,11 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
             if constraint is not None:
                 plan.constraints.append(constraint)
                 plan.tagged_constraints.append((q_id, constraint))
-            return plan
+            # NEXT TRIPLE, not `return plan`. This returned from inside the loop,
+            # so under any FROM / FROM NAMED a BGP kept only its FIRST triple and
+            # the rest of the pattern was silently dropped: a WIDER answer, rows
+            # that do not satisfy the query (`issues/334`).
+            continue
 
         # Default graph — only when NOT inside a GRAPH clause
         if aliases.default_graph and graph_uri is None:
