@@ -1447,7 +1447,7 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
                            _NUMERIC_DT_SQL_LIST)
     from .emit_expressions import ebv_sql, expr_to_sql
     from .emit_extend import (_patch_concat_companions, _patch_strafter_strbefore_companions,
-                              arith_datatype_companion)
+                              arith_datatype_companion, compute_once)
     from .sql_type_generation import COMPANION_SUFFIXES, ColumnInfo, TypeRegistry, infer_expr_type
     cvars = {v for v, _e in computed}
     outer_refs = outer_refs or {}
@@ -1525,9 +1525,13 @@ def _value_level(reg: Region, ctx, r: "_R", core: str, where: List[str], need: L
         _patch_strafter_strbefore_companions(ns, fctx, typed)
         _patch_concat_companions(ns, fctx, typed)
         sn = f"c_{v}"
+        # A `vg:` search function is a correlated subquery per row: computed ONCE,
+        # in a lateral, or every companion and every reference above (the score
+        # FILTER, the ORDER BY) re-evaluates it (`emit_extend.compute_once`)
+        lateral, val = compute_once(e, sql_e, f"lx{i}")
         level = (f"SELECT lv{i}.*, " + ", ".join(arith_datatype_companion(e, fctx.types, sn,
-                                                                         typed.produce_companions(sn, sql_e)))
-                 + f"\nFROM ({level}) AS lv{i}")
+                                                                         typed.produce_companions(sn, val)))
+                 + f"\nFROM ({level}) AS lv{i}{lateral}")
         fctx.types.register_extend(v, typed, sn)
         if lanes is not None:
             lanes[v] = typed.typed_lane

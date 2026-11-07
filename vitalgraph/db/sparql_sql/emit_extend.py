@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from ..jena_sparql.jena_types import ExprFunction, ExprVar, ExprValue, LiteralNode
 
@@ -279,6 +279,37 @@ def _try_vector_driving_extend(plan: PlanV2, ctx: EmitContext, child_sql: str) -
     )
 
 
+def compute_once(expr, sql_expr: str, alias: str) -> Tuple[str, str]:
+    """(join clause, value reference) evaluating a `vg:` function ONCE per row.
+
+    A `vg:` search function (`hybridSearch`, `textSearch`, `vectorSimilarity`,
+    ...) compiles to a CORRELATED SCALAR SUBQUERY: index probes into the side
+    tables plus the scoring arithmetic, per candidate row. Emitted inline as
+    `SELECT *, <expr> AS v, <expr> AS v__num, ... FROM (child)`, every companion
+    column carries its own copy, and PostgreSQL flattens the wrapping SELECT, so
+    each REFERENCE above it — the projection, a `FILTER(?score > 0)`, the
+    `ORDER BY ?score` — becomes another evaluation. Measured on the memory
+    service's recall query (`issues/333`), one member graph of 20,000 messages:
+    the default path evaluated the hybrid score three times per message, the
+    planner's plan twice, and those evaluations were most of the query.
+
+    `LEFT JOIN LATERAL (SELECT <expr> AS val OFFSET 0)`: the OFFSET 0 keeps
+    PostgreSQL from pulling the sub-select up and re-inlining the expression,
+    so it runs once per row and every reference reads the column. It is a JOIN,
+    not a fence around the child: a FILTER on the child's own columns (a date
+    range) is still applied below it, before any score is computed. LEFT and
+    `ON true`, so a row is never lost; the expression's own NULL survives.
+
+    Returns ("", sql_expr) — unchanged — for anything that is not a `vg:`
+    function, so every other BIND emits exactly as before.
+    """
+    from .vg_functions import is_vg_function
+    if not sql_expr or sql_expr == "NULL" or not is_vg_function(expr):
+        return "", sql_expr
+    return (f"\nLEFT JOIN LATERAL (SELECT {sql_expr} AS val OFFSET 0) AS {alias} ON true",
+            f"{alias}.val")
+
+
 def emit_extend(plan: PlanV2, ctx: EmitContext) -> str:
     """Emit SQL for an EXTEND (BIND) modifier.
 
@@ -373,8 +404,15 @@ def emit_extend(plan: PlanV2, ctx: EmitContext) -> str:
                 f"FROM ({child_sql}) AS {e_alias}"
             )
 
+    lateral, value_sql = compute_once(plan.extend_expr, sql_expr, ctx.aliases.next("x"))
     new_cols = arith_datatype_companion(plan.extend_expr, ctx.types,
-                                        sn, typed.produce_companions(sn, sql_expr))
+                                        sn, typed.produce_companions(sn, value_sql))
+    if lateral:
+        # `{e}.*`, not `*`: the lateral's own `val` column stays out of scope.
+        return (
+            f"SELECT {e_alias}.*, {', '.join(new_cols)}\n"
+            f"FROM ({child_sql}) AS {e_alias}{lateral}"
+        )
     node = getattr(plan.extend_expr, "node", None)
     if isinstance(plan.extend_expr, ExprValue) and type(node).__name__ == "URINode":
         # `BIND(<iri> AS ?s)` is that stored term, its uuid included: with a NULL uuid
