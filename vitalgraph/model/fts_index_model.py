@@ -60,7 +60,9 @@ class CreateFtsIndexRequest(BaseModel):
     languages: List[str] = Field(
         ["english"],
         min_length=1,
-        description="PostgreSQL text search languages, e.g. ['english', 'spanish']",
+        description=("PostgreSQL text search configurations, e.g. ['english', 'spanish'], "
+                     "plus the pseudo-language 'cjk' for Chinese/Japanese text "
+                     "(indexed as character bigrams); validated by the server"),
     )
 
 
@@ -68,7 +70,7 @@ class UpdateFtsLanguagesRequest(BaseModel):
     languages: List[str] = Field(
         ...,
         min_length=1,
-        description="New language list",
+        description="New language list; same names as on create, including 'cjk'",
     )
     refresh_tsv: bool = Field(
         True,

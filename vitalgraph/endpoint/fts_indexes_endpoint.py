@@ -29,6 +29,7 @@ from ..model.fts_index_model import (
     DeleteResponse,
 )
 from ..vectorization.fts_index_lifecycle import (
+    FtsRefreshIncomplete, InvalidFtsLanguages,
     ensure_fts_index, teardown_fts_index,
     list_fts_indexes, get_fts_index, get_fts_stats,
     update_fts_languages,
@@ -107,9 +108,20 @@ class FtsIndexesEndpoint:
                     message=f"FTS index '{body.index_name}' already exists",
                 )
 
-            ok = await ensure_fts_index(
-                conn, space_id, body.index_name, languages=body.languages,
-            )
+            try:
+                ok = await ensure_fts_index(
+                    conn, space_id, body.index_name, languages=body.languages,
+                )
+            except InvalidFtsLanguages as e:
+                # A domain outcome, so HTTP 200 (`issues/333`). Nothing was
+                # created: validation runs before the registry insert.
+                return FtsIndexOut(
+                    index_id=0,
+                    index_name=body.index_name,
+                    languages=body.languages,
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=str(e),
+                )
             if not ok:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -188,10 +200,31 @@ class FtsIndexesEndpoint:
         require_space_write(current_user, space_id)
         conn = await self._acquire()
         try:
-            ok = await update_fts_languages(
-                conn, space_id, index_name, body.languages,
-                refresh_tsv=body.refresh_tsv,
-            )
+            try:
+                ok = await update_fts_languages(
+                    conn, space_id, index_name, body.languages,
+                    refresh_tsv=body.refresh_tsv,
+                )
+            except InvalidFtsLanguages as e:
+                # Refused before anything changed (`issues/333`).
+                return FtsIndexOut(
+                    index_id=0,
+                    index_name=index_name,
+                    languages=body.languages,
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=str(e),
+                )
+            except FtsRefreshIncomplete as e:
+                # The change IS made; the stored tsvectors are partly old. Say
+                # so rather than report success or "not found".
+                info = await get_fts_index(conn, space_id, index_name)
+                return FtsIndexOut(
+                    index_id=info["index_id"] if info else 0,
+                    index_name=index_name,
+                    languages=body.languages,
+                    status=OperationStatus.STORE_FAILED,
+                    message=str(e),
+                )
             if not ok:
                 return FtsIndexOut(
                     index_id=0,

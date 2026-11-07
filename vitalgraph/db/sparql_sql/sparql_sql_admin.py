@@ -93,6 +93,122 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 """
 
 
+# CJK FULL-TEXT SEARCH (`issues/333`): the `cjk` pseudo-language of an FTS index.
+#
+# PostgreSQL's default parser splits on spaces and punctuation, so unspaced
+# Chinese/Japanese becomes ONE lexeme per run ("我夢到樓梯" is a single word)
+# and only an exact-run query can match it. These functions index each run of
+# CJK characters as overlapping BIGRAMS plus every character as a UNIGRAM, and
+# turn a query into the same units. No dictionary and no C extension, so it runs
+# unchanged wherever PostgreSQL does.
+#
+# By SCRIPT, not language: a run is a maximal sequence of code points in the
+# class below (kana, CJK unified ideographs + Ext A, compatibility ideographs,
+# Ext B-H). Everything else, Latin text and full-width punctuation included, ends
+# a run and is invisible here; an index's other languages index it as before.
+# Traditional and Simplified are different code points and do NOT match each
+# other. Hangul is excluded: Korean is space-delimited.
+#
+# IMMUTABLE honestly: `normalize` (NFKC folds ｶﾀｶﾅ/ＡＢＣ and maps compatibility
+# ideographs to unified ones), regexp over explicit code points (no
+# locale-dependent class), substr, and to_tsvector with a constant config. The
+# output depends on the Unicode tables built into PostgreSQL, so re-check `cjk`
+# indexes after a PG major upgrade.
+#
+# CHANGING ANY BODY IS A RE-INDEX: it changes what every existing `cjk` row
+# should hold. Ship it as a migration that refreshes every `cjk` index
+# (`refresh-fts`), never as a silent CREATE OR REPLACE.
+#
+# Requires a UTF8 database (`normalize`). Measured: 38 µs per 40-character row,
+# ~28x `to_tsvector('english')`; an earlier set-returning version cost 120 µs.
+_CJK_CLASS = (r"぀-ヿ㐀-䶿一-鿿豈-﫿"
+              r"\U00020000-\U0003134F")
+
+_VITALGRAPH_CJK_RUNS_DDL = r"""
+CREATE OR REPLACE FUNCTION vitalgraph_cjk_runs(t text) RETURNS text[]
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $f$
+  SELECT array_remove(string_to_array(regexp_replace(normalize(t, NFKC),
+    '[^""" + _CJK_CLASS + r"""]+', ' ', 'g'), ' '), '')
+$f$;
+"""
+
+# Bigrams FIRST and in order, so their positions are consecutive and a quoted
+# phrase (`'夢到' <-> '到樓' <-> '樓梯'`) matches; unigrams after, so a
+# one-character query ("夢") matches a character inside a longer run without
+# breaking any chain. A one-character run yields its unigram only.
+_VITALGRAPH_CJK_INDEX_TEXT_DDL = r"""
+CREATE OR REPLACE FUNCTION vitalgraph_cjk_index_text(t text) RETURNS text
+LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $f$
+DECLARE r text; n int; bi text := ''; uni text := '';
+BEGIN
+  FOREACH r IN ARRAY vitalgraph_cjk_runs(t) LOOP
+    n := length(r);
+    FOR i IN 1 .. n - 1 LOOP bi  := bi  || substr(r, i, 2) || ' '; END LOOP;
+    FOR i IN 1 .. n     LOOP uni := uni || substr(r, i, 1) || ' '; END LOOP;
+  END LOOP;
+  RETURN bi || uni;
+END $f$;
+"""
+
+_VITALGRAPH_CJK_TSVECTOR_DDL = r"""
+CREATE OR REPLACE FUNCTION vitalgraph_cjk_tsvector(t text) RETURNS tsvector
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $f$
+  SELECT to_tsvector('simple'::regconfig, coalesce(vitalgraph_cjk_index_text(t), ''))
+$f$;
+"""
+
+# The query, websearch-shaped. Per whitespace token (a "quoted span" counts as
+# one), each CJK run becomes its bigrams, or its unigram if it is one character:
+#   bare        the run's terms ORed — a whole question must still match, and
+#               ts_rank_cd orders by how many pairs hit
+#   "quoted"    the run as a REQUIRED phrase chain, '夢到' <-> '到樓' <-> '樓梯'
+#   -negated    the chain negated AS A UNIT; negating each pair would over-exclude
+#   `or`        ignored: bare terms are ORed already
+# NULL when there is no positive CJK, so the arm contributes nothing; the
+# builder wraps it in COALESCE (`fts_languages.tsquery_expr`). Lexemes come only
+# from the CJK class — no quote, backslash or operator can occur — and are still
+# passed through quote_literal, so query text never reaches tsquery syntax.
+_VITALGRAPH_CJK_TSQUERY_DDL = r"""
+CREATE OR REPLACE FUNCTION vitalgraph_cjk_tsquery(q text) RETURNS tsquery
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $f$
+DECLARE tok text[]; neg boolean; quoted boolean; r text; n int;
+        terms text[]; part tsquery; chain tsquery; bare tsquery; req tsquery;
+        has_pos boolean := false;
+BEGIN
+  IF q IS NULL THEN RETURN NULL; END IF;
+  FOR tok IN SELECT regexp_matches(q, '(-?)"([^"]*)"?|(-?)(\S+)', 'g') LOOP
+    neg    := coalesce(tok[1], tok[3]) = '-';
+    quoted := tok[2] IS NOT NULL;
+    FOREACH r IN ARRAY coalesce(vitalgraph_cjk_runs(coalesce(tok[2], tok[4])), '{}') LOOP
+      n := length(r);
+      terms := CASE WHEN n = 1 THEN ARRAY[r]
+                    ELSE ARRAY(SELECT substr(r, i, 2)
+                               FROM generate_series(1, n - 1) i ORDER BY i) END;
+      IF quoted OR neg THEN
+        chain := NULL;
+        FOREACH r IN ARRAY terms LOOP
+          part  := quote_literal(r)::tsquery;
+          chain := CASE WHEN chain IS NULL THEN part ELSE chain <-> part END;
+        END LOOP;
+        IF neg THEN chain := !! chain; ELSE has_pos := true; END IF;
+        req := CASE WHEN req IS NULL THEN chain ELSE req && chain END;
+      ELSE
+        FOREACH r IN ARRAY terms LOOP
+          part := quote_literal(r)::tsquery;
+          bare := CASE WHEN bare IS NULL THEN part ELSE bare || part END;
+        END LOOP;
+        has_pos := true;
+      END IF;
+    END LOOP;
+  END LOOP;
+  IF NOT has_pos THEN RETURN NULL; END IF;
+  IF bare IS NULL THEN RETURN req; END IF;
+  IF req  IS NULL THEN RETURN bare; END IF;
+  RETURN bare && req;
+END $f$;
+"""
+
+
 # EVERY function the schema needs, in one place.
 #
 # There are two installers — `SparqlSQLAdmin.init_tables` (the app/admin path)
@@ -110,7 +226,23 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 #
 # Both installers now iterate this tuple. Add a function here and both paths get
 # it; that is the point.
-FUNCTION_DDL = (_VITALGRAPH_TERM_UUID_DDL, _VITALGRAPH_ISO_TO_UTC_DDL)
+#
+# Keyed by the `regprocedure` signature, so `scripts/install_sql_functions.py`
+# (the pre-deploy step for databases initialised before a function existed) can
+# tell which are missing. IN DEPENDENCY ORDER: a LANGUAGE sql body is checked at
+# CREATE time, so a function must follow the ones it calls.
+FUNCTIONS = (
+    ("vitalgraph_term_uuid(text,character,text,bigint)", _VITALGRAPH_TERM_UUID_DDL),
+    ("vitalgraph_iso_to_utc(text)", _VITALGRAPH_ISO_TO_UTC_DDL),
+    ("vitalgraph_cjk_runs(text)", _VITALGRAPH_CJK_RUNS_DDL),
+    ("vitalgraph_cjk_index_text(text)", _VITALGRAPH_CJK_INDEX_TEXT_DDL),
+    ("vitalgraph_cjk_tsvector(text)", _VITALGRAPH_CJK_TSVECTOR_DDL),
+    ("vitalgraph_cjk_tsquery(text)", _VITALGRAPH_CJK_TSQUERY_DDL),
+)
+FUNCTION_DDL = tuple(ddl for _sig, ddl in FUNCTIONS)
+
+#: What an index needs before it may name `cjk` (`fts_languages`).
+CJK_FUNCTION_SIGNATURES = tuple(sig for sig, _ in FUNCTIONS if "_cjk_" in sig)
 
 
 class SparqlSQLAdmin(DbAdminInterface):

@@ -1001,13 +1001,11 @@ def _build_tsquery_expr(languages: List[str], safe_text: str) -> str:
     against PostgreSQL 18.4; asserted in
     `test_scripts/search/test_tsquery_parser.py`.
     """
-    parts = [
-        f"websearch_to_tsquery('{lang}'::regconfig, '{safe_text}')"
-        for lang in languages
-    ]
-    if len(parts) == 1:
-        return parts[0]
-    return "(" + " || ".join(parts) + ")"
+    # The one builder shared with the fast path and the CLI (`issues/333`);
+    # it also refuses a language name that is not a plain identifier, since
+    # these names come from the registry and are interpolated.
+    from .fts_languages import tsquery_expr
+    return tsquery_expr(languages, f"'{safe_text}'")
 
 
 def text_search_sql(

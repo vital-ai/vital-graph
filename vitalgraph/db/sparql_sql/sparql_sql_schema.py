@@ -2619,13 +2619,9 @@ $$ LANGUAGE plpgsql''')
             to_tsvector('english'::regconfig, COALESCE(NEW.search_text, ''))
          || to_tsvector('spanish'::regconfig, COALESCE(NEW.search_text, ''))
         """
-        if not languages:
-            languages = ["english"]
-        parts = [
-            f"to_tsvector('{lang}'::regconfig, COALESCE(NEW.search_text, ''))"
-            for lang in languages
-        ]
-        return "\n         || ".join(parts)
+        from .fts_languages import tsvector_expr
+        return tsvector_expr(languages, "COALESCE(NEW.search_text, '')",
+                             joiner="\n         || ")
 
     @staticmethod
     def build_tsv_batch_expr(languages: List[str], text_col: str = "search_text") -> str:
@@ -2635,11 +2631,6 @@ $$ LANGUAGE plpgsql''')
         Example: to_tsvector('english'::regconfig, COALESCE(search_text, ''))
               || to_tsvector('spanish'::regconfig, COALESCE(search_text, ''))
         """
-        if not languages:
-            languages = ["english"]
-        parts = [
-            f"to_tsvector('{lang}'::regconfig, COALESCE({text_col}, ''))"
-            for lang in languages
-        ]
-        return " || ".join(parts)
+        from .fts_languages import tsvector_expr
+        return tsvector_expr(languages, f"COALESCE({text_col}, '')")
 

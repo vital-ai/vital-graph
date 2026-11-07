@@ -82,7 +82,7 @@ class _Criteria:
 
 
 def _sql(criteria, *, for_count=False, cap=None, page_size=25, offset=0) -> str:
-    sql, _args = _build("sp", criteria, "sp_fts_message_content", "english",
+    sql, _args = _build("sp", criteria, "sp_fts_message_content", ["english"],
                         for_count=for_count, cap=cap, page_size=page_size,
                         offset=offset)
     return sql
@@ -150,7 +150,7 @@ class TestTheSizeGate:
     ], ids=["sort", "filter", "both"])
     async def test_owner_work_never_declines_and_never_probes(self, criteria):
         small = await _match_set_is_small(
-            self._ExplodingConn(), "sp_fts_message_content", "english", criteria)
+            self._ExplodingConn(), "sp_fts_message_content", ["english"], criteria)
         assert small is False
 
 
@@ -185,7 +185,7 @@ class TestTheSql:
     def test_every_target_slot_type_is_included(self):
         sql, args = _build("sp", _Criteria(fts_criteria=_Fts(
             targets=[_Target(SENT, kind="sent"), _Target(DRAFT, kind="draft")])),
-            "sp_fts_message_content", "english", for_count=False, cap=None,
+            "sp_fts_message_content", ["english"], for_count=False, cap=None,
             page_size=25, offset=0)
         assert "s.slot_type_uuid = ANY(" in sql
         assert any(isinstance(a, list) and len(a) == 2 for a in args)
@@ -196,7 +196,48 @@ class TestTheSql:
 
     def test_the_search_text_is_a_parameter_not_interpolated(self):
         sql, args = _build("sp", _Criteria(fts_criteria=_Fts(text="o'brien \" --")),
-                           "sp_fts_message_content", "english", for_count=False,
+                           "sp_fts_message_content", ["english"], for_count=False,
                            cap=None, page_size=25, offset=0)
         assert "o'brien" not in sql
         assert "o'brien \" --" in args
+
+
+class TestEveryLanguageIsSearched:
+    """`issues/333`: this path used to search only the FIRST configured
+    language, so on an `['english', 'spanish']` index a hit through the
+    Spanish stemmer was found by the pipeline and silently missing here."""
+
+    def test_the_page_ors_every_language(self):
+        sql, _ = _build("sp", _Criteria(), "sp_fts_message_content",
+                        ["english", "spanish"], for_count=False, cap=None,
+                        page_size=25, offset=0)
+        assert "websearch_to_tsquery('english'::regconfig, $2)" in sql
+        assert "websearch_to_tsquery('spanish'::regconfig, $2)" in sql
+
+    def test_the_count_ors_every_language(self):
+        sql, _ = _build("sp", _Criteria(), "sp_fts_message_content",
+                        ["english", "spanish"], for_count=True, cap=1000,
+                        page_size=0, offset=0)
+        assert "'spanish'::regconfig" in sql
+
+    def test_it_matches_the_pipelines_tsquery(self):
+        """Same builder as `vg:textSearch`, so the paths agree on a match."""
+        from vitalgraph.db.sparql_sql.fts_languages import tsquery_expr
+        sql, _ = _build("sp", _Criteria(), "sp_fts_message_content",
+                        ["english", "spanish"], for_count=False, cap=None,
+                        page_size=25, offset=0)
+        assert f"m.tsv @@ {tsquery_expr(['english', 'spanish'], '$2')}" in sql
+
+    @pytest.mark.asyncio
+    async def test_the_size_probe_ors_every_language(self):
+        seen = {}
+
+        class _Conn:
+            async def fetchval(self, sql, *args):
+                seen["sql"] = sql
+                return 0
+
+        await _match_set_is_small(_Conn(), "sp_fts_message_content",
+                                  ["english", "spanish"], _Criteria())
+        assert "'english'::regconfig" in seen["sql"]
+        assert "'spanish'::regconfig" in seen["sql"]

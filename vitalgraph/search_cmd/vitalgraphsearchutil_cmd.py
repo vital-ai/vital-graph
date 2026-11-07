@@ -499,6 +499,43 @@ class VitalGraphSearchUtilREPL:
             print(f"❌ Error: {e}")
         return True
 
+    def cmd_refresh_fts(self, args: List[str]) -> bool:
+        """Recompute an FTS index's stored tsvectors: refresh-fts -s SPACE --index N [--batch-size B]
+
+        The large-table half of a language change (`issues/333`): change the
+        languages with `PUT /api/fts-indexes/languages` and `refresh_tsv=false`
+        (registry + trigger only, instant), then run this. Batched, so no
+        statement grows with the table, and idempotent, so an interrupted run
+        is completed by running it again.
+        """
+        if not self._require_connected():
+            return True
+        space = _parse_flag(args, '-s') or _parse_flag(args, '--space') or self._require_space()
+        if not space:
+            return True
+        index_name = _parse_flag(args, '--index')
+        if not index_name:
+            print("Usage: refresh-fts -s SPACE --index N [--batch-size B]")
+            return True
+        from vitalgraph.vectorization.fts_index_lifecycle import (
+            REFRESH_BATCH_SIZE, refresh_fts_tsv)
+        try:
+            batch_size = int(_parse_flag(args, '--batch-size') or REFRESH_BATCH_SIZE)
+        except ValueError:
+            print("❌ --batch-size must be an integer")
+            return True
+        try:
+            import time as _time
+            t0 = _time.monotonic()
+            print(f"Refreshing FTS index '{index_name}' in {space} (batch_size={batch_size})...")
+            n = self._run(refresh_fts_tsv(
+                self.conn, space, index_name, batch_size=batch_size,
+                progress=lambda total: print(f"   {total:,} rows", flush=True)))
+            print(f"✅ Refreshed {n:,} rows in {_time.monotonic() - t0:.1f}s")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
     def _resolve_context_uuid(self, space: str, graph_uri: Optional[str]):
         """Resolve a graph URI to context_uuid, or pick the first context."""
         if graph_uri:
@@ -715,9 +752,11 @@ class VitalGraphSearchUtilREPL:
                 f"SELECT languages FROM {space_prefix(space)}_fts_index WHERE index_name = $1",
                 index_name,
             )) or ['english']
-            tsq = " || ".join(
-                f"websearch_to_tsquery('{lang}'::regconfig, $1)" for lang in languages
-            )
+            # The shared builder (`issues/333`): same SQL as the query path,
+            # and it refuses a stored language name that is not a plain
+            # identifier rather than interpolating it.
+            from vitalgraph.db.sparql_sql.fts_languages import tsquery_expr
+            tsq = tsquery_expr(languages, "$1")
 
             # websearch_to_tsquery, not to_tsquery. to_tsquery is the
             # operator-syntax parser: it raises on ordinary input like
@@ -975,6 +1014,7 @@ class VitalGraphSearchUtilREPL:
             # Population
             'populate':         self.cmd_populate,
             'populate-fts':     self.cmd_populate_fts,
+            'refresh-fts':      self.cmd_refresh_fts,
             'populate-geo':     self.cmd_populate_geo,
             'stats':            self.cmd_stats,
             # Search
@@ -1024,6 +1064,7 @@ Mapping Management:
 Population:
   populate -s SPACE --index N [--graph-uri G] [--mapping-type M] [--batch-size B]
   populate-fts -s SPACE --index N [--graph-uri G] [--mapping-type M] [--batch-size B]
+  refresh-fts -s SPACE --index N [--batch-size B]   recompute tsvectors after a language change
   populate-geo -s SPACE [--graph-uri G]
   stats -s SPACE
 
@@ -1058,7 +1099,7 @@ Search:
             'index', 'mapping', 'search',
             'list', 'create', 'delete', 'info',
             'vector', 'text', 'fuzzy', 'geo', 'combined',
-            'populate', 'populate-fts', 'populate-geo', 'stats',
+            'populate', 'populate-fts', 'refresh-fts', 'populate-geo', 'stats',
             'help', 'exit', 'quit',
             '-s', '--space', '--name', '--dims', '--provider', '--model',
             '--index', '--type', '--source-type', '--mapping-id',

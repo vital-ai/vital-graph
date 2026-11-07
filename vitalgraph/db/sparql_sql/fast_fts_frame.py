@@ -41,6 +41,7 @@ import logging
 import uuid as _uuid
 from typing import Any, List, Optional, Tuple
 
+from .fts_languages import tsquery_expr
 from .sort_value_key import fits_value_key
 from .space_names import space_prefix
 
@@ -113,8 +114,15 @@ def can_serve_fts_frame(criteria) -> bool:
 
 
 async def _resolve_index(conn, space_id: str, index_name: str
-                         ) -> Optional[Tuple[str, str]]:
-    """(fts table, text-search config) for the requested index, or None.
+                         ) -> Optional[Tuple[str, List[str]]]:
+    """(fts table, its languages) for the requested index, or None.
+
+    EVERY configured language, not the first (`issues/333`). This used to
+    return `languages[0]`, so on an `['english', 'spanish']` index a document
+    matched only through the Spanish stemmer was found by the pipeline (which
+    ORs a tsquery per language) and silently missing here — a plausible page,
+    no error. The tsquery is now built by the same `tsquery_expr` the pipeline
+    uses, so the two paths cannot disagree on what a query matches.
 
     Resolves an alias exactly as the push-down does — a name in
     `search_mapping` resolves through `search_mapping_index` to the real index —
@@ -136,15 +144,16 @@ async def _resolve_index(conn, space_id: str, index_name: str
         return None
     if langs is None:
         return None
-    cfg = (list(langs) or ["english"])[0]
+    languages = list(langs) or ["english"]
     table = f"{space_prefix(space_id)}_fts_{real}"
     if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", table):
         return None
-    return table, cfg
+    return table, languages
 
 
-def _build(space_id: str, criteria, fts_table: str, cfg: str, *, for_count: bool,
-           cap: Optional[int], page_size: int, offset: int) -> Tuple[str, list]:
+def _build(space_id: str, criteria, fts_table: str, languages: List[str], *,
+           for_count: bool, cap: Optional[int], page_size: int,
+           offset: int) -> Tuple[str, list]:
     """The page or count SQL, and its parameters."""
     ess = f"{space_prefix(space_id)}_entity_slot_sort"
     eps = f"{space_prefix(space_id)}_entity_prop_sort"
@@ -162,7 +171,7 @@ def _build(space_id: str, criteria, fts_table: str, cfg: str, *, for_count: bool
     entity_type = p(_term_uuid(criteria.entity_type))
 
     where = [
-        f"m.tsv @@ websearch_to_tsquery('{cfg}'::regconfig, {text})",
+        f"m.tsv @@ {tsquery_expr(languages, text)}",
         f"m.context_uuid = {ctx}",
         f"s.context_uuid = {ctx}",
         f"s.slot_type_uuid = ANY({slot_types}::uuid[])",
@@ -228,7 +237,8 @@ async def _gate(conn, space_id: str, criteria) -> Optional[str]:
     return None
 
 
-async def _match_set_is_small(conn, fts_table: str, cfg: str, criteria) -> bool:
+async def _match_set_is_small(conn, fts_table: str, languages: List[str],
+                              criteria) -> bool:
     """Would the general pipeline INLINE this match set?
 
     The two paths are complements, and the boundary is exactly the inline cap.
@@ -288,7 +298,7 @@ async def _match_set_is_small(conn, fts_table: str, cfg: str, criteria) -> bool:
                 int(os.getenv("VG_FTS_FASTPATH_MIN_PLAIN", "20000")))
     n = await conn.fetchval(
         f"SELECT count(*) FROM (SELECT 1 FROM {fts_table} "
-        f"WHERE tsv @@ websearch_to_tsquery('{cfg}'::regconfig, $1) "
+        f"WHERE tsv @@ {tsquery_expr(languages, '$1')} "
         f"AND context_uuid = $2 LIMIT {floor + 1}) x",
         criteria.fts_criteria.text, _term_uuid(criteria.graph_uri))
     return (n or 0) <= floor

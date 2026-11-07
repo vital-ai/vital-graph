@@ -130,6 +130,8 @@ async def apply_space_config(conn, space_id: str, document: Dict[str, Any], *,
         "updated": [],
         "removed": [],
         "failed": [],
+        # Why, for any entry in `failed` that has a describable reason.
+        "reasons": {},
     }
 
     # REMOVALS FIRST, and deliberately. `teardown_index` deletes every
@@ -180,22 +182,40 @@ async def _apply_vector_indexes(conn, space_id, document, report, dry_run):
 
 
 async def _apply_fts_indexes(conn, space_id, document, report, dry_run):
+    from vitalgraph.db.sparql_sql.fts_languages import validate_fts_languages
     from vitalgraph.vectorization.fts_index_lifecycle import (
-        ensure_fts_index, get_fts_index, update_fts_languages,
-        update_rank_normalization)
+        InvalidFtsLanguages, ensure_fts_index, get_fts_index,
+        update_fts_languages, update_rank_normalization)
+
+    def refuse(entry: str, reason: str) -> None:
+        report["failed"].append(entry)
+        report["reasons"][entry] = reason
 
     for fi in document.get("fts_indexes") or []:
         name = fi.get("index_name")
+        entry = f"fts_index/{name}"
         languages = fi.get("languages") or ["english"]
         rank = fi.get("rank_normalization") or 0
         current = await get_fts_index(conn, space_id, name)
+        if current is None or list(current.get("languages") or []) != list(languages):
+            # Checked IN THE DRY RUN TOO (`issues/333`): a plan that reports
+            # `created` for a language list the real run will refuse is the
+            # plan lying. Unvalidated, an unknown language created cleanly and
+            # then left every write into the index silently unindexed.
+            reason = await validate_fts_languages(conn, languages)
+            if reason:
+                refuse(entry, reason)
+                continue
         if current is None:
             if dry_run:
-                report["created"].append(f"fts_index/{name}")
+                report["created"].append(entry)
                 continue
-            ok = await ensure_fts_index(conn, space_id, name, languages, rank)
-            (report["created"] if ok else report["failed"]).append(
-                f"fts_index/{name}")
+            try:
+                ok = await ensure_fts_index(conn, space_id, name, languages, rank)
+            except InvalidFtsLanguages as e:
+                refuse(entry, str(e))
+                continue
+            (report["created"] if ok else report["failed"]).append(entry)
             continue
 
         # Present, so `ensure_fts_index` is a no-op and would leave a DIFFERENT
@@ -212,14 +232,23 @@ async def _apply_fts_indexes(conn, space_id, document, report, dry_run):
         changed = False
         if list(current.get("languages") or []) != list(languages):
             if not dry_run:
-                await update_fts_languages(conn, space_id, name, languages)
+                # The return value used to be ignored, so a failed language
+                # change was reported as `updated` (`issues/333`).
+                try:
+                    ok = await update_fts_languages(conn, space_id, name, languages)
+                except Exception as e:      # incl. InvalidFtsLanguages
+                    refuse(entry, str(e))
+                    continue
+                if not ok:
+                    refuse(entry, "FTS index not found")
+                    continue
             changed = True
         if (current.get("rank_normalization") or 0) != rank:
             if not dry_run:
                 await update_rank_normalization(conn, space_id, name, rank)
             changed = True
         if changed:
-            report["updated"].append(f"fts_index/{name}")
+            report["updated"].append(entry)
 
 
 async def _apply_search_mappings(conn, space_id, document, report, dry_run):
