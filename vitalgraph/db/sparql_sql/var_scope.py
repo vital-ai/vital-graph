@@ -450,8 +450,16 @@ def _late_text_vars_in_expr(expr) -> Set[str]:
     if isinstance(expr, ExprVar):
         return {expr.var}
     if isinstance(expr, ExprFunction):
+        args = list(expr.args or [])
+        # A `vg:` search function reads its ENTITY argument (the first) by
+        # uuid only — `_resolve_uuid_col`, a side-table lookup on
+        # `subject_uuid` — so it needs no term text. Counted, a scored search
+        # kept its subject's text join for every candidate (`issues/333`).
+        from .vg_functions import is_vg_function
+        if is_vg_function(expr) and args and isinstance(args[0], ExprVar):
+            args = args[1:]
         out: Set[str] = set()
-        for arg in (expr.args or []):
+        for arg in args:
             out |= _late_text_vars_in_expr(arg)
         return out
     if isinstance(expr, ExprAggregator) and expr.expr:
@@ -514,7 +522,10 @@ def _collect_referenced_vars(plan: PlanV2, refs: Set[str],
         if plan.extend_var:
             refs.add(plan.extend_var)
         if plan.extend_expr:
-            refs.update(vars_in_expr(plan.extend_expr))
+            # In late-text mode, what the BIND reads AS TEXT, as for a FILTER:
+            # a `vg:` function's entity argument is a uuid read (`issues/333`).
+            refs.update(_late_text_vars_in_expr(plan.extend_expr) if late_text
+                        else vars_in_expr(plan.extend_expr))
 
     if kind == KIND_ORDER and plan.order_conditions and not late_text:
         for expr, _dir in plan.order_conditions:

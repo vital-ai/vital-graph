@@ -319,6 +319,129 @@ def _emit_late_text(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
             f"ORDER BY {r_alias}.{sn}__uuid")
 
 
+def _emit_late_text_ordered(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
+    """`ORDER BY <keys> LIMIT k`: page on uuids, resolve projected text after.
+
+    `_emit_late_text`'s idea for the shape it declines: a REQUESTED order and
+    any number of projected variables. The memory service's recall is exactly
+    this, `SELECT ?s ?score ?text ?at ?parent ?json ... ORDER BY DESC(?score)
+    LIMIT 12`, and without this the default path joined the term table for all
+    six variables on EVERY candidate, 20,000 for a heavy member, then sorted
+    the wide rows and kept 12. The planner's own plan already resolves terms for
+    the page only; this closes that gap on the default path (`issues/333`).
+
+    WHICH TEXT MOVES. A projected variable's text moves outside the LIMIT unless
+    something inside reads it: a FILTER or BIND (`compute_late_text_vars`), or
+    an ORDER key, since the sort runs inside. Everything else, a computed
+    score included, is passed through unchanged.
+
+    ORDER IS KEPT BY POSITION. The child's own ORDER BY sorts; the LIMIT and
+    OFFSET apply to it directly; the page is numbered right after, and the
+    outer query sorts by that number. So the result is the child's order
+    exactly, whatever its keys are, with no re-derivation of the generator's
+    sort keys above the term joins.
+
+    Declines (returns None) on anything else: no LIMIT, a DISTINCT/REDUCED
+    between the slice and the order, a synthesized order (the plain
+    `_emit_late_text` serves that), or nothing to move.
+    """
+    from .emit import emit
+    from .ir import TiebreakVar
+    from .sql_type_generation import ColumnInfo, COMPANION_SUFFIXES, TypeRegistry
+    from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
+    from .var_scope import _late_text_vars_in_expr
+
+    if plan.limit < 0:
+        return None
+    proj = plan.child
+    if proj is None or proj.kind != KIND_PROJECT or not proj.children:
+        return None
+    order = proj.children[0]
+    if order.kind != KIND_ORDER or not order.order_conditions:
+        return None
+    if _buried_order_is_synthesized(proj):
+        return None
+    project_vars = list(proj.project_vars or [])
+    if not project_vars or "*" in project_vars:
+        return None
+
+    needed = set(compute_late_text_vars(proj))
+    for expr, _direction in order.order_conditions:
+        if isinstance(expr, TiebreakVar):
+            continue                       # the paging tiebreak sorts on uuids
+        if isinstance(expr, str):
+            # `ORDER BY ?x` is held as the bare NAME (`collect._collect_order`),
+            # which no expression walker reads: missed, its text was suppressed
+            # and the page sorted on NULLs (`issues/324`'s shape).
+            needed.add(expr.lstrip("?"))
+            continue
+        needed |= _late_text_vars_in_expr(expr)
+
+    child_ctx = ctx.child(types=TypeRegistry(aliases=ctx.aliases))
+    child_ctx.text_needed_vars = needed
+    try:
+        child_sql = emit(proj, child_ctx)
+    except Exception as exc:
+        ctx.log("slice", f"ordered late-text declined: child would not emit ({exc})")
+        return None
+    if not child_sql:
+        return None
+
+    late, passed = [], []
+    for v in project_vars:
+        info = child_ctx.types.get(v)
+        sn = info.sql_name if info and info.sql_name else None
+        if not sn:
+            return None
+        movable = (v not in needed and info.from_triple
+                   and not info.text_materialized
+                   and f"{sn}__uuid" in child_sql
+                   and f"NULL::uuid AS {sn}__uuid" not in child_sql)
+        (late if movable else passed).append((v, sn, info))
+    if not late:
+        return None
+    if getattr(child_ctx, "needs_ordered_scan", False):
+        ctx.needs_ordered_scan = True
+
+    r_alias = ctx.aliases.next("r")
+    rn = f"{r_alias}_rn"
+    cols, joins = [], []
+    moved = {v for v, _s, _i in late}
+    # IN PROJECTION ORDER. Columns are read by position as well as by name, and
+    # a variable passed through (a date a FILTER reads) placed ahead of the
+    # moved ones reordered the row: same values, different tuple.
+    for v, sn, info in sorted(late + passed, key=lambda t: project_vars.index(t[0])):
+        if v not in moved:
+            cols.append(f"{r_alias}.{sn}")
+            cols += [f"{r_alias}.{sn}{suf}" for suf in COMPANION_SUFFIXES
+                     if f"{sn}{suf}" in child_sql]
+            ctx.types.register(ColumnInfo.simple_output(
+                v, sn, from_triple=info.from_triple, typed_lane=info.typed_lane,
+                text_materialized=info.text_materialized,
+                uuid_materialized=info.uuid_materialized, partial=info.partial))
+            continue
+        t_alias = ctx.aliases.next("t")
+        cols += TypeRegistry.term_table_columns(
+            sn, t_alias, r_alias, "",
+            dt_case_sql=ctx.dt_case_expr(t_alias),
+            numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
+            boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
+            datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES),
+        )
+        # LEFT: a variable OPTIONAL left unbound has a NULL uuid and must keep
+        # its row, as the inline form kept it.
+        joins.append(f"LEFT JOIN {ctx.term_table} AS {t_alias} "
+                     f"ON {r_alias}.{sn}__uuid = {t_alias}.term_uuid")
+        _register_projection(ctx, v, sn, r_alias, t_alias)
+    page = f"LIMIT {plan.limit}" + (f" OFFSET {plan.offset}" if plan.offset > 0 else "")
+    ctx.log("slice", f"ordered late-text page: {page}, text for "
+                     f"{', '.join(v for v, _s, _i in late)} resolved for the page only")
+    return (f"SELECT {', '.join(cols)}\n"
+            f"FROM (\nSELECT {r_alias}_p.*, row_number() OVER () AS {rn} FROM (\n"
+            f"SELECT * FROM (\n{child_sql}\n) AS {r_alias}_i\n{page}\n) AS {r_alias}_p\n"
+            f") AS {r_alias}\n" + "\n".join(joins) + f"\nORDER BY {r_alias}.{rn}")
+
+
 def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     """Page uuids first, resolve text for the page afterwards.
 
@@ -905,6 +1028,9 @@ def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
     # Last: page on uuids and resolve text for the page only. After every shape
     # above, so none of their behaviour changes (issues/088).
     late = _emit_late_text(plan, ctx)
+    if late is not None:
+        return late
+    late = _emit_late_text_ordered(plan, ctx)
     if late is not None:
         return late
 

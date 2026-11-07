@@ -404,6 +404,42 @@ Results with the change:
   and more than one projected variable, and the recall has both. That is the
   remaining gap to the planner, about 60 ms.
 
+**Gap closed: `emit_slice._emit_late_text_ordered`** (2026-11-08). For
+`ORDER BY <keys> LIMIT k [OFFSET o]` with a requested order:
+- the child is emitted with text suppressed for every projected variable
+  nothing inside reads
+- the page is cut on the child's own order
+- the page is numbered right after the cut, and the outer query sorts by that
+  number, so the result is the child's order exactly, whatever the keys are
+- each moved variable gets a `LEFT JOIN` to the term table on the page's rows
+  only
+- columns stay in projection order
+
+"Read inside" means a FILTER or BIND (`compute_late_text_vars`), or an ORDER
+key. ORDER keys are held as bare names, which no expression walker reads, so
+they are added explicitly, or a text sort key would sort on NULLs (the
+`issues/324` shape). Two small changes went with it, both in late-text mode
+only:
+- a `vg:` function's entity argument counts as a uuid read
+- a BIND's expression is read like a FILTER's
+
+Verified equal to the inline form, row for row and in order:
+- 36 recall cases: 3 members, 6 cues, with and without the date filter
+- 7 general shapes: a text sort key, DESC date, OFFSET, an unbound OPTIONAL, a
+  text FILTER, a score with a text key, and one that correctly declines
+
+`tests/integration/test_ordered_page_resolves_text_late.py` pins 7 cases,
+including that a text sort key keeps its text inside. All 7 fail with the
+bare-name handling removed.
+
+Recall, default path, median ms (test stack, 5 runs, three rounds on the heavy
+member):
+
+| member | before | after | planner `qtree` |
+|---|---|---|---|
+| heavy, 20,000 | 362 | **304-308** | 301 |
+| typical, 1,000 | 39 | **26** | 22 |
+
 **Measured as served, and on the planner stack** (2026-11-08). The explain
 script now runs each statement the way the executor does, through its own
 `_apply_join_order` / `_apply_planner_advice` in a transaction. A `qtree` plan
