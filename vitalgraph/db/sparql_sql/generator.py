@@ -1052,7 +1052,7 @@ async def _measure_fts_leaves(plan, ctx, conn=None, conn_params=None) -> None:
     if FTS_LEAF_COUNT_CAP <= 0 or (conn is None and conn_params is None):
         return
     from .filter_pushdown import _fts_index_and_query
-    from .vg_functions import _context_clause
+    from .vg_functions import _context_clause, extract_text_search_args
     from . import db_provider as db
     wanted = {}
     try:
@@ -1060,7 +1060,12 @@ async def _measure_fts_leaves(plan, ctx, conn=None, conn_params=None) -> None:
             resolved = _fts_index_and_query(expr, ctx)
             if resolved is not None:
                 table, tsquery = resolved
-                wanted[(table, tsquery, _context_clause(ctx))] = None
+                # The SAME clause the push-down emits for this call (the key
+                # matches the leaf measured to the leaf served), so per entity
+                # variable, as `_context_clause` scopes it (`issues/333`).
+                targs = extract_text_search_args(expr)
+                wanted[(table, tsquery, _context_clause(
+                    ctx, targs.entity_var if targs else None))] = None
     except Exception as e:  # resolution is the pushdown's job; never fail here
         logger.debug("fts leaf measurement: resolution failed: %s", e)
         return

@@ -1517,7 +1517,7 @@ def push_text_search(plan: PlanV2, space_id: str, ctx=None) -> int:
             fts_table, tsquery = resolved
             ref_id, col_name = slot.positions[0]
             from .vg_functions import _context_clause
-            c_clause = _context_clause(ctx)
+            c_clause = _context_clause(ctx, targs.entity_var)
             sql = _inlined_fts_constraint(
                 ctx, ref_id, col_name, fts_table, tsquery, c_clause) or (
                    f"{ref_id}.{col_name} IN "
@@ -1559,7 +1559,7 @@ def push_text_search(plan: PlanV2, space_id: str, ctx=None) -> int:
         # to rows from another graph — a wrong answer, silently. If this ever
         # raises, that is a bug to surface, not one to degrade past.
         from .vg_functions import _context_clause
-        ctx_clause = _context_clause(ctx)
+        ctx_clause = _context_clause(ctx, targs.entity_var)
 
         # Deliberately INLINE, not a MATERIALIZED CTE. `_term_set` above
         # records the measurement: fencing the equivalent term set cost 41x,

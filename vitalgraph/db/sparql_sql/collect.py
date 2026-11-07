@@ -32,7 +32,7 @@ from ..jena_sparql.jena_types import (
 )
 
 from .ir import (
-    PlanV2, AliasGenerator, TableRef, VarSlot,
+    PlanV2, AliasGenerator, TableRef, VarSlot, VAR_GRAPH_AMBIGUOUS,
     KIND_BGP, KIND_JOIN, KIND_LEFT_JOIN, KIND_UNION, KIND_MINUS,
     KIND_TABLE, KIND_NULL, KIND_PATH,
     KIND_PROJECT, KIND_DISTINCT, KIND_REDUCED, KIND_SLICE,
@@ -245,6 +245,7 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
             # so under any FROM / FROM NAMED a BGP kept only its FIRST triple and
             # the rest of the pattern was silently dropped: a WIDER answer, rows
             # that do not satisfy the query (`issues/334`).
+            _record_var_graph(triple, aliases, graph_uri)
             continue
 
         # Default graph — only when NOT inside a GRAPH clause
@@ -294,7 +295,35 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
             plan.constraints.append(constraint)
             plan.tagged_constraints.append((q_id, constraint))
 
+        _record_var_graph(triple, aliases, graph_uri)
+
     return plan
+
+
+def _record_var_graph(triple, aliases: AliasGenerator, graph_uri) -> None:
+    """Note the one constant graph this quad confines its variables to.
+
+    The quad is confined to exactly one graph when the request is graph-locked,
+    when it sits in `GRAPH <uri>`, or when it reads the service's default
+    graph. Anything else (`GRAPH ?g`, a FROM/FROM NAMED dataset, an unscoped
+    default graph) confines it to none we can name as a constant, and the
+    variable is marked ambiguous, as it is when two quads bind it in two
+    different graphs. `vg_functions._context_clause` reads this (`issues/333`).
+    """
+    if aliases.graph_lock_uri:
+        g = aliases.graph_lock_uri
+    elif aliases.has_dataset_clause or graph_uri == GRAPH_VAR_SCOPE:
+        g = VAR_GRAPH_AMBIGUOUS
+    elif graph_uri:
+        g = graph_uri
+    elif aliases.default_graph:
+        g = aliases.default_graph
+    else:
+        g = VAR_GRAPH_AMBIGUOUS
+    for node in (triple.subject, triple.predicate, triple.object):
+        if isinstance(node, VarNode):
+            prev = aliases.var_graphs.get(node.name)
+            aliases.var_graphs[node.name] = g if prev in (None, g) else VAR_GRAPH_AMBIGUOUS
 
 
 @collect.register(OpJoin)

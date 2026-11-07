@@ -20,6 +20,10 @@ from ..jena_sparql.jena_types import Expr, ExprAggregator, GroupVar
 # Alias Generator
 # ===========================================================================
 
+#: `AliasGenerator.var_graphs` value for a variable with no single constant graph.
+VAR_GRAPH_AMBIGUOUS = "\x00ambiguous"
+
+
 class AliasGenerator:
     """Produces unique SQL table aliases: q0, q1, ... for quads; t0, t1, ..."""
 
@@ -52,6 +56,15 @@ class AliasGenerator:
         # would silently widen every such query to the whole space.
         self.dataset_default_graphs: Optional[List[str]] = None
         self.dataset_named_graphs: Optional[List[str]] = None
+        # The ONE constant graph each variable is bound in, recorded by
+        # `collect` from the quads that bind it, or VAR_GRAPH_AMBIGUOUS when it
+        # is bound under `GRAPH ?g`, in two graphs, with no graph scoping at
+        # all, or inside a FROM/FROM NAMED dataset. Read by
+        # `vg_functions._context_clause`: the search side tables are keyed
+        # (subject, context), so a lookup by subject alone in a space holding
+        # the same subject in two graphs read whichever row came first
+        # (`issues/333`).
+        self.var_graphs: Dict[str, str] = {}
         # Predicate cardinality stats.
         #
         # Keyed by (predicate, object). `{space}_rdf_stats` is stored per

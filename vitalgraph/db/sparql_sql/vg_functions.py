@@ -582,15 +582,37 @@ def _resolve_uuid_col(entity_var: str, ctx) -> Optional[str]:
     return None
 
 
-def _context_clause(ctx) -> str:
+def _context_clause(ctx, entity_var: Optional[str] = None) -> str:
     """Return a SQL AND clause for context_uuid scoping, or empty string.
 
     When graph_lock_uri is set (single-graph queries), vector/geo side-table
     rows are scoped to that graph's context_uuid via a term-table subquery.
+
+    Otherwise, when `entity_var` is bound in ONE constant graph — the query's
+    `GRAPH <uri>` or the default graph (`collect._record_var_graph`) — the rows
+    are scoped to that graph. The side tables are keyed (subject, context), and
+    a lookup by subject alone, in a space holding the same subject in two
+    graphs, read whichever graph's row came first: the score, the text match
+    and the vector came from the OTHER graph (`issues/333`, proven on two
+    graphs). The memory service's recall is `GRAPH <member> {...}` with no lock,
+    which is exactly this case.
+
+    A literal uuid, not a term-table subquery: a term's uuid is a pure function
+    of its text, and PostgreSQL can estimate a literal (`issues/258`). A
+    variable under `GRAPH ?g`, in two graphs, or in an unscoped default graph
+    gets no clause, as before.
     """
     graph_uri = getattr(ctx, 'graph_lock_uri', None)
     if not graph_uri:
-        return ""
+        if not entity_var:
+            return ""
+        from .ir import VAR_GRAPH_AMBIGUOUS
+        aliases = getattr(ctx, "aliases", None)
+        g = (getattr(aliases, "var_graphs", None) or {}).get(entity_var)
+        if not g or g == VAR_GRAPH_AMBIGUOUS:
+            return ""
+        from .sparql_sql_space_impl import _generate_term_uuid
+        return f" AND context_uuid = '{_generate_term_uuid(g, 'U')}'::uuid"
     # Resolve graph URI to its UUID via a scalar subquery on term table
     term_table = f"{space_prefix(ctx.space_id)}_term"
     return (
@@ -654,7 +676,7 @@ def vector_similarity_sql(
     vg_hints = getattr(ctx, 'vg_hints', {})
     threshold = vg_hints.get('vg_threshold')
     top_k = vg_hints.get('vg_top_k')
-    ctx_clause = _context_clause(ctx)
+    ctx_clause = _context_clause(ctx, vargs.entity_var)
 
     # Build optional WHERE clauses
     threshold_clause = ""
@@ -745,7 +767,7 @@ def vector_top_k_driving_sql(
             space_id=ctx.space_id,
         )
 
-    ctx_clause = _context_clause(ctx)
+    ctx_clause = _context_clause(ctx, vargs.entity_var)
     # Remove leading " AND " for standalone WHERE
     where_parts = [f"TRUE{ctx_clause}"]
     if threshold is not None:
@@ -815,7 +837,7 @@ def text_match_sql(expr: ExprFunction, ctx) -> Optional[str]:
     languages = _resolve_fts_languages(resolved, ctx)
     safe_text = targs.search_text.replace("'", "''")
     tsquery = _build_tsquery_expr(languages, safe_text)
-    ctx_clause = _context_clause(ctx)
+    ctx_clause = _context_clause(ctx, targs.entity_var)
     return (f"EXISTS (SELECT 1 FROM {fts_table} "
             f"WHERE subject_uuid = {uuid_col}{ctx_clause} "
             f"AND tsv @@ {tsquery})")
@@ -876,7 +898,7 @@ def text_top_k_driving_sql(
     tsquery = _build_tsquery_expr(languages, safe_text)
 
     where_parts = [f"tsv @@ {tsquery}"]
-    ctx_clause = _context_clause(ctx)
+    ctx_clause = _context_clause(ctx, targs.entity_var)
     if ctx_clause:
         # `_context_clause` returns a leading " AND ..."; this is a standalone
         # WHERE, so strip it.
@@ -1032,7 +1054,7 @@ def text_search_sql(
 
     resolved_fts_index = _resolve_index_name(targs.index_name, 'fts', ctx)
     fts_table = f"{space_prefix(ctx.space_id)}_fts_{resolved_fts_index}"
-    ctx_clause = _context_clause(ctx)
+    ctx_clause = _context_clause(ctx, targs.entity_var)
     safe_text = targs.search_text.replace("'", "''")
     languages = _resolve_fts_languages(resolved_fts_index, ctx)
     tsquery = _build_tsquery_expr(languages, safe_text)
@@ -1099,7 +1121,7 @@ def hybrid_search_sql(
     resolved_vec_index = _resolve_index_name(targs.index_name, 'vector', ctx)
     fts_table = f"{space_prefix(ctx.space_id)}_fts_{resolved_fts_index}"
     vec_table = f"{space_prefix(ctx.space_id)}_vec_{resolved_vec_index}"
-    ctx_clause = _context_clause(ctx)
+    ctx_clause = _context_clause(ctx, targs.entity_var)
     # Build context clause variants for the two table aliases
     ctx_clause_f = ctx_clause.replace('context_uuid', 'f.context_uuid') if ctx_clause else ''
     ctx_clause_v = ctx_clause.replace('context_uuid', 'v.context_uuid') if ctx_clause else ''
@@ -1181,7 +1203,7 @@ def geo_distance_sql(expr: ExprFunction, ctx) -> Optional[str]:
 
     # ST_Distance with geography type returns meters
     # Use MIN to return closest distance when subject has multiple geo rows
-    ctx_clause = _context_clause(ctx)
+    ctx_clause = _context_clause(ctx, gargs.entity_var)
     sql = (
         f"(SELECT MIN(ST_Distance(location, "
         f"ST_MakePoint({gargs.longitude}, {gargs.latitude})::geography)) "
@@ -1208,7 +1230,7 @@ def within_radius_sql(expr: ExprFunction, ctx) -> Optional[str]:
     geo_table = f"{space_prefix(ctx.space_id)}_geo"
 
     # ST_DWithin uses the GiST index for efficient spatial filtering
-    ctx_clause = _context_clause(ctx)
+    ctx_clause = _context_clause(ctx, gargs.entity_var)
     sql = (
         f"EXISTS (SELECT 1 FROM {geo_table} "
         f"WHERE subject_uuid = {uuid_col}{ctx_clause} "
@@ -1236,7 +1258,7 @@ def within_bounds_sql(expr: ExprFunction, ctx) -> Optional[str]:
         return None
 
     geo_table = f"{space_prefix(ctx.space_id)}_geo"
-    ctx_clause = _context_clause(ctx)
+    ctx_clause = _context_clause(ctx, bargs.entity_var)
 
     # ST_MakeEnvelope(xmin, ymin, xmax, ymax, srid)
     # In geography terms: (minLon, minLat, maxLon, maxLat, 4326)
@@ -1267,7 +1289,7 @@ def within_polygon_sql(expr: ExprFunction, ctx) -> Optional[str]:
         return None
 
     geo_table = f"{space_prefix(ctx.space_id)}_geo"
-    ctx_clause = _context_clause(ctx)
+    ctx_clause = _context_clause(ctx, pargs.entity_var)
     safe_geom = pargs.wkt_or_geojson.replace("'", "''")
 
     # Detect if GeoJSON (starts with '{') or WKT
@@ -1366,7 +1388,7 @@ def multi_vector_similarity_sql(
     if uuid_col is None:
         return None, []
 
-    ctx_clause = _context_clause(ctx)
+    ctx_clause = _context_clause(ctx, mvargs.entity_var)
     vec_requests: List[VectorRequest] = []
 
     # Read multi-vector config from context (set by REST API layer)

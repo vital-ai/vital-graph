@@ -1,6 +1,6 @@
 # 333 — Full-text search cannot match Chinese text
 
-## Status: OPEN. `cjk` BUILT 2026-11-07 (not committed); ONE DECISION OPEN — D2, query narrowing.
+## Status: OPEN. `cjk` BUILT 2026-11-07 (`0d75566f`); ONE DECISION OPEN — D2, now a ranking question.
 
 - **Built and verified on the vg test stack, rebuilt for the change:**
   - both live defects
@@ -13,6 +13,12 @@
   whole question matches 6-88% of the corpus and costs 0.4-13 s for a ranked
   page of 25. See "Measured at scale". The narrowing rule needs a REAL
   corpus to choose, because the synthetic one inverts which pairs are rare.
+- **The memory service's recall does not hit that latency** (2026-11-08).
+  Its recall is a hybrid search inside one member graph, so cost is bounded by
+  the member's messages. It was dominated by scoring each candidate two or
+  three times; that is FIXED (`8e797759`): 967 → 403 ms default and 439 →
+  340 ms planner, on a 20,000-message member. See "The memory service's
+  actual query".
 
 Requested by vital-saas-memory: their zh-Hant recall questions find nothing
 through vitalgraph FTS, and the shared-character reorder in their own code is
@@ -310,6 +316,156 @@ chat the relationship roughly inverts: content words are rare and function
 pairs (我的, 什麼, 那個) are common. So a frequency rule is plausible, but its
 threshold and its effect on recall can only be measured on real messages.
 AND and ≥2-of-k are too strict for whole questions in any corpus.
+
+## The memory service's actual query (2026-11-08)
+
+**The scale benchmark above does not measure what vital-saas-memory runs.**
+`vital_saas_memory/query.py` recalls with ONE SPARQL query per kind, in
+parallel. Each is:
+- `BIND(vg:hybridSearch(?s, <cues>, <index>, 0.5) AS ?score)`, vector and
+  full text at alpha 0.5
+- inside `GRAPH <member graph>`, with one graph per member in one shared space
+- `FILTER(?score > 0) ORDER BY DESC(?score) LIMIT 12`
+
+A hybrid has no top-k path. It is a correlated subquery that scores EVERY
+candidate the pattern yields, which here means every message in the member's
+graph. So the cost is set by the number of messages in that graph, not by how
+many pairs the query matches. OR breadth affects the ranking, not the cost.
+And there is no real Chinese corpus to measure against: the memory service's
+zh-Hant tests are unit-test strings, and the starsign app is not live.
+
+**Fixture** (`test_scripts/perf/issue333_memory_recall_fixture.py`):
+- the space provisioned by the memory service's own `config.provision`, with
+  `cjk` added to its FTS languages
+- messages written as the platform writes them: `KGChatUserMessage` /
+  `KGChatBotMessage` through `objects.create_objects`, embedded and indexed by
+  auto-sync with MiniLM-multilingual
+- one heavy member (20,000 messages) and 20 typical ones (1,000 each): 40,000
+  messages in `perf_memcjk` on the vg test stack
+- statistics built through the admin resync
+
+**Measurement** (`test_scripts/perf/issue333_recall_explain.py`):
+- the exact SPARQL `build_query` emits, with zh-Hant cues
+- SQL generated in-process on the default path and with the planner on
+  (`planner_ext=True`, `VG_PLANNER_FEATURES=qtree`)
+- a stored embedding substituted for the query vector
+- EXPLAIN ANALYZE, 5 runs per cell, test app stopped
+- the host had swap in use but none being written (0 swap-outs per 10 s)
+
+Median ms:
+
+| member | path | before | `cjk` cost | score computed once |
+|---|---|---|---|---|
+| heavy, 20,000 | default | 967 | +342 (625 without `cjk`) | **403** |
+| heavy, 20,000 | planner `qtree` | 439 | +232 (207 without) | **340** |
+| typical, 1,000 | default | 57 | +16 | **47** |
+| typical, 1,000 | planner `qtree` | 30 | +12 | **23** |
+
+**Where the time went.** The hybrid score was evaluated more than once per
+candidate:
+- three times on the default path: the `?score > 0` filter, the sort key and
+  the output column, because each companion column carried its own copy of the
+  expression and PostgreSQL inlines a flattened sub-select's expression at
+  every reference
+- twice on the planner path (filter and sort key), the same way
+
+Each evaluation is two index probes plus the scoring arithmetic. `cjk` adds
+about 5.8 µs to each (342 ms over 60,000 evaluations, 232 ms over 40,000): the
+54-lexeme tsvector and the 10-term query in `ts_rank_cd`. So the multiplier
+mattered more than `cjk`.
+
+**Fixed: `emit_extend.compute_once`**, used by both `emit_extend` and
+`qplan`'s BIND levels. A `vg:` function in a BIND is emitted as
+`LEFT JOIN LATERAL (SELECT <expr> AS val OFFSET 0) AS x ON true`, and every
+companion reads `x.val`:
+- OFFSET 0 stops the sub-select being pulled up and re-inlined
+- because it is a JOIN rather than a fence around the child, a FILTER on the
+  child's own columns (the recall's date range) still applies before any score
+  is computed
+- LEFT JOIN `ON true` never loses a row, and the expression's own NULL survives
+- anything that is not a `vg:` function emits byte for byte as before
+
+Tests:
+- `tests/integration/test_vg_score_computed_once.py`, on real rows: the FTS
+  side table is probed 5 times for 5 candidates, and the page is right.
+  Against the reverted code it fails with 15 probes.
+- `tests/unit/sparql_sql/test_compute_once.py` pins the helper's scope.
+
+Results with the change:
+- unit: 6,257 passed
+- integration: 977 passed, 2 skipped, 3 xfailed, 0 failed
+
+**What is left per path** (heavy member):
+- planner: about 34 ms of pattern hash joins, then 20,000 single evaluations
+  at about 16 µs each. Terms are already resolved only for the 12 rows
+  returned.
+- default: the same score work, but all six terms are still resolved for every
+  candidate before the sort. `_emit_late_text` declines a requested ORDER BY
+  and more than one projected variable, and the recall has both. That is the
+  remaining gap to the planner, about 60 ms.
+
+**Measured as served, and on the planner stack** (2026-11-08). The explain
+script now runs each statement the way the executor does, through its own
+`_apply_join_order` / `_apply_planner_advice` in a transaction. A `qtree` plan
+always has a fixed join order, so the server pins `join_collapse_limit = 1`,
+which the first numbers above did not do. `perf_memcjk` was then copied to the
+planner stack (dump and restore, test stack stopped, one stack at a time) and
+measured with `vg_planner` applying the advice (`VG_PLANNER_EXTENSION=require`).
+Median ms, 5 runs, no swap-outs:
+
+| member | default path | planner, vg test stack (in-process, pinned) | planner stack, `vg_planner` 0.2 |
+|---|---|---|---|
+| heavy, 20,000 | 320-362 | 285 | **299** |
+| typical, 1,000 | 34-39 | 20 | **16** |
+
+The extension changes little for this shape, because almost all the cost is the
+score evaluations, which are not a join-order question. Copy on the planner
+stack: `perf_memcjk`, restored WITHOUT its triggers (read-only: a write into it
+is not indexed), and its description says so.
+
+**A second defect, found in the score subquery: it was not graph-scoped.**
+The side tables are per space and keyed (subject, context). Every `vg:` side
+lookup (score, `textMatch`, vector, geo) and the FTS push-down were keyed on
+the subject alone. They were scoped to a graph only under a server-side graph
+lock, and a query's own `GRAPH <g>` scoped nothing. So in a space holding the
+same subject in two graphs, `LIMIT 1` read whichever graph's row the index
+returned first: the full-text score, the text match and the vector all came
+from the other graph. Proven on the planner copy, where one subject with rows
+in two graphs returned both. The memory service is not exposed, because its
+message and document URIs are unique per member. But any space with copied or
+archived graphs is.
+
+**Fixed:**
+- `collect` records, per variable, the ONE constant graph it is bound in
+  (`AliasGenerator.var_graphs`): from the graph lock, `GRAPH <uri>`, or the
+  default graph. A variable under `GRAPH ?g`, in two graphs, inside a dataset
+  clause, or unscoped is marked ambiguous.
+- `_context_clause(ctx, entity_var)` emits
+  `AND context_uuid = '<uuid>'::uuid` from that record. It is a literal, as in
+  `issues/258`.
+- All 11 `vg_functions` call sites, both FTS push-down sites and the FTS leaf
+  measurement pass their entity variable, so the measured leaf and the served
+  one agree.
+
+Recall timings are unchanged by it (299 / 16 ms planner, 327 / 34 ms default).
+
+`tests/integration/test_vg_search_is_graph_scoped.py`: the same subject in
+two graphs. A `GRAPH <g1>` hybrid scores from g1's text and a `GRAPH <g2>` one
+does not; `textMatch` matches per graph. Both fail against the reverted
+clause. `GRAPH ?g` stays unscoped, which is pinned as a control.
+
+Changing `collect` exposed an unrelated defect in the same function: under
+FROM / FROM NAMED a pattern kept only its first triple. It is fixed with its
+own issue, `issues/334`.
+
+**What this means for D2.** For the memory service's recall, the 0.4-13 s
+latency measured above never happens: the member graph bounds the candidates.
+D2 becomes a RANKING question: whether ORed pairs without rarity weighting
+rank the right message first. That still needs real messages to answer.
+
+(The `/tmp/cjk333/` prototype and narrowing scripts cited above were lost in
+a reboot on 2026-11-08. The scale benchmark and both recall scripts are in
+`test_scripts/perf/`.)
 
 ## Design decisions
 
