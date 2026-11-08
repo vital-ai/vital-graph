@@ -914,8 +914,8 @@ def text_top_k_driving_sql(
         return None
 
     score_alias = "__vg_score"
-    rank = _rank_expr("tsv", tsquery,
-                      _resolve_fts_normalization(resolved_fts_index, ctx))
+    rank = _lexical_rank_sql("tsv", resolved_fts_index, languages,
+                             targs.search_text, tsquery, ctx)
     join_subquery = (
         f"SELECT subject_uuid, {rank} AS {score_alias} "
         f"FROM {fts_table} "
@@ -978,6 +978,33 @@ def _rank_expr(tsv_col: str, tsquery: str, norm: int) -> str:
     if norm:
         return f"ts_rank_cd({tsv_col}, {tsquery}, {int(norm)})"
     return f"ts_rank_cd({tsv_col}, {tsquery})"
+
+
+def _lexical_rank_sql(tsv_col: str, index: str, languages: List[str],
+                      search_text: str, tsquery: str, ctx) -> str:
+    """The full-text score of a ranked text call, for every site that ranks.
+
+    `ts_rank_cd` over the whole query, as before, UNLESS the index has `cjk`
+    and the statement's pre-pass found rarity weights for this query
+    (`fts_rarity.load_cjk_weights`). Then the CJK part is scored by
+    rarity-weighted coverage in [0, 1] (D2, `issues/333`: 0.682 -> 0.817 hit@3
+    on DRCD), plus `ts_rank_cd` over the index's OTHER languages, so Latin words
+    in a mixed query still count. Without weights (no statistics yet, an install
+    without the function) it is exactly the previous expression.
+    """
+    norm = _resolve_fts_normalization(index, ctx)
+    weights = (getattr(getattr(ctx, "aliases", None), "cjk_weights", None)
+               or {}).get((index, search_text))
+    if not weights:
+        return _rank_expr(tsv_col, tsquery, norm)
+    from .fts_languages import CJK, tsquery_expr
+    from .fts_rarity import cjk_weighted_coverage_sql
+    coverage = cjk_weighted_coverage_sql(tsv_col, weights)
+    others = [lang for lang in languages if lang != CJK]
+    if not others:
+        return coverage
+    safe = search_text.replace("'", "''")
+    return f"({_rank_expr(tsv_col, tsquery_expr(others, f"'{safe}'"), norm)} + {coverage})"
 
 
 def _build_tsquery_expr(languages: List[str], safe_text: str) -> str:
@@ -1058,8 +1085,8 @@ def text_search_sql(
     safe_text = targs.search_text.replace("'", "''")
     languages = _resolve_fts_languages(resolved_fts_index, ctx)
     tsquery = _build_tsquery_expr(languages, safe_text)
-    rank = _rank_expr("tsv", tsquery,
-                      _resolve_fts_normalization(resolved_fts_index, ctx))
+    rank = _lexical_rank_sql("tsv", resolved_fts_index, languages,
+                             targs.search_text, tsquery, ctx)
 
     # Read optimizer hints (set by vg_optimize pass)
     vg_hints = getattr(ctx, 'vg_hints', {})
@@ -1156,7 +1183,7 @@ def hybrid_search_sql(
     # Only reachable since the parser became `websearch_to_tsquery`;
     # `plainto_tsquery` had no negation to ignore.
     bm25 = (f"CASE WHEN f.tsv @@ {tsquery} THEN "
-            f"{_rank_expr('f.tsv', tsquery, _resolve_fts_normalization(resolved_fts_index, ctx))} "
+            f"{_lexical_rank_sql('f.tsv', resolved_fts_index, languages, targs.search_text, tsquery, ctx)} "
             f"ELSE 0 END")
     # 0 for a subject with no vector -- one whose vectorization is off
     # (`issues/285`) -- so it still scores, and is still found, through the

@@ -65,6 +65,10 @@ class AliasGenerator:
         # the same subject in two graphs read whichever row came first
         # (`issues/333`).
         self.var_graphs: Dict[str, str] = {}
+        # (fts index, search text) -> [(term, rarity weight)] for a ranked text
+        # call on a `cjk` index, read before emit (`fts_rarity.load_cjk_weights`).
+        # Absent means the arm keeps `ts_rank_cd` (`issues/333` D2).
+        self.cjk_weights: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
         # Predicate cardinality stats.
         #
         # Keyed by (predicate, object). `{space}_rdf_stats` is stored per

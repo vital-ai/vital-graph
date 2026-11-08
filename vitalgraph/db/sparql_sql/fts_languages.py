@@ -131,6 +131,22 @@ def has_cjk(languages: Optional[Sequence[str]]) -> bool:
     return CJK in (languages or ())
 
 
+#: Statistics target for a `cjk` index's `tsv` column. The rarity weights
+#: (`fts_rarity`) come from ANALYZE's most-common-element list, and every pair
+#: rarer than its floor shares one weight. At the default target the list holds
+#: 1,000 elements (floor 0.86% of rows on DRCD) and hit@3 was 0.801 against
+#: 0.817 with exact frequencies; at 1000 it holds 10,000 (floor 0.06%) and hit@3
+#: is 0.811. ANALYZE of 19,910 rows: 286 ms.
+CJK_TSV_STATISTICS = 1000
+
+
+def tsv_statistics_sql(table: str, languages: Optional[Sequence[str]]) -> str:
+    """`ALTER TABLE ... SET STATISTICS` for the index's `tsv` column: raised for
+    a `cjk` index, the default (-1) otherwise, so removing `cjk` undoes it."""
+    target = CJK_TSV_STATISTICS if has_cjk(languages) else -1
+    return f"ALTER TABLE {table} ALTER COLUMN tsv SET STATISTICS {target}"
+
+
 async def validate_fts_languages(conn, languages: Optional[Iterable[str]]
                                  ) -> Optional[str]:
     """None if `languages` may be stored on an FTS index, else the reason.

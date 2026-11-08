@@ -2581,6 +2581,10 @@ class SparqlSQLSchema:
             f'''CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_fts_{index_name}_subj
                 ON {table} (subject_uuid)''',
         ]
+        from .fts_languages import has_cjk, tsv_statistics_sql
+        if has_cjk(languages):
+            # The rarity weights read ANALYZE's element list (`fts_rarity`).
+            stmts.append(tsv_statistics_sql(table, languages))
 
         # Trigger function: concatenate tsvectors from all languages
         tsv_expr = self._build_tsv_concat_expr(languages)

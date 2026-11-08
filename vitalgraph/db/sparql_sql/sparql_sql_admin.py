@@ -209,6 +209,37 @@ END $f$;
 """
 
 
+# The POSITIVE terms of a query, deduplicated: what the rarity-weighted score
+# sums over (`fts_rarity`, issues/333 D2). Same tokens and the same run rules as
+# vitalgraph_cjk_tsquery, so the weights and the match see the same terms; a
+# negated token's terms are left out, a quoted one's are in. Empty for a query
+# with no positive CJK. Measured on DRCD (real zh-Hant, 1,000 questions):
+# weighting these by rarity lifted the full-text arm from 0.682 to 0.817 hit@3
+# over ts_rank_cd.
+_VITALGRAPH_CJK_QUERY_TERMS_DDL = r"""
+CREATE OR REPLACE FUNCTION vitalgraph_cjk_query_terms(q text) RETURNS text[]
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $f$
+DECLARE tok text[]; r text; n int; out text[] := '{}';
+BEGIN
+  IF q IS NULL THEN RETURN out; END IF;
+  FOR tok IN SELECT regexp_matches(q, '(-?)"([^"]*)"?|(-?)(\S+)', 'g') LOOP
+    CONTINUE WHEN coalesce(tok[1], tok[3]) = '-';
+    FOREACH r IN ARRAY coalesce(vitalgraph_cjk_runs(coalesce(tok[2], tok[4])), '{}') LOOP
+      n := length(r);
+      IF n = 1 THEN
+        IF NOT r = ANY(out) THEN out := out || r; END IF;
+      ELSE
+        FOR i IN 1 .. n - 1 LOOP
+          IF NOT substr(r, i, 2) = ANY(out) THEN out := out || substr(r, i, 2); END IF;
+        END LOOP;
+      END IF;
+    END LOOP;
+  END LOOP;
+  RETURN out;
+END $f$;
+"""
+
+
 # EVERY function the schema needs, in one place.
 #
 # There are two installers — `SparqlSQLAdmin.init_tables` (the app/admin path)
@@ -238,6 +269,7 @@ FUNCTIONS = (
     ("vitalgraph_cjk_index_text(text)", _VITALGRAPH_CJK_INDEX_TEXT_DDL),
     ("vitalgraph_cjk_tsvector(text)", _VITALGRAPH_CJK_TSVECTOR_DDL),
     ("vitalgraph_cjk_tsquery(text)", _VITALGRAPH_CJK_TSQUERY_DDL),
+    ("vitalgraph_cjk_query_terms(text)", _VITALGRAPH_CJK_QUERY_TERMS_DDL),
 )
 FUNCTION_DDL = tuple(ddl for _sig, ddl in FUNCTIONS)
 

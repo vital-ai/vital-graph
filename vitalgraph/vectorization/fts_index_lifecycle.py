@@ -254,6 +254,11 @@ BEGIN
     RETURN NEW;
 END
 $$ LANGUAGE plpgsql''')
+        # Raised for `cjk` (its rarity weights read ANALYZE's element list),
+        # back to the default when `cjk` is removed.
+        from vitalgraph.db.sparql_sql.fts_languages import tsv_statistics_sql
+        await conn.execute(tsv_statistics_sql(
+            schema.fts_table_name(space_id, index_name), languages))
 
     logger.info(
         "Updated FTS index '%s' languages to %s for space %s",

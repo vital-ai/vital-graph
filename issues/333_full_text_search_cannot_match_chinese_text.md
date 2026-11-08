@@ -1,6 +1,6 @@
 # 333 — Full-text search cannot match Chinese text
 
-## Status: OPEN. `cjk` BUILT 2026-11-07 (`0d75566f`). D2 DECIDED 2026-11-08 on DRCD: weight pairs by rarity; being built.
+## Status: OPEN. `cjk` BUILT 2026-11-07 (`0d75566f`). D2 DECIDED AND BUILT 2026-11-08: rarity-weighted scoring, hit@3 0.703 (production) -> 0.835 on DRCD.
 
 - **Built and verified on the vg test stack, rebuilt for the change:**
   - both live defects
@@ -559,6 +559,64 @@ Caveats:
   be smaller on chat.
 - The hybrid with a rarity-weighted arm is not measured until it is built.
 - Latencies are from a loaded host and only indicative.
+
+## D2 built: rarity-weighted `cjk` scoring (2026-11-08)
+
+**Score.** Every ranked text call on a `cjk` index (`vg:textSearch`, its top-k
+form, `vg:hybridSearch`) now scores the CJK part by rarity-weighted COVERAGE:
+the summed weights of the query's terms that a row contains, divided by the
+summed weights of all of them, with w = ln(1 / freq).
+- It lies in [0, 1], because the hybrid adds it to a cosine.
+- It orders rows exactly as the raw idf sum does.
+- `ts_rank_cd` over the index's other languages is added, so Latin words in a
+  mixed query still count.
+- `_lexical_rank_sql` is the one place every ranking site gets it from.
+
+**Frequencies.** They come from PostgreSQL's own `ANALYZE` statistics for the
+index's `tsv` column (`pg_stats.most_common_elems` and
+`most_common_elem_freqs`). A term below the tracked list gets the list's floor.
+There is nothing new to maintain.
+- They are read once per (index, query) in a generator pre-pass
+  (`fts_rarity.load_cjk_weights`) into `aliases.cjk_weights`.
+- The query's terms come from a fifth SQL function,
+  `vitalgraph_cjk_query_terms`, built from the same token rules as the tsquery,
+  so Python never re-implements the tokenizer.
+- Anything missing (no statistics yet, an install without the function, a
+  failed read) leaves the arm on `ts_rank_cd`. It never fails the query.
+
+**Statistics target.** A `cjk` index's `tsv` column gets
+`SET STATISTICS 1000` at creation and when `cjk` is added, and is reset when it
+is removed. At the default target the list holds 1,000 elements (floor 0.86%
+of rows) and hit@3 was 0.801. At 1000 it holds 10,000 (floor 0.06%) and hit@3
+is 0.811, against 0.817 with exact frequencies. ANALYZE of 19,910 rows took
+286 ms.
+
+**Measured through the server on DRCD** (1,000 questions, seed 333, 19,910
+sentences in one member graph):
+
+| variant | hit@1 | hit@3 | hit@12 | MRR@12 | median ms |
+|---|---|---|---|---|---|
+| today's production (vector + `cjk_first`) | 0.649 | 0.703 | 0.731 | 0.679 | 218 |
+| hybrid, `cjk` with `ts_rank_cd` | 0.620 | 0.765 | 0.870 | 0.703 | 227 |
+| **hybrid, `cjk` rarity-weighted** | **0.744** | **0.835** | **0.898** | **0.796** | 195 |
+| full text alone, rarity-weighted | 0.717 | 0.811 | 0.884 | 0.771 | 221 |
+
+The server's full-text-only result equals the SQL `idf-pgstats` variant on
+every metric. Against today's production recall, that is +13 points of hit@3
+and +17 of hit@12.
+
+**Deploy.** `vitalgraph_cjk_query_terms` is new, so every install re-runs
+`scripts/install_sql_functions.py --apply` as the app role. Until it does, an
+existing `cjk` index keeps `ts_rank_cd`, and a NEW `cjk` index is refused with
+a message naming the script.
+
+**Tests:**
+- `tests/unit/sparql_sql/test_fts_rarity.py`: weights, the floor, no
+  statistics, the CJK-only term guard, the score SQL, the statistics target
+- `tests/integration/test_cjk_rarity_ranking.py`: 60 messages repeating a
+  common pair against one holding the rare pair. The rare one ranks first, and
+  `ts_rank_cd` alone puts a common one first (pinned as a control). It fails
+  with the weights disabled.
 
 (The `/tmp/cjk333/` prototype and narrowing scripts cited above were lost in
 a reboot on 2026-11-08. The scale benchmark and both recall scripts are in

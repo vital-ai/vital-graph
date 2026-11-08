@@ -251,7 +251,9 @@ async def evaluate(a) -> int:
             f"ORDER BY {score_sql} DESC, subject_uuid LIMIT 12")
         return [by_uuid.get(str(r["subject_uuid"])) for r in rows]
 
-    variants = {k: [] for k in ("rank", "rank-norm1", "idf", "idf-prune5", "idf-min2")}
+    from vitalgraph.db.sparql_sql.fts_rarity import _WEIGHTS_SQL, weights_from_rows
+    variants = {k: [] for k in ("rank", "rank-norm1", "idf", "idf-prune5", "idf-min2",
+                                "idf-pgstats")}
     timings = {k: [] for k in variants}
     for q in questions:
         ps = await pairs_of(q["question"])
@@ -268,12 +270,18 @@ async def evaluate(a) -> int:
                               for x in kept) or "0"
         kept_q = "(" + " || ".join(lit(x) for x in kept) + ")" if kept else "FALSE"
         cnt = " + ".join(f"(tsv @@ {lit(x)})::int" for x in idf) or "0"
+        # What the server computes: the production weights code on ANALYZE's
+        # statistics (a pair below the tracked list gets its floor frequency).
+        pw = weights_from_rows(await conn.fetch(_WEIGHTS_SQL, fts, q["question"])) or []
+        pg_sum = " + ".join(f"(CASE WHEN tsv @@ {lit(x)} THEN {w:.6f} ELSE 0 END)"
+                            for x, w in pw) or "0"
         specs = {
             "rank": (f"ts_rank_cd(tsv, {any_q})", f"tsv @@ {any_q}"),
             "rank-norm1": (f"ts_rank_cd(tsv, {any_q}, 1)", f"tsv @@ {any_q}"),
             "idf": (idf_sum, f"tsv @@ {any_q}"),
             "idf-prune5": (kept_sum, f"tsv @@ {kept_q}" if kept else "FALSE"),
             "idf-min2": (idf_sum, f"tsv @@ {any_q} AND ({cnt}) >= 2"),
+            "idf-pgstats": (pg_sum, f"tsv @@ {any_q}"),
         }
         for k, (score, where) in specs.items():
             t0 = time.monotonic()
@@ -284,6 +292,10 @@ async def evaluate(a) -> int:
                                statistics.median(timings[k]))
 
     # -- the memory service's own query, through the server ---------------
+    if a.sql_only:
+        await conn.close()
+        _report(results, a)
+        return 0
     VitalSigns()
     c = VitalGraphClient()
     await c.open()
@@ -315,13 +327,18 @@ async def evaluate(a) -> int:
         await c.close()
         await conn.close()
 
+    _report(results, a)
+    return 0
+
+
+def _report(results, a):
     cols = ("hit@1", "hit@3", "hit@12", "mrr@12", "para-hit@3")
     print(f"{'variant':<22}" + "".join(f"{c_:>11}" for c_ in cols) + f"{'median ms':>11}")
     for k, (m, ms) in results.items():
         print(f"{k:<22}" + "".join(f"{m[c_]:>11.3f}" for c_ in cols) + f"{ms:>11.1f}")
-    with open(os.path.join(a.out, f"results_n{a.n}_seed{a.seed}.json"), "w") as f:
+    tag = "_sql" if a.sql_only else ""
+    with open(os.path.join(a.out, f"results_n{a.n}_seed{a.seed}{tag}.json"), "w") as f:
         json.dump({k: {"metrics": m, "median_ms": ms} for k, (m, ms) in results.items()}, f, indent=1)
-    return 0
 
 
 def main() -> int:
@@ -339,6 +356,8 @@ def main() -> int:
     e.add_argument("--out", required=True)
     e.add_argument("--n", type=int, default=1000)
     e.add_argument("--seed", type=int, default=333)
+    e.add_argument("--sql-only", action="store_true",
+                   help="only the SQL variants (no server queries)")
     e.add_argument("--no-date", action="store_true",
                    help="drop the message date pattern (a space loaded without dates)")
     e.add_argument("--memory-repo", default=DEFAULT_MEMORY_REPO)

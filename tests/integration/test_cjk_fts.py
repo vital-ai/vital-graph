@@ -79,8 +79,8 @@ class TestTheFunctions:
             "SELECT proname, provolatile::text, proparallel::text FROM pg_proc "
             "WHERE proname LIKE 'vitalgraph_cjk_%' ORDER BY 1")
         assert [r["proname"] for r in rows] == [
-            "vitalgraph_cjk_index_text", "vitalgraph_cjk_runs",
-            "vitalgraph_cjk_tsquery", "vitalgraph_cjk_tsvector"]
+            "vitalgraph_cjk_index_text", "vitalgraph_cjk_query_terms",
+            "vitalgraph_cjk_runs", "vitalgraph_cjk_tsquery", "vitalgraph_cjk_tsvector"]
         assert all(r["provolatile"] == "i" and r["proparallel"] == "s" for r in rows)
 
     @pytest.mark.parametrize("text,lexemes", [

@@ -201,7 +201,8 @@ class TestCjk:
             CJK_FUNCTION_SIGNATURES, FUNCTION_DDL, FUNCTIONS)
         assert set(CJK_FUNCTION_SIGNATURES) == {
             "vitalgraph_cjk_runs(text)", "vitalgraph_cjk_index_text(text)",
-            "vitalgraph_cjk_tsvector(text)", "vitalgraph_cjk_tsquery(text)"}
+            "vitalgraph_cjk_tsvector(text)", "vitalgraph_cjk_tsquery(text)",
+            "vitalgraph_cjk_query_terms(text)"}
         assert FUNCTION_DDL == tuple(ddl for _, ddl in FUNCTIONS)
         names = [sig.split("(")[0] for sig, _ in FUNCTIONS]
         for (sig, ddl) in FUNCTIONS:

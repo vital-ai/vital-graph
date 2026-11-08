@@ -2493,6 +2493,16 @@ async def _generate_sql(
         with _decisions.stage("measure_fts_leaves"):
             await _measure_fts_leaves(plan, ctx, conn=conn,
                                       conn_params=conn_params)
+        # Rarity weights for a ranked text call on a `cjk` index (`fts_rarity`,
+        # issues/333 D2): one statistics read per (index, query), none at all
+        # for a query without one. Never fails the query: no weights, no change.
+        with _decisions.stage("load_cjk_weights"):
+            try:
+                from .fts_rarity import load_cjk_weights
+                await load_cjk_weights(plan, ctx, conn)
+            except Exception as e:
+                logger.debug("cjk weights skipped: %s", e)
+                aliases.cjk_weights = {}
         # VALUES restrictions above a BGP, for `slot_group_cte`'s gate: a
         # restricted variable that reaches a slot without crossing the graph
         # link means PostgreSQL already has a cheap driver (`issues/293`).
