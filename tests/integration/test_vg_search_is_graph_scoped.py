@@ -2,8 +2,8 @@
 
 The FTS and vector tables are per SPACE, keyed (subject, context). The score
 and match subqueries were keyed on the subject alone, scoped to a graph only
-under a server-side graph lock. A query's own `GRAPH <g>`, which is how the
-memory service scopes recall to a member, scoped nothing, so in a space
+under a server-side graph lock. A query's own `GRAPH <g>`, the usual way to
+scope a search to one graph, scoped nothing, so in a space
 holding the same subject in two graphs the lookup read whichever row came
 first. `_context_clause` now scopes to the one constant graph the entity
 variable is bound in.

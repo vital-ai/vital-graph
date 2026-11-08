@@ -1,48 +1,46 @@
 #!/usr/bin/env python3
-"""Recall ranking on real Traditional Chinese: DRCD (`issues/333`, decision D2).
+"""Search ranking on real Traditional Chinese: DRCD (`issues/333`, decision D2).
 
 DRCD (Delta Reading Comprehension Dataset, https://github.com/DRCKnowledgeTeam/DRCD,
 CC-BY-SA 3.0, from Taiwan Wikipedia) has 30,000+ annotator-written questions,
 each tied to a paragraph and to the answer's character offset in it. Split into
 sentences, the paragraphs become message-sized items (median 38 characters), and
-each question's RELEVANT item is the sentence holding its answer. That is a
-recall test with a known right answer per question, in zh-Hant, which the memory
-service has nothing of its own to provide yet.
+each question's RELEVANT item is the sentence holding its answer: a retrieval
+test with a known right answer per question, in zh-Hant.
 
 Three steps; the data never enters the repo:
 
     prepare  --drcd DIR --out OUT   sentences + questions as JSONL
-    load     --out OUT              write the sentences into one member graph of a
-                                    space provisioned the memory service's way (its
-                                    own `config.provision`, FTS languages + `cjk`),
-                                    as KGChatUserMessage objects through the server,
+    load     --out OUT              write the sentences into ONE graph of a space
+                                    with a vector + FTS index (FTS languages incl.
+                                    `cjk`, `issue333_search_common.provision`), as
+                                    KGChatUserMessage objects through the server,
                                     so auto-sync embeds and indexes them for real
     eval     --out OUT              score every ranking variant
 
 Ranking variants:
 
-  through the SERVER, the memory service's own query (`vital_saas_memory.query`):
-    vector       hybridSearch alpha 1.0: the vector arm alone. What recall
-                 effectively is TODAY for Chinese, since its FTS cannot match it.
-    vector+reorder  the same 12 candidates re-sorted by `cjk_first`, the memory
-                 service's own shared-pair workaround: TODAY'S PRODUCTION BEHAVIOUR.
-    hybrid       alpha 0.5 with the `cjk` index, as built (`build_query`).
-    fts          alpha 0.0: the `cjk` full-text arm alone.
+  through the SERVER, a graph-scoped hybrid search
+  (`issue333_search_common.hybrid_query`, the best 12 by score):
+    vector       hybridSearch alpha 1.0: the vector arm alone, which is all a
+                 search can rely on for Chinese without `cjk`
+    hybrid       alpha 0.5 with the `cjk` index
+    fts          alpha 0.0: the `cjk` full-text arm alone
 
   as SQL on the FTS table (the D2 candidates for the full-text arm; same index):
-    rank         ts_rank_cd over the ORed pairs: what `fts` computes
+    rank         ts_rank_cd over the ORed pairs
     rank-norm1   ts_rank_cd with length normalization 1
     idf          sum of ln(N/df) over the pairs a sentence contains (rarity-weighted)
     idf-prune5   idf, ignoring pairs in more than 5% of sentences
     idf-min2     idf, requiring at least 2 matching pairs
+    idf-pgstats  idf from ANALYZE's statistics: what the server's `cjk` arm computes
 
-Metrics per variant, over the sampled questions: hit@1, hit@3 (the memory
-service returns 3 per kind), hit@12 (its candidate count), MRR@12, and a lenient
-hit@3 that accepts any sentence of the answer's paragraph. Server variants also
-report latency.
+Metrics per variant, over the sampled questions: hit@1, hit@3, hit@12,
+MRR@12, and a lenient hit@3 that accepts any sentence of the answer's
+paragraph. Server variants also report latency.
 
-Needs the vg test stack (server on :8002, Postgres on :5433), the `cjk`
-functions installed, and the vital-saas-memory checkout.
+Needs the vg test stack (server on :8002, Postgres on :5433) and the `cjk`
+functions installed.
 """
 
 from __future__ import annotations
@@ -57,8 +55,6 @@ import re
 import statistics
 import sys
 import time
-import uuid
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -66,16 +62,19 @@ sys.path.insert(0, ROOT)
 
 from devtools.target import add_pg_arguments  # noqa: E402
 
-DEFAULT_MEMORY_REPO = os.path.expanduser(
-    "~/Local/vital-git/vital-saas-api-app/vital-saas-memory")
+sys.path.insert(0, os.path.join(ROOT, "test_scripts", "perf"))
+import issue333_search_common as sc  # noqa: E402
+
 SPACE = "eval_drcd333"
-GRAPH = f"urn:{SPACE}:member:all"
-INDEX = "member_messages"
 _SENT = re.compile(r"(?<=[。！？])")
 
 
 def item_uri(item_id: str) -> str:
     return f"urn:{SPACE}:msg:{item_id}"
+
+
+def _graph(a) -> str:
+    return a.graph or f"urn:{SPACE}:graph:all"
 
 
 # ---------------------------------------------------------------- prepare
@@ -121,15 +120,13 @@ def _read(a, name):
 # ---------------------------------------------------------------- load
 
 async def load(a) -> int:
-    sys.path.insert(0, a.memory_repo)
     from ai_haley_kg_domain.model.KGChatUserMessage import KGChatUserMessage
     from vital_ai_vitalsigns.vitalsigns import VitalSigns
-    from vital_saas_memory import config, kinds, types as t
     from vitalgraph.client.vitalgraph_client import VitalGraphClient
     from vitalgraph.model.spaces_model import Space
 
-    t.FTS_LANGUAGES = tuple(t.FTS_LANGUAGES) + ("cjk",)
     VitalSigns()
+    graph = _graph(a)
     items = _read(a, "items")
     c = VitalGraphClient()
     await c.open()
@@ -140,24 +137,23 @@ async def load(a) -> int:
                 space=SPACE, space_name=SPACE,
                 space_description="issues/333 D2 ranking eval: DRCD sentences (CC-BY-SA 3.0)"))
             assert r.is_success, r.error_message
-        print("provisioned:", *(await config.provision(c, SPACE, kinds.PLATFORM_KINDS)), sep="\n  ")
-        await c.graphs.create_graph(SPACE, GRAPH)
+        print("provisioned:", *(await sc.provision(c, SPACE, a.index)), sep="\n  ")
+        await c.graphs.create_graph(SPACE, graph)
         t0 = time.monotonic()
         for i in range(0, len(items), a.batch):
             objs = []
             for j, it in enumerate(items[i:i + a.batch], start=i):
                 m = KGChatUserMessage()
                 m.URI = item_uri(it["id"])
-                m.kGChatInteractionURI = f"{GRAPH}:interaction:1"
+                m.kGChatInteractionURI = f"{graph}:interaction:1"
                 m.kGChatMessageSequence = j + 1
-                # Production always writes one, and the message kind's query
-                # REQUIRES it (`?s hasKGChatMessageDateTime ?at`).
+                # The search query REQUIRES one (`?s hasKGChatMessageDateTime ?at`).
                 m.kGChatMessageDateTime = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=j)
                 m.kGChatMessageText = it["text"]
                 m.kGIdentifier = m.URI
                 m.kGJSON = "{}"
                 objs.append(m)
-            r = await c.objects.create_objects(SPACE, GRAPH, objs)
+            r = await c.objects.create_objects(SPACE, graph, objs)
             if not getattr(r, "success", getattr(r, "is_success", True)):
                 raise RuntimeError(getattr(r, "message", r))
             print(f"  {i + len(objs):,} written ({(i + len(objs)) / (time.monotonic() - t0):,.0f}/s)",
@@ -188,11 +184,11 @@ def _metrics(ranked_lists, questions, para_of):
             "para-hit@3": lenient3 / n}
 
 
-async def _wait_indexed(conn, prefix, n_items):
+async def _wait_indexed(conn, prefix, index, n_items):
     while True:
         q = await conn.fetchval(f"SELECT count(*) FROM {prefix}_index_sync_queue")
-        v = await conn.fetchval(f"SELECT count(*) FROM {prefix}_vec_{INDEX}")
-        f = await conn.fetchval(f"SELECT count(*) FROM {prefix}_fts_{INDEX}")
+        v = await conn.fetchval(f"SELECT count(*) FROM {prefix}_vec_{index}")
+        f = await conn.fetchval(f"SELECT count(*) FROM {prefix}_fts_{index}")
         if q == 0 and v >= n_items and f >= n_items:
             return
         print(f"  waiting for indexing: queue {q:,}, vectors {v:,}/{n_items:,}, fts {f:,}", flush=True)
@@ -200,11 +196,8 @@ async def _wait_indexed(conn, prefix, n_items):
 
 
 async def evaluate(a) -> int:
-    sys.path.insert(0, a.memory_repo)
     import asyncpg
     from vital_ai_vitalsigns.vitalsigns import VitalSigns
-    from vital_saas_memory import kinds, query
-    from vital_saas_memory.scope import MemoryScope
     from vitalgraph.client.vitalgraph_client import VitalGraphClient
     from vitalgraph.db.sparql_sql.space_names import space_prefix
     from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
@@ -224,9 +217,10 @@ async def evaluate(a) -> int:
                                  user=a.user, password=a.password or None)
     await load_storage_keys(conn)
     p = space_prefix(SPACE)
-    await _wait_indexed(conn, p, len(items))
-    fts = f"{p}_fts_{INDEX}"
-    ctx = str(_generate_term_uuid(GRAPH, "U"))
+    graph = _graph(a)
+    await _wait_indexed(conn, p, a.index, len(items))
+    fts = f"{p}_fts_{a.index}"
+    ctx = str(_generate_term_uuid(graph, "U"))
     results = {}
 
     # -- full-text ranking variants, as SQL on the index ------------------
@@ -270,7 +264,7 @@ async def evaluate(a) -> int:
                               for x in kept) or "0"
         kept_q = "(" + " || ".join(lit(x) for x in kept) + ")" if kept else "FALSE"
         cnt = " + ".join(f"(tsv @@ {lit(x)})::int" for x in idf) or "0"
-        # What the server computes: the production weights code on ANALYZE's
+        # What the server computes: its own weights code on ANALYZE's
         # statistics (a pair below the tracked list gets its floor frequency).
         pw = weights_from_rows(await conn.fetch(_WEIGHTS_SQL, fts, q["question"])) or []
         pg_sum = " + ".join(f"(CASE WHEN tsv @@ {lit(x)} THEN {w:.6f} ELSE 0 END)"
@@ -291,7 +285,7 @@ async def evaluate(a) -> int:
         results[f"sql:{k}"] = (_metrics(variants[k], questions, para_of),
                                statistics.median(timings[k]))
 
-    # -- the memory service's own query, through the server ---------------
+    # -- a graph-scoped hybrid search, through the server -----------------
     if a.sql_only:
         await conn.close()
         _report(results, a)
@@ -299,31 +293,20 @@ async def evaluate(a) -> int:
     VitalSigns()
     c = VitalGraphClient()
     await c.open()
-    # The first load of `eval_drcd333` wrote no message dates, and the message
-    # kind's query REQUIRES one (`?s hasKGChatMessageDateTime ?at`), so it
-    # matched nothing. The date only feeds a date-range filter, which these
-    # questions do not use, so the pattern is dropped here rather than
-    # re-writing (and re-embedding) 19,910 messages. `load` now writes dates.
-    kind = replace(kinds.MESSAGE, date_property=None) if a.no_date else kinds.MESSAGE
-    scope = MemoryScope(SPACE, GRAPH)
     try:
-        for name, alpha, reorder in (("vector", 1.0, False), ("vector+reorder", 1.0, True),
-                                     ("hybrid", 0.5, False), ("fts", 0.0, False)):
-            query.ALPHA = alpha
+        for name, alpha in (("vector", 1.0), ("hybrid", 0.5), ("fts", 0.0)):
             ranked, lat = [], []
             for q in questions:
-                req = query.RecallRequest(cues=q["question"], locale="zh-Hant")
-                sparql = query.build_query(kind, scope, req)
+                # `--no-date`: a space loaded before `load` wrote message
+                # dates; the date pattern only feeds date filters, unused here.
+                sparql = sc.hybrid_query(graph, q["question"], a.index, alpha,
+                                         with_date=not a.no_date)
                 t0 = time.monotonic()
                 resp = await c.sparql.execute_sparql_query(SPACE, SPARQLQueryRequest(query=sparql))
                 lat.append((time.monotonic() - t0) * 1000)
-                hits = query.fold(kind, query._bindings(resp))
-                if reorder:
-                    hits = query.cjk_first(hits, req.cues)
-                ranked.append([by_uri.get(h.uri) for h in hits])
+                ranked.append([by_uri.get(r.get("s")) for r in sc.bindings(resp)])
             results[f"server:{name}"] = (_metrics(ranked, questions, para_of), statistics.median(lat))
     finally:
-        query.ALPHA = 0.5
         await c.close()
         await conn.close()
 
@@ -351,7 +334,8 @@ def main() -> int:
     l_ = sub.add_parser("load")
     l_.add_argument("--out", required=True)
     l_.add_argument("--batch", type=int, default=500)
-    l_.add_argument("--memory-repo", default=DEFAULT_MEMORY_REPO)
+    l_.add_argument("--index", default="messages")
+    l_.add_argument("--graph", default=None, help="graph URI (default urn:<space>:graph:all)")
     e = sub.add_parser("eval")
     e.add_argument("--out", required=True)
     e.add_argument("--n", type=int, default=1000)
@@ -360,7 +344,8 @@ def main() -> int:
                    help="only the SQL variants (no server queries)")
     e.add_argument("--no-date", action="store_true",
                    help="drop the message date pattern (a space loaded without dates)")
-    e.add_argument("--memory-repo", default=DEFAULT_MEMORY_REPO)
+    e.add_argument("--index", default="messages")
+    e.add_argument("--graph", default=None, help="graph URI (default urn:<space>:graph:all)")
     add_pg_arguments(e)
     a = ap.parse_args()
     if a.cmd == "prepare":

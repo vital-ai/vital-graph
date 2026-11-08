@@ -323,10 +323,10 @@ def _emit_late_text_ordered(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     """`ORDER BY <keys> LIMIT k`: page on uuids, resolve projected text after.
 
     `_emit_late_text`'s idea for the shape it declines: a REQUESTED order and
-    any number of projected variables. The memory service's recall is exactly
-    this, `SELECT ?s ?score ?text ?at ?parent ?json ... ORDER BY DESC(?score)
+    any number of projected variables. A scored search page is exactly this,
+    `SELECT ?s ?score ?text ?at ?parent ?json ... ORDER BY DESC(?score)
     LIMIT 12`, and without this the default path joined the term table for all
-    six variables on EVERY candidate, 20,000 for a heavy member, then sorted
+    six variables on EVERY candidate, 20,000 in a 20,000-message graph, then sorted
     the wide rows and kept 12. The planner's own plan already resolves terms for
     the page only; this closes that gap on the default path (`issues/333`).
 

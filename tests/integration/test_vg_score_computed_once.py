@@ -1,7 +1,7 @@
 """A `vg:` score BIND is computed ONCE per row (`issues/333`).
 
-The memory service's recall query is `BIND(vg:hybridSearch(...) AS ?score)
-FILTER(?score > 0) ORDER BY DESC(?score) LIMIT 12` inside one member graph.
+A graph-scoped hybrid search is `BIND(vg:hybridSearch(...) AS ?score)
+FILTER(?score > 0) ORDER BY DESC(?score) LIMIT 12` inside one `GRAPH <g>`.
 The hybrid compiles to a correlated subquery per candidate, and it was emitted
 inline in every companion column, so PostgreSQL re-evaluated it for each
 reference: three times per candidate on the default path (measured on 20,000

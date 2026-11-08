@@ -3,8 +3,9 @@
 `emit_slice._emit_late_text_ordered`: the child sorts on uuids and computed
 values, the page is cut, and each projected variable that nothing inside reads
 gets its term join for the page's rows only. Before it, the default path joined
-the term table for every projected variable on EVERY candidate (20,000 for the
-memory service's heavy member, six joins each) and sorted the wide rows.
+the term table for every projected variable on EVERY candidate (20,000 for a
+graph-scoped hybrid search over a 20,000-message graph, six joins each) and
+sorted the wide rows.
 
 The rewrite must return exactly what the inline form returns, row for row and
 in order, so each case runs both and compares.

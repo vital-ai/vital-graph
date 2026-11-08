@@ -1,6 +1,6 @@
 # 333 — Full-text search cannot match Chinese text
 
-## Status: OPEN. `cjk` BUILT 2026-11-07 (`0d75566f`). D2 DECIDED AND BUILT 2026-11-08: rarity-weighted scoring, hit@3 0.703 (production) -> 0.835 on DRCD.
+## Status: BUILT. `cjk` 2026-11-07 (`0d75566f`); D2 decided and built 2026-11-08 (`12a56284`): rarity-weighted scoring, hybrid hit@3 0.607 (vector only) -> 0.835 on DRCD. Deploy step per install outstanding.
 
 - **Built and verified on the vg test stack, rebuilt for the change:**
   - both live defects
@@ -13,20 +13,18 @@
   whole question matches 6-88% of the corpus and costs 0.4-13 s for a ranked
   page of 25. See "Measured at scale". The narrowing rule needs a REAL
   corpus to choose, because the synthetic one inverts which pairs are rare.
-- **The memory service's recall does not hit that latency** (2026-11-08).
-  Its recall is a hybrid search inside one member graph, so cost is bounded by
-  the member's messages. It was dominated by scoring each candidate two or
-  three times; that is FIXED (`8e797759`): 967 → 403 ms default and 439 →
-  340 ms planner, on a 20,000-message member. See "The memory service's
-  actual query".
+- **A graph-scoped search does not hit that latency** (2026-11-08). A hybrid
+  search inside one graph is bounded by that graph's rows. It was dominated by
+  scoring each candidate two or three times; that is FIXED (`8e797759`):
+  967 → 403 ms default and 439 → 340 ms planner, on a 20,000-message graph. See
+  "Graph-scoped hybrid search".
 
-Requested by vital-saas-memory: their zh-Hant recall questions find nothing
-through vitalgraph FTS, and the shared-character reorder in their own code is
-working around it. The request is a `cjk` pseudo-language that indexes runs of
-CJK characters as overlapping bigrams.
+Core support for CJK (Chinese and Japanese) full-text search: vitalgraph's FTS
+indexes cannot match unspaced CJK text at all. The approach is a `cjk`
+pseudo-language that indexes runs of CJK characters as overlapping bigrams.
 
-The approach holds up, and this file is now the implementation plan. Reviewing
-the request found:
+The approach holds up, and this file is the implementation plan. Reviewing the
+first design found:
 - three more sites that must change
 - one live defect in the KGQuery FTS fast path
 - one live defect in language validation, with a DDL-injection side
@@ -51,7 +49,7 @@ Either way, a query matches only if it is a whole run between punctuation
 marks. "樓梯" does not match "我夢到樓梯". No configuration we ship can fix
 this, and adding another language does not help.
 
-## The request
+## The design
 
 - A SQL function that turns each CJK run into overlapping pairs
   ("我夢到樓梯" → "我夢 夢到 到樓 樓梯"), indexed with the built-in `simple`
@@ -60,11 +58,9 @@ this, and adding another language does not help.
   and the query builder.
 - On the query side, the same pairs, ORed rather than ANDed. A whole question
   like "記得我夢到樓梯那個夢嗎" would never match with AND. `ts_rank_cd` orders
-  the hits.
-- In vital-saas-memory: add `cjk` to `FTS_LANGUAGES`. Their reorder becomes a
-  fallback.
+  the hits (replaced by rarity weighting, D2).
 
-### Alternatives (the request's table, confirmed)
+### Alternatives considered
 
 `zhparser` and `pg_jieba` are C extensions that must be pinned per PG version,
 as `vg_planner` is, and their dictionaries are tuned for Simplified. Splitting
@@ -112,9 +108,9 @@ What script detection does and does not give:
 - **Korean** (Hangul) is space-delimited and is left to the ordinary parser.
 - **Simplified and Traditional do NOT match each other.** Measured: the query
   "楼梯" finds "我梦到楼梯" and not "我夢到樓梯". The method works the same on
-  both, but they are different code points. The request's "works the same for
-  Traditional and Simplified" is true only per variant. A member who writes in
-  zh-Hant and asks in zh-Hant is served. Cross-variant recall is out of scope;
+  both, but they are different code points, so "works the same for
+  Traditional and Simplified" is true only per variant: text written in zh-Hant
+  and searched in zh-Hant is served. Cross-variant matching is out of scope;
   see Follow-ups.
 
 ## Live defects found reviewing this
@@ -125,8 +121,8 @@ query (`:165`) and the match-set count (`:291`) build
 `websearch_to_tsquery('{cfg}', …)` from it. On an `['english', 'spanish']`
 index, a hit through the Spanish stemmer is found by the pipeline and missed by
 the fast path, with no error. Under this change, an `['english', 'cjk']` index
-would ignore `cjk` on the KGQuery FTS path, which is the path the memory
-service's message search uses.
+would ignore `cjk` on the KGQuery FTS path, the path a KGQuery frame search
+takes.
 
 **2. Index languages are not validated, and are interpolated into DDL.** FIXED 2026-11-07.
 - A language name is checked nowhere: not in `CreateFtsIndexRequest`, not in
@@ -135,8 +131,8 @@ service's message search uses.
   function. Verified: the trigger creates cleanly, and the first INSERT fails
   with `text search configuration "cjk" does not exist`. Auto-sync catches that
   per subject and logs a warning (`auto_sync.py:532`). The write returns 200 and
-  the subject is never indexed. If vital-saas-memory sends `cjk` to a server
-  older than this change, that is exactly what happens.
+  the subject is never indexed. A client that sends `cjk` to a server older
+  than this change gets exactly that.
 - The name is pasted into SQL unquoted:
   `f"to_tsvector('{lang}'::regconfig, …)"` in `_build_tsv_concat_expr` and
   `build_tsv_batch_expr`, run with `conn.execute` and no arguments. That is the
@@ -317,35 +313,35 @@ pairs (我的, 什麼, 那個) are common. So a frequency rule is plausible, but
 threshold and its effect on recall can only be measured on real messages.
 AND and ≥2-of-k are too strict for whole questions in any corpus.
 
-## The memory service's actual query (2026-11-08)
+## Graph-scoped hybrid search (2026-11-08)
 
-**The scale benchmark above does not measure what vital-saas-memory runs.**
-`vital_saas_memory/query.py` recalls with ONE SPARQL query per kind, in
-parallel. Each is:
-- `BIND(vg:hybridSearch(?s, <cues>, <index>, 0.5) AS ?score)`, vector and
+**The scale benchmark above measures a whole-space full-text search.** The
+common way to search with an FTS index is narrower: a hybrid search scoped to
+one graph, in a space holding many graphs. Its shape is:
+- `BIND(vg:hybridSearch(?s, <text>, <index>, 0.5) AS ?score)`, vector and
   full text at alpha 0.5
-- inside `GRAPH <member graph>`, with one graph per member in one shared space
+- inside `GRAPH <g>`, with one graph per owner of the text in one shared space
 - `FILTER(?score > 0) ORDER BY DESC(?score) LIMIT 12`
 
 A hybrid has no top-k path. It is a correlated subquery that scores EVERY
-candidate the pattern yields, which here means every message in the member's
-graph. So the cost is set by the number of messages in that graph, not by how
-many pairs the query matches. OR breadth affects the ranking, not the cost.
-And there is no real Chinese corpus to measure against: the memory service's
-zh-Hant tests are unit-test strings, and the starsign app is not live.
+candidate the pattern yields, which here means every message in the graph. So
+the cost is set by the number of messages in that graph, not by how many
+pairs the query matches. OR breadth affects the ranking, not the cost.
 
-**Fixture** (`test_scripts/perf/issue333_memory_recall_fixture.py`):
-- the space provisioned by the memory service's own `config.provision`, with
-  `cjk` added to its FTS languages
-- messages written as the platform writes them: `KGChatUserMessage` /
-  `KGChatBotMessage` through `objects.create_objects`, embedded and indexed by
-  auto-sync with MiniLM-multilingual
-- one heavy member (20,000 messages) and 20 typical ones (1,000 each): 40,000
-  messages in `perf_memcjk` on the vg test stack
+**Fixture** (`test_scripts/perf/issue333_graph_search_fixture.py`, then named
+differently; the measurements below were taken on its first version):
+- a vector index and an FTS index under one name, FTS languages including
+  `cjk` (`issue333_search_common.provision`)
+- messages written as `KGChatUserMessage` / `KGChatBotMessage` objects through
+  `objects.create_objects`, embedded and indexed by auto-sync with
+  MiniLM-multilingual
+- one heavy graph (20,000 messages) and 20 typical ones (1,000 each): 40,000
+  messages in one space on the vg test stack
 - statistics built through the admin resync
 
-**Measurement** (`test_scripts/perf/issue333_recall_explain.py`):
-- the exact SPARQL `build_query` emits, with zh-Hant cues
+**Measurement** (`test_scripts/perf/issue333_hybrid_explain.py`):
+- the hybrid search query (`issue333_search_common.hybrid_query`), with zh-Hant
+  query text
 - SQL generated in-process on the default path and with the planner on
   (`planner_ext=True`, `VG_PLANNER_FEATURES=qtree`)
 - a stored embedding substituted for the query vector
@@ -354,7 +350,7 @@ zh-Hant tests are unit-test strings, and the starsign app is not live.
 
 Median ms:
 
-| member | path | before | `cjk` cost | score computed once |
+| graph | path | before | `cjk` cost | score computed once |
 |---|---|---|---|---|
 | heavy, 20,000 | default | 967 | +342 (625 without `cjk`) | **403** |
 | heavy, 20,000 | planner `qtree` | 439 | +232 (207 without) | **340** |
@@ -380,7 +376,7 @@ mattered more than `cjk`.
 companion reads `x.val`:
 - OFFSET 0 stops the sub-select being pulled up and re-inlined
 - because it is a JOIN rather than a fence around the child, a FILTER on the
-  child's own columns (the recall's date range) still applies before any score
+  child's own columns (a date range) still applies before any score
   is computed
 - LEFT JOIN `ON true` never loses a row, and the expression's own NULL survives
 - anything that is not a `vg:` function emits byte for byte as before
@@ -395,13 +391,13 @@ Results with the change:
 - unit: 6,257 passed
 - integration: 977 passed, 2 skipped, 3 xfailed, 0 failed
 
-**What is left per path** (heavy member):
+**What is left per path** (heavy graph):
 - planner: about 34 ms of pattern hash joins, then 20,000 single evaluations
   at about 16 µs each. Terms are already resolved only for the 12 rows
   returned.
 - default: the same score work, but all six terms are still resolved for every
   candidate before the sort. `_emit_late_text` declines a requested ORDER BY
-  and more than one projected variable, and the recall has both. That is the
+  and more than one projected variable, and this search has both. That is the
   remaining gap to the planner, about 60 ms.
 
 **Gap closed: `emit_slice._emit_late_text_ordered`** (2026-11-08). For
@@ -424,7 +420,7 @@ only:
 - a BIND's expression is read like a FILTER's
 
 Verified equal to the inline form, row for row and in order:
-- 36 recall cases: 3 members, 6 cues, with and without the date filter
+- 36 graph-search cases: 3 graphs, 6 query texts, with and without the date filter
 - 7 general shapes: a text sort key, DESC date, OFFSET, an unbound OPTIONAL, a
   text FILTER, a score with a text key, and one that correctly declines
 
@@ -432,10 +428,10 @@ Verified equal to the inline form, row for row and in order:
 including that a text sort key keeps its text inside. All 7 fail with the
 bare-name handling removed.
 
-Recall, default path, median ms (test stack, 5 runs, three rounds on the heavy
-member):
+Graph-scoped hybrid search, default path, median ms (test stack, 5 runs, three
+rounds on the heavy graph):
 
-| member | before | after | planner `qtree` |
+| graph | before | after | planner `qtree` |
 |---|---|---|---|
 | heavy, 20,000 | 362 | **304-308** | 301 |
 | typical, 1,000 | 39 | **26** | 22 |
@@ -444,19 +440,19 @@ member):
 script now runs each statement the way the executor does, through its own
 `_apply_join_order` / `_apply_planner_advice` in a transaction. A `qtree` plan
 always has a fixed join order, so the server pins `join_collapse_limit = 1`,
-which the first numbers above did not do. `perf_memcjk` was then copied to the
+which the first numbers above did not do. the fixture space was then copied to the
 planner stack (dump and restore, test stack stopped, one stack at a time) and
 measured with `vg_planner` applying the advice (`VG_PLANNER_EXTENSION=require`).
 Median ms, 5 runs, no swap-outs:
 
-| member | default path | planner, vg test stack (in-process, pinned) | planner stack, `vg_planner` 0.2 |
+| graph | default path | planner, vg test stack (in-process, pinned) | planner stack, `vg_planner` 0.2 |
 |---|---|---|---|
 | heavy, 20,000 | 320-362 | 285 | **299** |
 | typical, 1,000 | 34-39 | 20 | **16** |
 
 The extension changes little for this shape, because almost all the cost is the
 score evaluations, which are not a join-order question. Copy on the planner
-stack: `perf_memcjk`, restored WITHOUT its triggers (read-only: a write into it
+stack: the fixture space, restored WITHOUT its triggers (read-only: a write into it
 is not indexed), and its description says so.
 
 **A second defect, found in the score subquery: it was not graph-scoped.**
@@ -467,9 +463,8 @@ lock, and a query's own `GRAPH <g>` scoped nothing. So in a space holding the
 same subject in two graphs, `LIMIT 1` read whichever graph's row the index
 returned first: the full-text score, the text match and the vector all came
 from the other graph. Proven on the planner copy, where one subject with rows
-in two graphs returned both. The memory service is not exposed, because its
-message and document URIs are unique per member. But any space with copied or
-archived graphs is.
+in two graphs returned both. A space whose subject URIs are unique per graph
+is not exposed; any space with copied or archived graphs is.
 
 **Fixed:**
 - `collect` records, per variable, the ONE constant graph it is bound in
@@ -483,7 +478,7 @@ archived graphs is.
   measurement pass their entity variable, so the measured leaf and the served
   one agree.
 
-Recall timings are unchanged by it (299 / 16 ms planner, 327 / 34 ms default).
+Search timings are unchanged by it (299 / 16 ms planner, 327 / 34 ms default).
 
 `tests/integration/test_vg_search_is_graph_scoped.py`: the same subject in
 two graphs. A `GRAPH <g1>` hybrid scores from g1's text and a `GRAPH <g2>` one
@@ -494,15 +489,15 @@ Changing `collect` exposed an unrelated defect in the same function: under
 FROM / FROM NAMED a pattern kept only its first triple. It is fixed with its
 own issue, `issues/334`.
 
-**What this means for D2.** For the memory service's recall, the 0.4-13 s
-latency measured above never happens: the member graph bounds the candidates.
-D2 becomes a RANKING question: whether ORed pairs without rarity weighting
-rank the right message first. That still needs real messages to answer.
+**What this means for D2.** For a graph-scoped search the 0.4-13 s latency
+measured above never happens: the graph bounds the candidates. D2 becomes a
+RANKING question: whether ORed pairs without rarity weighting rank the right
+item first. That needs real zh-Hant text with known answers.
 
 ## D2 measured on real Traditional Chinese: DRCD (2026-11-08)
 
-There is no zh-Hant member data, and no public zh-Hant chat-recall benchmark
-was found. The closest real dataset is **DRCD** (Delta Reading Comprehension
+No public zh-Hant chat-retrieval benchmark was found. The closest real dataset
+with known answers is **DRCD** (Delta Reading Comprehension
 Dataset, https://github.com/DRCKnowledgeTeam/DRCD, CC-BY-SA 3.0, Taiwan
 Wikipedia), and that is what this measures against:
 - dev + test give 2,000 paragraphs, split into 19,910 sentences (median 38
@@ -514,24 +509,23 @@ So every question has one known right item.
 
 **Harness:** `test_scripts/perf/issue333_drcd_eval.py`.
 - `prepare` splits the data into items and questions.
-- `load` writes the sentences into ONE member graph of `eval_drcd333`,
-  provisioned by the memory service's own `config.provision` with `cjk`
-  added, as `KGChatUserMessage` objects through the server. Auto-sync
-  embeds them with MiniLM-multilingual and indexes them.
-- `eval` scores 1,000 questions (seed 333) through the memory service's own
-  `build_query` / `fold` / `cjk_first`, and runs the full-text ranking
-  candidates as SQL on the same index.
+- `load` writes the sentences into ONE graph of `eval_drcd333`, with a vector
+  index and an FTS index whose languages include `cjk`, as `KGChatUserMessage`
+  objects through the server. Auto-sync embeds them with MiniLM-multilingual
+  and indexes them.
+- `eval` scores 1,000 questions (seed 333) through the server with the
+  graph-scoped hybrid search (`issue333_search_common.hybrid_query`), and runs
+  the full-text ranking candidates as SQL on the same index.
 
 The data stays outside the repo. The first load wrote no message dates, which
-the message query requires, so the run uses `--no-date`: it drops that one
+the search query requires, so the run uses `--no-date`: it drops that one
 pattern, which only feeds date filters. `load` now writes dates.
 
-hit@3 is what the memory service returns per kind:
+hit@3 is a three-result page; hit@12 is the candidate count:
 
 | variant | hit@1 | hit@3 | hit@12 | MRR@12 | same paragraph @3 | median ms |
 |---|---|---|---|---|---|---|
-| vector only (Chinese recall today, effectively) | 0.460 | 0.607 | 0.731 | 0.546 | 0.723 | 240 |
-| vector + `cjk_first` reorder (TODAY'S PRODUCTION) | 0.649 | 0.703 | 0.731 | 0.679 | 0.825 | 226 |
+| vector only (all a search has for Chinese without `cjk`) | 0.460 | 0.607 | 0.731 | 0.546 | 0.723 | 240 |
 | hybrid 0.5 with `cjk`, as built | 0.620 | 0.765 | 0.870 | 0.703 | 0.889 | 227 |
 | `cjk` full text alone (`ts_rank_cd`) | 0.517 | 0.682 | 0.800 | 0.610 | 0.822 | 221 |
 | full text, `ts_rank_cd` normalization 1 (SQL) | 0.589 | 0.717 | 0.818 | 0.665 | 0.852 | 23 |
@@ -543,8 +537,8 @@ The server's full-text-only result equals the SQL `ts_rank_cd` variant on every
 metric, so the SQL variants rank the same arm the server does.
 
 **D2 is decided: weight pairs by rarity.**
-- `cjk` as built already beats production: hit@3 0.703 → 0.765, hit@12
-  0.731 → 0.870.
+- `cjk` as built already beats the vector arm alone: hybrid hit@3 0.607 →
+  0.765, hit@12 0.731 → 0.870.
 - Rarity weighting lifts the full-text arm alone from 0.682 to 0.817 hit@3
   (hit@1 0.517 → 0.725), which beats the hybrid as built.
 - Pruning common pairs and requiring two matches add nothing on top: once rare
@@ -554,8 +548,8 @@ That is BM25's rarity weighting, the mechanism the Lucene engines rely on for
 CJK bigrams.
 
 Caveats:
-- DRCD questions are factual and share much wording with their answers. Real
-  recall cues are vaguer, which favours the vector arm, so the gain will likely
+- DRCD questions are factual and share much wording with their answers. Chat
+  search text is vaguer, which favours the vector arm, so the gain will likely
   be smaller on chat.
 - The hybrid with a rarity-weighted arm is not measured until it is built.
 - Latencies are from a loaded host and only indicative.
@@ -592,18 +586,18 @@ is 0.811, against 0.817 with exact frequencies. ANALYZE of 19,910 rows took
 286 ms.
 
 **Measured through the server on DRCD** (1,000 questions, seed 333, 19,910
-sentences in one member graph):
+sentences in one graph):
 
 | variant | hit@1 | hit@3 | hit@12 | MRR@12 | median ms |
 |---|---|---|---|---|---|
-| today's production (vector + `cjk_first`) | 0.649 | 0.703 | 0.731 | 0.679 | 218 |
+| vector only (all a search has for Chinese without `cjk`) | 0.460 | 0.607 | 0.731 | 0.546 | 232 |
 | hybrid, `cjk` with `ts_rank_cd` | 0.620 | 0.765 | 0.870 | 0.703 | 227 |
 | **hybrid, `cjk` rarity-weighted** | **0.744** | **0.835** | **0.898** | **0.796** | 195 |
 | full text alone, rarity-weighted | 0.717 | 0.811 | 0.884 | 0.771 | 221 |
 
 The server's full-text-only result equals the SQL `idf-pgstats` variant on
-every metric. Against today's production recall, that is +13 points of hit@3
-and +17 of hit@12.
+every metric. Against the vector arm alone, that is +23 points of hit@3 and
++17 of hit@12.
 
 **Deploy.** `vitalgraph_cjk_query_terms` is new, so every install re-runs
 `scripts/install_sql_functions.py --apply` as the app role. Until it does, an
@@ -619,15 +613,15 @@ a message naming the script.
   with the weights disabled.
 
 (The `/tmp/cjk333/` prototype and narrowing scripts cited above were lost in
-a reboot on 2026-11-08. The scale benchmark and both recall scripts are in
-`test_scripts/perf/`.)
+a reboot on 2026-11-08. The scale benchmark, the graph-search fixture and the
+explain script are in `test_scripts/perf/`.)
 
 ## Design decisions
 
 | # | Question | Decision |
 |---|---|---|
 | D1 | Single-character queries ("夢") | Index BOTH bigrams and unigrams. The query uses bigrams for a run of ≥2 characters and the unigram for a 1-character run. Otherwise "夢" finds nothing (measured). |
-| D2 | Bare CJK terms: AND or OR | **OPEN.** Built as OR, as the request says. The measurement demands narrowing (see "Measured at scale"), and the rule must be chosen on a real corpus. |
+| D2 | Bare CJK terms: AND or OR, and how to rank them | **DECIDED 2026-11-08: OR, ranked by rarity.** Pruning and min-match added nothing on DRCD once pairs are weighted by ln(1/freq) (see "D2 measured on real Traditional Chinese" and "D2 built"). |
 | D3 | Quoted phrase `"夢到樓梯"` | The run becomes a bigram chain, `'夢到' <-> '到樓' <-> '樓梯'`, and is REQUIRED (ANDed), as a websearch phrase is. Bigrams first in the tsvector keeps their positions consecutive. Unigrams follow, so they never break a chain. |
 | D4 | Exclusion `-樓梯` / `-"夢到樓梯"` | The run becomes a chain and is negated as a unit: `!('夢到' <-> '到樓' <-> '樓梯')`. Negating each pair separately would over-exclude. |
 | D5 | `or` keyword | Ignored by the `cjk` arm, whose bare terms are already ORed. The stemmer arms still parse it. |
@@ -642,8 +636,8 @@ a reboot on 2026-11-08. The scale benchmark and both recall scripts are in
 
 A new `_VITALGRAPH_CJK_DDL` is added to `FUNCTION_DDL`, so both installers
 (`SparqlSQLAdmin.init_tables`, `scripts/perf_init_db.py`) get it. The names
-follow the `vitalgraph_*` convention of the existing functions rather than the
-request's `vg_*`.
+follow the `vitalgraph_*` convention of the existing functions rather than
+the `vg_*` of the first design.
 
 ```sql
 -- The CJK runs of a string, NFKC-normalized. One definition of the class.
@@ -924,12 +918,11 @@ API, port 8002):
   and check the final tsv equals a fresh build.
 
 **4. Scale and cost** (vg test stack at prod scale, quiet DB, 5x per cell,
-min/med/max). There is no production Chinese corpus, so use vital-saas-memory's
-zh-Hant recall questions against their messages, plus synthetic zh-Hant filler,
-to ~320k rows. Measure:
-- matches per recall question, and page latency on both KGQuery paths
-- recall@k against the expected messages (the request's own success
-  criterion)
+min/med/max). There is no production Chinese corpus, so use synthetic zh-Hant
+text for cost and a real zh-Hant dataset with known answers for ranking
+(done: "Measured at scale", "Graph-scoped hybrid search", DRCD). Measure:
+- matches per question, and page latency on both KGQuery paths
+- hit@k against the known answers
 - GIN size with and without `cjk`
 - trigger cost per write
 - batched-refresh throughput
@@ -943,13 +936,13 @@ numbers.
 1. vitalgraph release carrying §1-§6.
 2. Per install, pre-deploy: `scripts/install_sql_functions.py`, dry run, then
    `--apply` as the app role. Read its census of invalid stored languages.
-3. Deploy the server. Until this point a `cjk` request is refused; it is never
+3. Deploy the server. Until this point a `cjk` index is refused; it is never
    silently accepted.
-4. vital-saas-memory adds `cjk` to `FTS_LANGUAGES`, ONLY after step 3 on that
-   install. For existing spaces: `PUT /languages` with `refresh_tsv=false`, then
-   the operator refresh.
-5. Re-run the zh-Hant recall set. The reorder workaround stays as a fallback
-   until the numbers say otherwise.
+4. A space opts in by adding `cjk` to an FTS index's languages, ONLY after
+   step 3 on that install. For an existing index: `PUT /languages` with
+   `refresh_tsv=false`, then the operator refresh (`refresh-fts`).
+5. ANALYZE the index (or let autovacuum) so the rarity weights have
+   statistics; until then the arm ranks with `ts_rank_cd`.
 
 Rollback: `PUT /languages` without `cjk`, then refresh. The functions can stay
 installed.
@@ -959,8 +952,8 @@ installed.
 - **Traditional ↔ Simplified folding.** For one-to-one variants,
   `translate(t, '<traditional>', '<simplified>')` inside `vitalgraph_cjk_runs`
   would be immutable and cheap. Many-to-one (後/后, 髮/發 → 发) is safe in the
-  T→S direction. Decide from the recall test whether cross-variant questions
-  occur at all. Folding changes the index, so it is a re-index.
+  T→S direction. Decide from real usage whether cross-variant queries occur
+  at all. Folding changes the index, so it is a re-index.
 - **NFKC for the stemmer arms** (D8): makes `ＡＢＣ` match `ABC`; a re-index of
   every FTS index everywhere.
 - **Strip CJK runs before the stemmer arms**, to remove the dead per-run
@@ -971,7 +964,7 @@ installed.
 
 ## Estimate
 
-The request's "about a day" covers §1 and §2. In full:
+The first design's estimate of "about a day" covers §1 and §2. In full:
 
 | Part | Days |
 |---|---|

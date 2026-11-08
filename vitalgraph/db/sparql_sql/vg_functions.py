@@ -594,8 +594,8 @@ def _context_clause(ctx, entity_var: Optional[str] = None) -> str:
     a lookup by subject alone, in a space holding the same subject in two
     graphs, read whichever graph's row came first: the score, the text match
     and the vector came from the OTHER graph (`issues/333`, proven on two
-    graphs). The memory service's recall is `GRAPH <member> {...}` with no lock,
-    which is exactly this case.
+    graphs). A search scoped with `GRAPH <g> {...}` and no lock is exactly this
+    case.
 
     A literal uuid, not a term-table subquery: a term's uuid is a pure function
     of its text, and PostgreSQL can estimate a literal (`issues/258`). A

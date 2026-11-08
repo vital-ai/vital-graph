@@ -288,8 +288,8 @@ def compute_once(expr, sql_expr: str, alias: str) -> Tuple[str, str]:
     `SELECT *, <expr> AS v, <expr> AS v__num, ... FROM (child)`, every companion
     column carries its own copy, and PostgreSQL flattens the wrapping SELECT, so
     each REFERENCE above it — the projection, a `FILTER(?score > 0)`, the
-    `ORDER BY ?score` — becomes another evaluation. Measured on the memory
-    service's recall query (`issues/333`), one member graph of 20,000 messages:
+    `ORDER BY ?score` — becomes another evaluation. Measured on a graph-scoped
+    hybrid search (`issues/333`), one graph of 20,000 messages:
     the default path evaluated the hybrid score three times per message, the
     planner's plan twice, and those evaluations were most of the query.
 

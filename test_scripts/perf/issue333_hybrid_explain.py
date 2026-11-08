@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""The memory service's recall query, through both generators (`issues/333`).
+"""A graph-scoped hybrid search, through both generators (`issues/333`).
 
-Builds the exact SPARQL `vital_saas_memory.query.build_query` sends for a kind
-(`vg:hybridSearch` scoped to one member graph, `ORDER BY DESC(?score)
-LIMIT 12`), generates SQL in-process the way the server does, with the planner
+Builds the hybrid search query (`issue333_search_common.hybrid_query`:
+`vg:hybridSearch` scoped to one graph, `ORDER BY DESC(?score) LIMIT 12`),
+generates SQL in-process the way the server does, with the planner
 off (today's generation) and on (`planner_ext=True`, `VG_PLANNER_FEATURES`
 honoured, e.g. `qtree`), substitutes a stored message embedding for the
 query-vector placeholder (the cost is the same; the server would embed the
-cue), and runs each 5x with EXPLAIN (ANALYZE, BUFFERS) on the target database.
+text), and runs each 5x with EXPLAIN (ANALYZE, BUFFERS) on the target database,
+the way the executor runs it.
 
-    VG_PLANNER_FEATURES=qtree python test_scripts/perf/issue333_recall_explain.py \
-        --space perf_memcjk --member heavy --cues 記得我夢到樓梯那個夢嗎
+    VG_PLANNER_FEATURES=qtree python test_scripts/perf/issue333_hybrid_explain.py \
+        --space perf_cjksearch --graph-name heavy --text 記得我夢到樓梯那個夢嗎
 
 Prints, per generator: where the SQL came from (`plan_source`), min/med/max
 execution ms, and the slowest run's plan.
@@ -30,8 +31,8 @@ sys.path.insert(0, ROOT)
 
 from devtools.target import add_pg_arguments, describe_target, sidecar_url  # noqa: E402
 
-DEFAULT_MEMORY_REPO = os.path.expanduser(
-    "~/Local/vital-git/vital-saas-api-app/vital-saas-memory")
+sys.path.insert(0, os.path.join(ROOT, "test_scripts", "perf"))
+import issue333_search_common as sc  # noqa: E402
 
 
 async def compile_sparql(sparql: str):
@@ -49,12 +50,13 @@ async def compile_sparql(sparql: str):
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--space", default="perf_memcjk")
-    ap.add_argument("--member", default="heavy")
-    ap.add_argument("--kind", default="message")
-    ap.add_argument("--cues", default="記得我夢到樓梯那個夢嗎")
+    ap.add_argument("--space", default="perf_cjksearch")
+    ap.add_argument("--index", default="messages")
+    ap.add_argument("--graph-name", default="heavy",
+                    help="the fixture graph (`urn:<space>:graph:<name>`)")
+    ap.add_argument("--graph", default=None, help="a graph URI, overriding --graph-name")
+    ap.add_argument("--text", default="記得我夢到樓梯那個夢嗎")
     ap.add_argument("--runs", type=int, default=5)
-    ap.add_argument("--memory-repo", default=DEFAULT_MEMORY_REPO)
     ap.add_argument("--show-sql", action="store_true")
     ap.add_argument("--plan-lines", type=int, default=60)
     ap.add_argument("--only", choices=["default", "planner"], default=None)
@@ -64,22 +66,14 @@ async def main() -> int:
     logging.basicConfig(level=logging.WARNING, format="%(name)s: %(message)s")
     # One line per statement: which rewrites fired and which declined, and why.
     logging.getLogger("vitalgraph.db.sparql_sql.plan_decisions").setLevel(logging.INFO)
-    sys.path.insert(0, a.memory_repo)
-    from vital_saas_memory import kinds, query
-    from vital_saas_memory.scope import MemoryScope
     from vitalgraph.db.sparql_sql.generator import generate_sql
     from vitalgraph.db.sparql_sql.sparql_sql_space_impl import (
         _apply_join_order, _apply_planner_advice)
     from vitalgraph.db.sparql_sql.space_names import space_prefix
     from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
 
-    kind = {k.name: k for k in kinds.PLATFORM_KINDS}[a.kind]
-    graph = f"urn:{a.space}:member:{a.member}"
-    scope = MemoryScope(space_id=a.space, graph_id=graph) if "graph_id" in \
-        MemoryScope.__dataclass_fields__ else None
-    if scope is None:
-        raise SystemExit("MemoryScope changed shape; update this script")
-    sparql = query.build_query(kind, scope, query.RecallRequest(cues=a.cues, locale="zh-Hant"))
+    graph = a.graph or f"urn:{a.space}:graph:{a.graph_name}"
+    sparql = sc.hybrid_query(graph, a.text, a.index)
     print(f"target: {describe_target(a)}\nspace={a.space} graph={graph}\n{sparql}\n")
 
     import asyncpg
@@ -88,13 +82,13 @@ async def main() -> int:
     try:
         await load_storage_keys(conn)
         p = space_prefix(a.space)
-        vec = await conn.fetchval(f"SELECT embedding::text FROM {p}_vec_{kind.index} LIMIT 1")
-        n_member = await conn.fetchval(
-            f"SELECT count(*) FROM {p}_fts_{kind.index} WHERE context_uuid = "
+        vec = await conn.fetchval(f"SELECT embedding::text FROM {p}_vec_{a.index} LIMIT 1")
+        n_graph = await conn.fetchval(
+            f"SELECT count(*) FROM {p}_fts_{a.index} WHERE context_uuid = "
             f"vitalgraph_term_uuid($1, 'U')", graph)
         langs = await conn.fetchval(
-            f"SELECT languages FROM {p}_fts_index WHERE index_name = $1", kind.index)
-        print(f"member FTS rows: {n_member:,}   index languages: {list(langs)}\n")
+            f"SELECT languages FROM {p}_fts_index WHERE index_name = $1", a.index)
+        print(f"graph FTS rows: {n_graph:,}   index languages: {list(langs)}\n")
         cr = await compile_sparql(sparql)
         for label, ext in (("default", False), ("planner", True)):
             if a.only and a.only != label:

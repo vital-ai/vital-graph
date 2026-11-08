@@ -3,7 +3,7 @@
 `ts_rank_cd` weighs every matched lexeme alike. For CJK bigrams that ranks
 badly: a question shares common pairs (什麼, 我們, 那個) with half the corpus and
 its one distinctive pair with the message it means. Measured on DRCD (real
-Traditional Chinese, 19,910 sentences in one member graph, 1,000 questions with
+Traditional Chinese, 19,910 sentences in one graph, 1,000 questions with
 a known answer): weighting each matched pair by ln(N/df) lifted the full-text
 arm from 0.682 to 0.817 hit@3 and from 0.517 to 0.725 hit@1. That is BM25's
 rarity weighting, which is how the Lucene engines make CJK bigrams work.

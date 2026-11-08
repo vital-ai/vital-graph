@@ -24,8 +24,8 @@ the `return`. Every multi-triple pattern under a dataset clause has been
 affected since.
 
 **Who is exposed.** Only callers that put `FROM` / `FROM NAMED` in their
-SPARQL. KGQuery, the KG endpoints and the memory service scope with
-`GRAPH <uri>` or a graph lock, so they are not affected. It is not known
+SPARQL. KGQuery and the KG endpoints scope with `GRAPH <uri>` or a graph
+lock, so they are not affected. It is not known
 whether any external caller of the SPARQL endpoint uses a dataset clause.
 
 ## Fix
