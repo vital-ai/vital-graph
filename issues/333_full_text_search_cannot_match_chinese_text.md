@@ -1,6 +1,6 @@
 # 333 — Full-text search cannot match Chinese text
 
-## Status: OPEN. `cjk` BUILT 2026-11-07 (`0d75566f`); ONE DECISION OPEN — D2, now a ranking question.
+## Status: OPEN. `cjk` BUILT 2026-11-07 (`0d75566f`). D2 DECIDED 2026-11-08 on DRCD: weight pairs by rarity; being built.
 
 - **Built and verified on the vg test stack, rebuilt for the change:**
   - both live defects
@@ -498,6 +498,67 @@ own issue, `issues/334`.
 latency measured above never happens: the member graph bounds the candidates.
 D2 becomes a RANKING question: whether ORed pairs without rarity weighting
 rank the right message first. That still needs real messages to answer.
+
+## D2 measured on real Traditional Chinese: DRCD (2026-11-08)
+
+There is no zh-Hant member data, and no public zh-Hant chat-recall benchmark
+was found. The closest real dataset is **DRCD** (Delta Reading Comprehension
+Dataset, https://github.com/DRCKnowledgeTeam/DRCD, CC-BY-SA 3.0, Taiwan
+Wikipedia), and that is what this measures against:
+- dev + test give 2,000 paragraphs, split into 19,910 sentences (median 38
+  characters, about chat-message length)
+- 7,017 annotator-written questions (median 21 characters), each tied to the
+  sentence that holds its answer
+
+So every question has one known right item.
+
+**Harness:** `test_scripts/perf/issue333_drcd_eval.py`.
+- `prepare` splits the data into items and questions.
+- `load` writes the sentences into ONE member graph of `eval_drcd333`,
+  provisioned by the memory service's own `config.provision` with `cjk`
+  added, as `KGChatUserMessage` objects through the server. Auto-sync
+  embeds them with MiniLM-multilingual and indexes them.
+- `eval` scores 1,000 questions (seed 333) through the memory service's own
+  `build_query` / `fold` / `cjk_first`, and runs the full-text ranking
+  candidates as SQL on the same index.
+
+The data stays outside the repo. The first load wrote no message dates, which
+the message query requires, so the run uses `--no-date`: it drops that one
+pattern, which only feeds date filters. `load` now writes dates.
+
+hit@3 is what the memory service returns per kind:
+
+| variant | hit@1 | hit@3 | hit@12 | MRR@12 | same paragraph @3 | median ms |
+|---|---|---|---|---|---|---|
+| vector only (Chinese recall today, effectively) | 0.460 | 0.607 | 0.731 | 0.546 | 0.723 | 240 |
+| vector + `cjk_first` reorder (TODAY'S PRODUCTION) | 0.649 | 0.703 | 0.731 | 0.679 | 0.825 | 226 |
+| hybrid 0.5 with `cjk`, as built | 0.620 | 0.765 | 0.870 | 0.703 | 0.889 | 227 |
+| `cjk` full text alone (`ts_rank_cd`) | 0.517 | 0.682 | 0.800 | 0.610 | 0.822 | 221 |
+| full text, `ts_rank_cd` normalization 1 (SQL) | 0.589 | 0.717 | 0.818 | 0.665 | 0.852 | 23 |
+| **full text, rarity-weighted: sum of ln(N/df) over matched pairs (SQL)** | **0.725** | **0.817** | **0.883** | **0.778** | **0.947** | 16 |
+| idf, pairs in >5% of sentences pruned (SQL) | 0.722 | 0.816 | 0.882 | 0.776 | 0.947 | 14 |
+| idf, at least 2 matching pairs (SQL) | 0.724 | 0.816 | 0.880 | 0.776 | 0.946 | 16 |
+
+The server's full-text-only result equals the SQL `ts_rank_cd` variant on every
+metric, so the SQL variants rank the same arm the server does.
+
+**D2 is decided: weight pairs by rarity.**
+- `cjk` as built already beats production: hit@3 0.703 → 0.765, hit@12
+  0.731 → 0.870.
+- Rarity weighting lifts the full-text arm alone from 0.682 to 0.817 hit@3
+  (hit@1 0.517 → 0.725), which beats the hybrid as built.
+- Pruning common pairs and requiring two matches add nothing on top: once rare
+  pairs dominate the score, common ones stop mattering.
+
+That is BM25's rarity weighting, the mechanism the Lucene engines rely on for
+CJK bigrams.
+
+Caveats:
+- DRCD questions are factual and share much wording with their answers. Real
+  recall cues are vaguer, which favours the vector arm, so the gain will likely
+  be smaller on chat.
+- The hybrid with a rarity-weighted arm is not measured until it is built.
+- Latencies are from a loaded host and only indicative.
 
 (The `/tmp/cjk333/` prototype and narrowing scripts cited above were lost in
 a reboot on 2026-11-08. The scale benchmark and both recall scripts are in
