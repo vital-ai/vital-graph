@@ -171,6 +171,15 @@ class TraversalChain:
     # `traversal_decision.refine_chain_ranges`; read by `_end_sizes`).
     head_range_rows: Optional[float] = None
     tail_range_rows: Optional[float] = None
+    # Rows each end admits once its slot-VALUE constants apply, estimated
+    # (`traversal_decision.refine_chain_value_filters`; read by `_end_sizes`).
+    head_filter_rows: Optional[float] = None
+    tail_filter_rows: Optional[float] = None
+    # The tables carrying those filters (a range leaf, a value constant), which
+    # the emitter hoists beside the driving constraint so they bound the drive
+    # rather than being checked behind the fence (`emit_traversal`).
+    head_filter_aliases: tuple = ()
+    tail_filter_aliases: tuple = ()
 
     def reversed(self) -> "TraversalChain":
         """The same chain walked from the other end.
@@ -198,7 +207,13 @@ class TraversalChain:
             head_constraint_alias=self.tail_constraint_alias,
             tail_constraint_alias=self.head_constraint_alias,
             head_constants=self.tail_constants,
-            tail_constants=self.head_constants)
+            tail_constants=self.head_constants,
+            head_range_rows=self.tail_range_rows,
+            tail_range_rows=self.head_range_rows,
+            head_filter_rows=self.tail_filter_rows,
+            tail_filter_rows=self.head_filter_rows,
+            head_filter_aliases=self.tail_filter_aliases,
+            tail_filter_aliases=self.head_filter_aliases)
 
     @property
     def depth(self) -> int:
@@ -332,7 +347,7 @@ def _traversal_tables(bgp: PlanV2,
     return out
 
 
-def _as_uuid_pair(pred, obj):
+def _as_uuid_pair(pred, obj, resolve=None):
     """(predicate, object) as TERM UUIDs, or None.
 
     `leaf_terms` records constants as `(term_text, term_type, lang, datatype)`
@@ -358,10 +373,28 @@ def _as_uuid_pair(pred, obj):
     # so changes which traversals get a direction, which is a plan change that
     # wants its own measurement (`issues/090`). Past this guard nothing has a
     # lang or datatype, so the two-argument hash below is correct.
-    if p_type != "U" or o_type != "U":
+    if p_type == "U" and o_type == "U":
+        return (_generate_term_uuid(p_text, p_type),
+                _generate_term_uuid(o_text, o_type))
+    # A LITERAL object (`hasBooleanSlotValue true`, `hasTextSlotValue "CA"`):
+    # its uuid hashes a per-space datatype id, so it is not computed here but
+    # READ from the constants the generator already resolved against the term
+    # table (`resolve`). Unresolved (no resolver, or the term is absent) stays
+    # unpriced, as before. Measured: `mql_edge_count` (lead 100k) carries
+    # `hasBooleanSlotValue true` as its only filter and, unpriced, ran as an
+    # unfiltered flat walk from the entity end, 919,000 value probes and
+    # >30 s; priced, it walks hop-wise from the slot end (`issues/293`).
+    if resolve is None or p_type != "U":
         return None
-    return (_generate_term_uuid(p_text, p_type),
-            _generate_term_uuid(o_text, o_type))
+    p_uuid, o_uuid = resolve(pred), resolve(obj)
+    if p_uuid is None or o_uuid is None:
+        return None
+    return (_uuid_of(p_uuid), _uuid_of(o_uuid))
+
+
+def _uuid_of(v):
+    import uuid as _u
+    return v if isinstance(v, _u.UUID) else _u.UUID(str(v))
 
 
 def _text_filtered_vars(plan: PlanV2, out: set, depth: int = 0) -> set:
@@ -437,7 +470,8 @@ def _pinned_vars(plan: PlanV2, out: set, depth: int = 0) -> set:
 
 
 def find_chains(plan: PlanV2, depth: int = 0,
-                pinned: Optional[set] = None, text=None) -> List[TraversalChain]:
+                pinned: Optional[set] = None, text=None,
+                resolve=None) -> List[TraversalChain]:
     """Every traversal chain reachable from `plan`, longest first."""
     if plan is None or depth > 24:
         return []
@@ -448,16 +482,16 @@ def find_chains(plan: PlanV2, depth: int = 0,
 
     chains: List[TraversalChain] = []
     if plan.kind == KIND_BGP and plan.tables:
-        chains.extend(_chains_in_bgp(plan, pinned, text))
+        chains.extend(_chains_in_bgp(plan, pinned, text, resolve=resolve))
     for child in (plan.children or []):
-        chains.extend(find_chains(child, depth + 1, pinned, text))
+        chains.extend(find_chains(child, depth + 1, pinned, text, resolve=resolve))
 
     chains.sort(key=lambda c: c.depth, reverse=True)
     return chains
 
 
 def _chains_in_bgp(bgp: PlanV2, pinned_vars: set,
-                   text_vars: set = frozenset()) -> List[TraversalChain]:
+                   text_vars: set = frozenset(), resolve=None) -> List[TraversalChain]:
     """Link the hops in one BGP using the plan's STRUCTURE.
 
     Everything here reads `var_slots` and `leaf_terms` — the records collect()
@@ -551,7 +585,8 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set,
             if col_var.get((alias, "subject_uuid")) != end_var:
                 continue
             pair = _as_uuid_pair(leaf_terms.get((alias, "predicate_uuid")),
-                                 leaf_terms.get((alias, "object_uuid")))
+                                 leaf_terms.get((alias, "object_uuid")),
+                                 resolve)
             if pair:
                 return pair, alias
         # The ordinary case: the end variable is the SUBJECT of a table whose
@@ -562,7 +597,8 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set,
             if col_var.get((alias, "subject_uuid")) != end_var:
                 continue
             pair = _as_uuid_pair(leaf_terms.get((alias, "predicate_uuid")),
-                                 leaf_terms.get((alias, "object_uuid")))
+                                 leaf_terms.get((alias, "object_uuid")),
+                                 resolve)
             if pair:
                 return pair, alias
         return None, None
@@ -585,7 +621,8 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set,
             if col_var.get((alias, "subject_uuid")) != end_var:
                 continue
             pair = _as_uuid_pair(leaf_terms.get((alias, "predicate_uuid")),
-                                 leaf_terms.get((alias, "object_uuid")))
+                                 leaf_terms.get((alias, "object_uuid")),
+                                 resolve)
             # (pair, alias): the emitter hoists a table BY ALIAS, so a
             # constraint and the table carrying it must travel together. A
             # refined constraint with the original's alias would hoist the
@@ -637,14 +674,14 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set,
     return chains
 
 
-def describe_chains(plan: PlanV2) -> List[TraversalChain]:
+def describe_chains(plan: PlanV2, resolve=None) -> List[TraversalChain]:
     """Find chains and LOG them.
 
     Observability is the point of this step. Every wrong turn in this area has
     been a pass that quietly declined — correct, slower, and invisible — so a
     detector that finds nothing must say so where it can be seen.
     """
-    chains = find_chains(plan)
+    chains = find_chains(plan, resolve=resolve)
     multi = [c for c in chains if c.depth > 1]
     if multi:
         logger.info("traversal: %d chain(s), deepest %d hops (%s), pinned=%s",

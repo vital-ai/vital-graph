@@ -566,3 +566,49 @@ class TestDedupPrecondition:
         joined = PlanV2(kind=KIND_JOIN, children=[_plan(3), _plan(2)])
         tree.children[0].children = [joined]
         assert self._feasible(tree) is None
+
+
+class TestTheEndsFilterTablesAreHoistedToo:
+    """`issues/293`: the driving end's RANGE or slot-VALUE table, which sized
+    the end, sits beside its constraint rather than behind the fence. Fenced,
+    `high_rated_edge_count` checked a range keeping 35,592 against all 100,000
+    slots of the type (3.2M buffers); hoisted, 2.1M."""
+
+    def _plan_with_filter(self):
+        plan = _constrained_plan(3)
+        plan.tables.append(_q("qf"))
+        plan.tagged_constraints.append(
+            ("qf", "qf.subject_uuid = femv0.source_entity_uuid "
+                   "AND qf.predicate_uuid = 'val'::uuid "
+                   "AND qf.object_uuid IN (SELECT term_uuid FROM t WHERE num_val >= 65)"))
+        return plan
+
+    def _ch(self, filters):
+        ch = _chain(3, head=False, head_c=KIND, head_alias="qk")
+        ch.head_filter_aliases = filters
+        return ch
+
+    def test_the_filter_table_joins_beside_the_constraint(self):
+        plan = self._plan_with_filter()
+        sql = emit_hop_wise(plan, self._ch(("qf",)), plan.tables, _names(plan))
+        assert sql is not None
+        outer = sql.split("CROSS JOIN LATERAL")[0]
+        assert "JOIN s_rdf_quad AS qk ON" in outer
+        assert "JOIN s_rdf_quad AS qf ON" in outer, outer
+        assert sql.count("AS qf") == 1
+        for _owner, cond in plan.tagged_constraints:
+            assert sql.count(cond) == 1, f"{cond!r} appears {sql.count(cond)}x"
+
+    def test_without_a_recorded_filter_it_stays_fenced(self):
+        plan = self._plan_with_filter()
+        sql = emit_hop_wise(plan, self._ch(()), plan.tables, _names(plan))
+        assert "AS qf ON" not in sql.split("CROSS JOIN LATERAL")[0]
+
+    def test_a_filter_not_correlated_to_the_driving_column_stays_fenced(self):
+        plan = _constrained_plan(3)
+        plan.tables.append(_q("qf"))
+        plan.tagged_constraints.append(
+            ("qf", "qf.subject_uuid = qt0.subject_uuid AND qf.predicate_uuid = 'val'::uuid"))
+        sql = emit_hop_wise(plan, self._ch(("qf",)), plan.tables, _names(plan))
+        assert sql is not None
+        assert "AS qf ON" not in sql.split("CROSS JOIN LATERAL")[0]

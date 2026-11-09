@@ -186,10 +186,12 @@ def _end_sizes(chain, pair_rows, pair_bounds=None):
             return n
         return rng if n is None else min(n, rng)
 
-    return (capped(size(chain.pinned_head, chain.head_constraint),
-                   getattr(chain, "head_range_rows", None)),
-            capped(size(chain.pinned_tail, chain.tail_constraint),
-                   getattr(chain, "tail_range_rows", None)))
+    return (capped(capped(size(chain.pinned_head, chain.head_constraint),
+                          getattr(chain, "head_range_rows", None)),
+                   getattr(chain, "head_filter_rows", None)),
+            capped(capped(size(chain.pinned_tail, chain.tail_constraint),
+                          getattr(chain, "tail_range_rows", None)),
+                   getattr(chain, "tail_filter_rows", None)))
 
 
 def _has_limit(node, depth: int = 0) -> bool:
@@ -251,13 +253,79 @@ def refine_chain_ranges(chains, plan, aliases, range_stats):
             if rows is None or node is None:
                 break
             for ch in chains:
-                for a_attr, r_attr in (("head_constraint_alias", "head_range_rows"),
-                                       ("tail_constraint_alias", "tail_range_rows")):
+                for a_attr, r_attr, f_attr in (
+                        ("head_constraint_alias", "head_range_rows", "head_filter_aliases"),
+                        ("tail_constraint_alias", "tail_range_rows", "tail_filter_aliases")):
                     end_alias = getattr(ch, a_attr, None)
                     if end_alias and subject_var(bgp, end_alias) == node:
                         prev = getattr(ch, r_attr, None)
                         setattr(ch, r_attr, rows if prev is None else min(prev, rows))
+                        if leaf_alias not in getattr(ch, f_attr, ()):
+                            setattr(ch, f_attr, tuple(getattr(ch, f_attr, ())) + (leaf_alias,))
             break
+    return chains
+
+
+def refine_chain_value_filters(chains, plan, pair_rows, pred_rows, value_preds,
+                               saturated=frozenset()):
+    """Record, per chain end, its estimated rows once its slot-VALUE constants
+    are applied to its driving constraint (`issues/293`), for `_end_sizes`.
+
+    `refine_chain_constraints` sizes an end by its single most selective
+    constant. A slot end usually carries a TYPE constant and a VALUE constant,
+    and the value one is often the larger pair because it counts every slot of
+    every type holding that value:
+
+        head  hasKGEntityType = Lead            100,000
+        tail  hasKGSlotType   = MQLv2           100,000
+              hasBooleanSlotValue = true         433,775 of 1,100,000
+
+    tied, drove from the entity end: 18.9M buffers hop-wise (8.0M flat, which
+    timed out at 30 s). The slot end really holds 49,775.
+
+    The estimate is the end's constraint size times each OTHER value
+    constant's selectivity (pair rows / predicate rows), as if independent.
+    Only slot-VALUE predicates: type constants on one node are correlated (every
+    MQLv2 slot is a KGSlot), and multiplying those would understate the end.
+    A saturated pair (a lower bound) is skipped. Not under a LIMIT, for the
+    reason `refine_chain_ranges` gives. Mutates the chains.
+    """
+    if not chains or not pair_rows or not pred_rows or _has_limit(plan):
+        return chains
+
+    def get(d, k):
+        v = d.get(k)
+        return d.get((str(k[0]), str(k[1])) if isinstance(k, tuple) else str(k)) if v is None else v
+
+    for ch in chains:
+        for consts_attr, c_attr, out_attr, f_attr in (
+                ("head_constants", "head_constraint", "head_filter_rows", "head_filter_aliases"),
+                ("tail_constants", "tail_constraint", "tail_filter_rows", "tail_filter_aliases")):
+            base = getattr(ch, c_attr, None)
+            if not base:
+                continue
+            n = get(pair_rows, base)
+            if n is None:
+                continue
+            est, used = float(n), []
+            for entry in getattr(ch, consts_attr, ()) or ():
+                pair, alias = (entry if (isinstance(entry, tuple) and len(entry) == 2
+                                         and isinstance(entry[0], tuple)) else (entry, None))
+                if not pair or tuple(map(str, pair)) == tuple(map(str, base)):
+                    continue
+                if pair[0] not in value_preds and str(pair[0]) not in value_preds:
+                    continue
+                if pair in saturated or (str(pair[0]), str(pair[1])) in saturated:
+                    continue
+                rows, total = get(pair_rows, pair), get(pred_rows, pair[0])
+                if rows is None or not total:
+                    continue
+                est *= min(1.0, rows / total)
+                used.append(alias)
+            if used:
+                setattr(ch, out_attr, est)
+                setattr(ch, f_attr, tuple(dict.fromkeys(
+                    tuple(getattr(ch, f_attr, ())) + tuple(a for a in used if a))))
     return chains
 
 

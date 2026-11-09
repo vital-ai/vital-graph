@@ -645,9 +645,21 @@ def _emit_group_pushdown(plan: PlanV2, ctx: EmitContext,
 
     for _var, sn in vars_to_resolve:
         t_alias = f"t_{sn}"
+        # A LOOKUP PER GROUP, fenced, not a join PostgreSQL may turn into a
+        # scan. It priced the plain join from its estimate of the group count,
+        # and a misestimated join below the GROUP BY made that estimate 1,300x
+        # too high: `l5_pair_by_frame` (lead 100k) estimated 5,861,436 groups
+        # for 4,508, resolved the text by a full term-pkey scan (10.7M rows)
+        # and a hashed seq scan of the whole term table, and timed out at 30 s
+        # (`issues/293`). A lookup costs O(groups), and every group came from
+        # at least one input row the aggregate already paid for, so it is
+        # bounded by work the query has done; the scan is bounded by nothing
+        # the query does. Same rows: `term_uuid` is unique, and the lateral is
+        # an inner join as before.
         joins.append(
-            f"JOIN {ctx.term_table} AS {t_alias} "
-            f"ON {r_alias}.{sn}__uuid = {t_alias}.term_uuid"
+            f"JOIN LATERAL (SELECT * FROM {ctx.term_table} AS {t_alias}_l "
+            f"WHERE {t_alias}_l.term_uuid = {r_alias}.{sn}__uuid OFFSET 0) "
+            f"AS {t_alias} ON TRUE"
         )
         select_cols.extend(TypeRegistry.term_table_columns(
             sn, t_alias, r_alias, "",

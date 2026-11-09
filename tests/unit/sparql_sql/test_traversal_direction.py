@@ -175,3 +175,91 @@ class TestARangeAtAnEndCapsItsSize:
         page = PlanV2(kind=KIND_SLICE, limit=25, children=[PlanV2(kind=KIND_BGP)])
         refine_chain_ranges([ch], page, None, {("p", ">=", "65"): 35_592})
         assert ch.tail_range_rows is None and ch.head_range_rows is None
+
+
+class TestAnEndsValueConstantsNarrowIt:
+    """`issues/293`: `mql_edge_count` (lead 100k). The slot end is MQLv2 slots
+    whose `hasBooleanSlotValue` is true, but the value pair counts every
+    boolean slot of every type (433,775 of 1,100,000), so by its single most
+    selective constant the end tied the entity end at 100,000 and the walk
+    drove from the entities: 18.9M buffers. Estimated with the value's
+    selectivity the slot end is ~39,000 (49,775 real) and drives."""
+
+    VALUE_PRED = "pred-uuid-hasBooleanSlotValue"
+    TRUE = (VALUE_PRED, "obj-uuid-true")
+    VITALTYPE = ("pred-uuid-vitaltype", "obj-uuid-KGSlot")
+    PAIRS = {SLOT_TYPE: 100_000, ENT_TYPE: 100_000, TRUE: 433_775,
+             VITALTYPE: 300_000}
+    PREDS = {VALUE_PRED: 1_100_000, "pred-uuid-vitaltype": 10_000_000}
+
+    def _ch(self, *tail_consts):
+        from vitalgraph.db.sparql_sql.ir import PlanV2, KIND_BGP
+        ch = _chain(head_c=ENT_TYPE, tail_c=SLOT_TYPE)
+        ch.head_constants = ((ENT_TYPE, "qe"),)
+        ch.tail_constants = ((SLOT_TYPE, "qs"),) + tuple(tail_consts)
+        return ch, PlanV2(kind=KIND_BGP)
+
+    def test_the_value_constant_breaks_the_tie(self):
+        from vitalgraph.db.sparql_sql.traversal_decision import refine_chain_value_filters
+        ch, plan = self._ch((self.TRUE, "qv"))
+        assert choose_direction(ch, self.PAIRS) == "head"
+        refine_chain_value_filters([ch], plan, self.PAIRS, self.PREDS, {self.VALUE_PRED})
+        assert round(ch.tail_filter_rows) == round(100_000 * 433_775 / 1_100_000)
+        assert ch.tail_filter_aliases == ("qv",)
+        assert choose_direction(ch, self.PAIRS) == "tail"
+
+    def test_a_type_constant_is_not_multiplied(self):
+        """Every MQLv2 slot is a KGSlot: correlated, not independent."""
+        from vitalgraph.db.sparql_sql.traversal_decision import refine_chain_value_filters
+        ch, plan = self._ch((self.VITALTYPE, "qy"))
+        refine_chain_value_filters([ch], plan, self.PAIRS, self.PREDS, {self.VALUE_PRED})
+        assert ch.tail_filter_rows is None and ch.tail_filter_aliases == ()
+
+    def test_a_saturated_value_pair_is_not_used(self):
+        from vitalgraph.db.sparql_sql.traversal_decision import refine_chain_value_filters
+        ch, plan = self._ch((self.TRUE, "qv"))
+        refine_chain_value_filters([ch], plan, self.PAIRS, self.PREDS, {self.VALUE_PRED},
+                                   saturated={self.TRUE})
+        assert ch.tail_filter_rows is None
+
+    def test_a_page_keeps_todays_direction(self):
+        from vitalgraph.db.sparql_sql.ir import PlanV2, KIND_SLICE, KIND_BGP
+        from vitalgraph.db.sparql_sql.traversal_decision import refine_chain_value_filters
+        ch, _ = self._ch((self.TRUE, "qv"))
+        page = PlanV2(kind=KIND_SLICE, limit=25, children=[PlanV2(kind=KIND_BGP)])
+        refine_chain_value_filters([ch], page, self.PAIRS, self.PREDS, {self.VALUE_PRED})
+        assert ch.tail_filter_rows is None
+
+    def test_reversal_carries_the_filter_sizes(self):
+        ch, _ = self._ch()
+        ch.tail_filter_rows, ch.tail_filter_aliases, ch.tail_range_rows = 39_000.0, ("qv",), 5
+        r = ch.reversed()
+        assert (r.head_filter_rows, r.head_filter_aliases, r.head_range_rows) == (39_000.0, ("qv",), 5)
+
+
+class TestALiteralConstantIsPricedByItsResolvedUuid:
+    """`issues/293`: a literal's uuid hashes a per-space datatype id, so chain
+    detection reads it from the constants the generator resolved."""
+
+    def test_a_literal_resolves_through_the_resolver(self):
+        import uuid
+        from vitalgraph.db.sparql_sql.traversal_chain import _as_uuid_pair
+        p = ("http://vital.ai/ontology/haley-ai-kg#hasBooleanSlotValue", "U", None, None)
+        o = ("true", "L", None, "http://www.w3.org/2001/XMLSchema#boolean")
+        u_p, u_o = uuid.uuid4(), uuid.uuid4()
+        got = _as_uuid_pair(p, o, resolve={p: u_p, o: u_o}.get)
+        assert got == (u_p, u_o)
+
+    def test_without_a_resolver_or_a_resolution_it_stays_unpriced(self):
+        from vitalgraph.db.sparql_sql.traversal_chain import _as_uuid_pair
+        p = ("http://x/p", "U", None, None)
+        o = ("true", "L", None, "http://www.w3.org/2001/XMLSchema#boolean")
+        assert _as_uuid_pair(p, o) is None
+        assert _as_uuid_pair(p, o, resolve=lambda t: None) is None
+
+    def test_a_uri_pair_is_hashed_as_before(self):
+        from vitalgraph.db.sparql_sql.traversal_chain import _as_uuid_pair
+        from vitalgraph.db.sparql_sql.emit_update import _generate_term_uuid
+        p, o = ("http://x/p", "U"), ("http://x/o", "U")
+        assert _as_uuid_pair(p, o, resolve=lambda t: None) == (
+            _generate_term_uuid("http://x/p", "U"), _generate_term_uuid("http://x/o", "U"))

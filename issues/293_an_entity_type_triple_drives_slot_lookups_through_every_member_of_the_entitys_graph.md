@@ -1204,3 +1204,230 @@ comparison is order-of-magnitude. Decisions grew 1,159 -> 1,920.)
 is about is gone from production. The two slowest now have a different shape,
 a slot-group CTE rescanned once per outer row, quadratic in decisions:
 `issues/330`.
+
+## 2026-11-09: `l2_page` and `high_rated_edge_count`, both generators (uncommitted)
+
+Both failed on RDS (today's generator) and on EKS (the planner): >30 s.
+Constraint for both: EXACT only. `entity_slot_sort` was considered for
+`high_rated_edge_count` and rejected, because it keeps one row per
+`(slot, context)` (`ON CONFLICT DO NOTHING`). A slot with two paths, two frame
+types or two values loses matches, and the value predicate is not stored. It
+cannot even serve as a pre-filter, since it can miss true rows.
+
+### `l2_page`: an exact early-stop page from a sorted driver
+
+`ORDER BY DESC(?rating) LIMIT 25` over 100,000 leads with three slots each.
+Both generators built every row and sorted it. `qplan` renders a value order
+only as sort-then-limit: its own estimate was 3,379,741 against ~9,140 for
+early stop.
+
+`emit_slice._emit_sorted_driver_page` takes the shape SLICE -> PROJECT -> ORDER
+-> BGP whose first key is a variable bound once, as the object of a quad whose
+subject has a constant-typed quad (the "holder"). It works like this:
+
+* **driver:** the holder's top N rows (N = max(4 x (limit + offset), 64)) by
+  the query's own first two tiers. `num_val` is the `__num` expression (a
+  generated column). The date tier uses the projection's CAST, not `dt_val`,
+  which normalises offsets and so can order differently.
+* **candidates:** the top N plus every driver row tied with the N-th key: by
+  `num_val` (index lookup), or among number-less rows by the date. Every row
+  strictly before the N-th is in the top N, so this is exactly "at or before
+  the N-th key". A driver constraint naming another relation is left out; that
+  only makes the driver a superset, which keeps the argument.
+* **fast branch:** the page restricted by `= ANY(ARRAY(candidates))`. Plain
+  `IN` became a hash semi-join applied after the whole pattern (16 s). It uses
+  `fts_leaf_rows` as an anchor count, and no slot-group CTE
+  (`PlanV2.driver_restricted`).
+* **full branch:** the page as it is. A one-time filter runs exactly one
+  branch: the fast one when it fills `limit + offset` rows. Both branches are
+  emitted as SLICEs (`sorted_driver_branch`), so each still gets late-text
+  and two-phase. Without that the fallback ran 2.5x slower than the query
+  alone.
+* **runtime gate:** the fast branch is skipped when the N-th key has neither a
+  number nor a date. With a text order every row ties, which measured 137 s
+  against 17 s before the gate.
+* **static gate:** declines when the driver's pin is under 20 rows per
+  candidate, when another constant leaf is 10x narrower than the pin, or when
+  there is a range, FTS or text anchor. A state-code constant (931 rows
+  against a 100,000-row pin) had PostgreSQL nest the candidates under it:
+  29 s.
+* **planner:** `planner_ext.plan_with_qtree` declines when the page fires
+  (`AliasGenerator.sorted_driver_page`).
+
+Lead 100k, row-for-row identical to the plain emission in every case:
+
+| case | plain | today | planner |
+|---|---:|---:|---:|
+| l2_page | 6-25 s | 0.38-0.56 s | 0.39-0.56 s |
+| ASC | 10-16 s | 0.5-0.8 s | 0.5-0.6 s |
+| LIMIT 400 | 8-11 s | 1.0-3.9 s | 0.8-1.2 s |
+| OFFSET 50 | 8-14 s | 0.6-1.6 s | 0.5-1.3 s |
+| second key `?name` | 25-35 s | 0.7-1.9 s | 0.5-0.8 s |
+| text order `?name` (gated) | 5.7 s | 5.8 s | 5.9 s |
+| state constant (declined) | 26 s | unchanged | qtree |
+
+### `high_rated_edge_count`: covering edge endpoint indexes
+
+Today's plan walks up from 100,000 slots by nested loops. Each edge hop fetched
+the heap row for its context and edge uuid, re-reading ~400,000 pages on every
+run: 15-20 s steady state, the working set never cached.
+
+`idx_{space}_edge_dst_src` and `_src_dst` now INCLUDE `(context_uuid,
+edge_uuid, edge_type_uuid)`, which is the whole edge row. Every endpoint read is
+index-only. Each index grows from 320 to ~525 MB on 5.3M edges. Existing spaces
+need `scripts/migrate_edge_endpoint_covering.py` (CONCURRENTLY, idempotent,
+skips partitioned edge tables). Measured with drop-in-transaction A/B:
+
+| arm | without | with |
+|---|---|---|
+| today, warm | 15-20 s, ~400k reads/run | 4.0-5.4 s, 0 reads |
+| planner, warm | 0.7-1.2 s | 0.7-0.8 s |
+
+The planner arm never needed it. EKS's >30 s there was cold I/O (8 s on a cold
+first run locally). A covering term index (`num_val INCLUDE term_uuid`) was
+also tried. The planner used it, but warm time was the same without it, so it
+is not shipped.
+
+**Open, not done:** today's arm is still bounded by its plan. 16 relations
+exceed `join_collapse_limit` and `geqo_threshold`, so the written order
+decides. With the range anchor, `model_join_order` stands aside
+(`_has_unpriced_anchor`). The planner's written order, pinned and WITHOUT the
+extension's advice, runs 1.6 s warm (1.5M buffers) against today's 4 s
+(3.2M). That is a default-path join-order change, left for a follow-up.
+
+### Corpus, lead 100k (`results/lead100k_c42.txt` vs `c41`, medians)
+
+| query | today c41 | today c42 | planner c41 | planner c42 |
+|---|---:|---:|---:|---:|
+| high_rated_edge_count | timeout | 15.5 s (min 6.2) | 19.9 s | 3.9 s (min 0.9) |
+| l2_page | timeout | sorted-driver page | 29.4 s | same SQL |
+| mql_edge_count | timeout | timeout | 7.5 s | 5.6 s |
+| l5_pair_by_frame | timeout | timeout | 11.7 s | 6.5 s |
+
+Every query that finished on both arms has identical rows. Some quad-only
+timings on today's arm are higher than in c41 (l3 775 -> 1,520 ms, l6 127 ->
+243 ms). Their SQL is byte-identical with and without the change, and they
+touch no edge table, so this is machine noise: the laptop was swapping.
+`mql_edge_count` and `l5_pair_by_frame` were not targeted.
+
+### Tests (2026-11-09, vg test stack rebuilt for this code)
+
+* `tests/integration/test_sorted_driver_page.py`, new, 9 passed. Each case is
+  compared row for row with the plain emission: DESC, ASC (the N-th key among
+  dates), OFFSET, a second key, a forced fallback, a text order, and a page
+  beyond the driver. A further test checks from EXPLAIN that the intended
+  branch ran, and one checks the selective-constant decline.
+* Unit: 6,281 passed, 9 skipped.
+* Integration: 1,000 passed, 2 skipped, 3 xfailed.
+* W3C/DAWG conformance: 1,532 passed, 12 skipped, 88 xfailed.
+* Full `tests/api`: 718 passed.
+* Not run: the performance tier.
+
+### 2026-11-09 (later): today's path, `mql_edge_count`, `l5_pair_by_frame`, and the end's filters
+
+These were the remaining failures on the default generator (RDS): `mql_edge_count`
+and `l5_pair_by_frame` timed out, and `high_rated_edge_count` was 4-5 s warm.
+
+**`mql_edge_count`: a literal value constant was never a criterion.** The slot
+end carries `hasKGSlotType <MQLv2>` and `hasBooleanSlotValue true`.
+`traversal_chain._as_uuid_pair` priced URI pairs only (by choice, its comment
+said, pending a measurement), so the boolean was invisible. The decision was
+"no measured criterion" and the query ran as a flat walk from the entity end:
+919,000 value probes, 8.0M buffers, 135 s.
+
+* `describe_chains(plan, resolve=...)`: a literal constant is priced by the
+  term uuid the generator already resolved (`aliases.resolved_constants`, as
+  `_leaf_cardinality` reads it). A literal's uuid hashes a per-space datatype
+  id, so it cannot be computed. URI pairs hash as before.
+* Priced, the boolean pair counts every boolean slot of every type (433,775 of
+  1,100,000), so by its single most selective constant the slot end still tied
+  the entity end at 100,000. Driven from the entities, hop-wise: 18.9M buffers.
+  `traversal_decision.refine_chain_value_filters` estimates an end as its
+  constraint times each other slot-VALUE constant's selectivity (independence):
+  ~39,000 (49,775 real), so it drives from the slot end. Value predicates only,
+  because type constants on one node are correlated. Saturated pairs are
+  skipped.
+
+**`high_rated_edge_count` and `mql_edge_count`: the end's filter stayed
+fenced.** `refine_chain_ranges` sized the slot end by its range, but the
+emitter still hoisted only the type constraint, so the range was checked per
+row of all 100,000 slots. The chain now records the tables that sized each end
+(`head_filter_aliases`). `emit_traversal` hoists them beside the constraint
+(`_hoist_driving_table` takes a list; `_place` orders them first), each table
+with its own JOIN ON, after the same correlation check as the constraint.
+`TraversalChain.reversed()` now carries the range and filter sizes; it used to
+drop the range size.
+
+**`l5_pair_by_frame`: the text after a COUNT GROUP BY.** A misestimated join
+below the aggregate (5,861,436 groups estimated for 4,508) priced the
+post-aggregate term joins as scans: a full term-pkey scan of 10.7M rows and a
+hashed seq scan of 10.9M. `emit_group._emit_group_pushdown` now resolves each
+group's text with a fenced lookup (`JOIN LATERAL (... WHERE term_uuid = ...
+OFFSET 0)`). That costs O(groups), and every group came from at least one
+input row the aggregate already paid for, so it is bounded by work already
+done. Same rows: `term_uuid` is unique, and the join is still inner.
+
+**Not under a LIMIT.** The literal resolution, like the range and value
+refinements, is off when the plan has a LIMIT. The performance tier caught
+the first version: KGQuery pages with a literal equality became hop-wise and
+cost more (`no_duplicate_rows` and `entity_type_axis` +16-17% buffers,
+`deep_paging.monotonic` +30%, unfenced `eq-rare` +17%). Gated, there is no
+plan-shape change on any page bench.
+
+#### Measured (lead 100k, planner stack volume, today's generator, app stopped)
+
+Each query was run alternately against the SQL HEAD (`ae6fece8`) generates,
+3-5 runs each, with rows compared as multisets:
+
+| query | HEAD | now | rows |
+|---|---:|---:|---|
+| high_rated_edge_count | 8.7 s | 2.9 s | same |
+| mql_edge_count | timeout (120 s) | 2.4 s warm; 36 s with a cold cache | same |
+| l5_pair_by_frame | 32.9 s | 2.7 s (min 1.4) | same |
+| l2_page | 59.1 s | 2.0 s (min 1.0) | same |
+| state_ca, rating_990/999 count and page, l1, l4 (SQL changed) | | parity | same |
+
+In buffers: mql_edge_count 8.0M to 2.37M, high_rated 3.2M to 2.1M,
+l5 1.3M.
+
+The corpus run c43 (`results/lead100k_c43.txt`) has identical rows on every
+query. Its timings are void: the planner app's maintenance (an
+`entity_slot_sort` census, then a stats recompute) ran during it, so the
+planner arm was slower too. The A/B above was rerun with the app stopped.
+
+**Still open on today's path: cold I/O.** After the walk, every surviving row
+(~35-50k) checks its edge, frame and entity types with 5-6 random index
+probes. On a cold cache `mql_edge_count` read 432k pages: 36 s on this laptop,
+against 2.4 s warm. The planner checks those types as hash joins against one
+index-only scan per type, which is far less random I/O. Doing the same on the
+default path means writing each hop's type checks as a hashed semi-join instead
+of a per-row probe. That is not done.
+
+#### Performance tier
+
+`run-perf-tests.sh --persist` for HEAD (a worktree) and for the working tree,
+against the same persisted volume. `perf_compare.py` refused the pair: HEAD's
+run is stamped persist=True but its database held none of the seed-only spaces
+(`issues/189`). So the two runs were compared directly on the benches measured
+in both, using the same +/-15% work rule and exact plan shape.
+
+* Before the LIMIT gate: 6 KGQuery page shapes changed, with the costs above.
+  Isolated by rerunning those benches with literal resolution disabled.
+* With the gate: no plan-shape change. One unfenced bench,
+  `p100-range-tight-generic-100k`, is +18% against HEAD rerun on the same
+  database. It measured 15,838 / 21,938 / 17,835 / 20,966 / 17,841 across runs
+  today, with and without the changes, so it is noise. The other differences
+  disappear against HEAD rerun on the same database (drift since the first
+  run).
+* `frame_nesting.edge_hops_index_only` differs only in its index name (a fresh
+  space prefix).
+
+#### Tests (vg test stack rebuilt for this code, after the LIMIT gate)
+
+* Unit: 6,292 passed, 9 skipped. This includes the new tests in
+  `test_traversal_direction.py` (value filters, literal resolution, reversal)
+  and `test_emit_traversal.py` (hoisting filter tables).
+* Integration: 1,000 passed, 2 skipped, 3 xfailed.
+* W3C/DAWG conformance: 1,532 passed, 12 skipped, 88 xfailed.
+* Full `tests/api`: 718 passed, 9 skipped.
+* Performance tier: as above.

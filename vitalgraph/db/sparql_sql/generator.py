@@ -2228,7 +2228,26 @@ async def _generate_sql(
         try:
             from .traversal_chain import describe_chains
             from .traversal_decision import decide_for_plan
-            _chains = describe_chains(plan)
+            # Literal constants are priced by their RESOLVED term uuid (they
+            # hash a per-space datatype id), as `_leaf_cardinality` reads them.
+            #
+            # NOT UNDER A LIMIT, like the range and value refinements. A page
+            # with a literal equality then counts a measured criterion and
+            # walks hop-wise, and on the KGQuery pages that cost more, not
+            # less: performance tier, `no_duplicate_rows` and
+            # `entity_type_axis` +16-17% buffers, `deep_paging.monotonic`
+            # +30%, the unfenced `eq-rare` pages +17% (`issues/293`). A page
+            # keeps today's plan.
+            from .emit_bgp import _widen_term as _wt
+            from .traversal_decision import _has_limit as _tl_has_limit
+            _rc_consts = getattr(aliases, "constants", None) or {}
+            _rc_resolved = getattr(aliases, "resolved_constants", None) or {}
+
+            def _resolve_const(term):
+                col = _rc_consts.get(_wt(term))
+                return _rc_resolved.get(col) if col else None
+            _chains = describe_chains(
+                plan, resolve=None if _tl_has_limit(plan) else _resolve_const)
             if _chains:
                 # The most selective per-hop criterion the query carries, from
                 # the range stats already gathered. Several criteria means the
@@ -2366,6 +2385,16 @@ async def _generate_sql(
                 # `refine_chain_constraints` sees constants only.
                 refine_chain_ranges(_chains, plan, aliases,
                                     getattr(aliases, "range_stats", None) or {})
+                # And its VALUE constants, which the single most selective
+                # constant misses when the value pair counts every slot type.
+                from .traversal_decision import refine_chain_value_filters
+                global _SLOT_VALUE_PRED_UUIDS
+                if _SLOT_VALUE_PRED_UUIDS is None:
+                    _SLOT_VALUE_PRED_UUIDS = _slot_value_predicate_uuids()
+                refine_chain_value_filters(
+                    _chains, plan, _pairs, getattr(aliases, "pred_stats", None) or {},
+                    _SLOT_VALUE_PRED_UUIDS,
+                    getattr(aliases, "saturated_pairs", None) or set())
 
                 # `issues/160`. An equality is a CONSTANT in the BGP, so none of
                 # the histograms above see it. Only slot-VALUE constants count —

@@ -142,8 +142,10 @@ class HopGroup:
     # The DRIVING END's constraint table, lifted out of the criteria fence to sit
     # beside the link in the hop's FROM, with the conditions that were its
     # correlation back to the link. See `_hoist_driving_table`.
-    hoisted: Optional[TableRef] = None
-    hoisted_on: List[str] = field(default_factory=list)
+    # Since `issues/293`: the end's FILTER tables too (a range leaf, a value
+    # constant), after the constraint, each with its own JOIN ON.
+    hoisted: List[TableRef] = field(default_factory=list)
+    hoisted_on: List[List[str]] = field(default_factory=list)
 
 
 def _refs(sql: str, known: set) -> set:
@@ -241,6 +243,8 @@ def partition_hops(plan: PlanV2, chain: TraversalChain,
     # here, and a hoist that has to reorder afterwards would have to redo the
     # constraint assignment that depends on it.
     prefer = _driving_alias(chain, groups[0], tagged, known) if groups else None
+    if prefer:
+        prefer = [prefer] + _filter_aliases(chain, groups[0], tagged, known, prefer)
     if not _place(groups, tagged, known, hop_of, prefer=prefer):
         return None
     return groups
@@ -277,49 +281,89 @@ def _driving_alias(chain: TraversalChain, group: HopGroup,
             "the driving constraint is not on a criterion table of hop 0",
             alias=alias, hop_tables=[t.alias for t in group.tables])
         return None
-    link = chain.links[0]
-    driving = f"{link.ref_id}.{link.source_col}"
-    blob = " AND ".join(sql for _owner, sql in tagged
-                        if alias in _refs(sql, known))
-    if driving not in blob:
+    if not _correlates_to_driving(chain, alias, tagged, known):
         HOP_PARTITION.decline(
             "the driving constraint does not correlate to the driving column",
-            alias=alias, driving=driving)
+            alias=alias, driving=f"{chain.links[0].ref_id}.{chain.links[0].source_col}")
         return None
     return alias
 
 
-def _hoist_driving_table(group: HopGroup, alias: str) -> bool:
-    """Move `alias` out of the criteria fence and beside the link.
+def _correlates_to_driving(chain: TraversalChain, alias: str, tagged, known: set) -> bool:
+    link = chain.links[0]
+    driving = f"{link.ref_id}.{link.source_col}"
+    blob = " AND ".join(sql for _owner, sql in tagged
+                        if alias in _refs(sql, known))
+    return driving in blob
+
+
+def _filter_aliases(chain: TraversalChain, group: HopGroup, tagged, known: set,
+                    driving_alias: str) -> List[str]:
+    """The driving end's FILTER tables, hoisted after its constraint.
+
+    `traversal_decision` sized the end with its range (`refine_chain_ranges`)
+    or its slot-value constants (`refine_chain_value_filters`), and records the
+    tables that carry them. Left in the fence they are checked per row of the
+    WHOLE constrained set, which is the size the decision just said the end is
+    not: `high_rated_edge_count` (lead 100k) probed 100,000 slots for a range
+    that keeps 35,592, 3.2M buffers; hoisted, 2.1M (`issues/293`).
+
+    The same checks as the constraint: a non-link table of hop 0, correlated
+    to the driving column. Anything else is skipped, which keeps today's SQL.
+    """
+    mine = {t.alias for t in group.tables} - {group.link_alias}
+    out = []
+    for a in getattr(chain, "head_filter_aliases", ()) or ():
+        if a == driving_alias or a in out or a not in mine:
+            continue
+        if _correlates_to_driving(chain, a, tagged, known):
+            out.append(a)
+    return out
+
+
+def _hoist_driving_table(group: HopGroup, aliases) -> bool:
+    """Move the driving table, and after it the end's filter tables, out of the
+    criteria fence and beside the link.
 
     The criteria lateral nests INSIDE the hop body, so a table placed in the body
     stays in lexical scope for everything below it — only the JOIN moves, and
     nothing that referenced it has to change.
 
-    `_place` was asked to order this table first among the hop's non-link
-    tables, so its conditions are the ones in `crit_where`: exactly the
-    constraints whose deepest table is this one, which is its own predicate and
-    object checks plus the correlation back to the link. They become its JOIN ON.
+    `_place` was asked to order these tables first among the hop's non-link
+    tables, in this order. The first one's conditions are in `crit_where` (it
+    opened the lateral), the others' in `on_map`; each becomes that table's
+    JOIN ON in the body. A filter table `_place` did not put in its expected
+    position is not hoisted (it stays fenced, as before); the driving table
+    not being first declines.
 
     Whatever table now opens the lateral has no JOIN ON to hang on, so its
     conditions move from `on_map` to `crit_where` — the same rule `_place` used
     to put them there in the first place.
     """
-    if len(group.tables) < 2 or group.tables[1].alias != alias:
+    if isinstance(aliases, str):
+        aliases = [aliases]
+    if len(group.tables) < 2 or group.tables[1].alias != aliases[0]:
         HOP_PARTITION.decline(
             "the driving table was not ordered first in its hop",
-            alias=alias,
+            alias=aliases[0],
             order=[t.alias for t in group.tables])
         return False
-    group.hoisted = group.tables.pop(1)
-    group.hoisted_on = list(group.crit_where)
+    k = 1
+    while (k < len(aliases) and len(group.tables) > k + 1
+           and group.tables[k + 1].alias == aliases[k]):
+        k += 1
+    taken = group.tables[1:1 + k]
+    del group.tables[1:1 + k]
+    group.hoisted = list(taken)
+    group.hoisted_on = [list(group.crit_where)] + [
+        group.on_map.pop(t.alias, []) for t in taken[1:]]
     group.crit_where = (group.on_map.pop(group.tables[1].alias, [])
                         if len(group.tables) > 1 else [])
     return True
 
 
 def _place(groups: List[HopGroup], tagged, known: set,
-           hop_of: Dict[str, int], prefer: Optional[str] = None) -> bool:
+           hop_of: Dict[str, int], prefer=None) -> bool:
     """Order each hop's tables and assign every constraint to exactly one place.
 
     A constraint goes to the HIGHEST hop it mentions, because that is the only
@@ -347,8 +391,10 @@ def _place(groups: List[HopGroup], tagged, known: set,
             # from. It joins the link directly, so it always qualifies at the
             # first step — but so do other tables, and without this the greedy
             # order picks whichever came first in the plan.
-            ordered = sorted(remaining, key=lambda x: x.alias != prefer) \
-                if prefer else remaining
+            rank = ({a: i for i, a in enumerate(prefer)}
+                    if isinstance(prefer, (list, tuple)) else {prefer: 0}) if prefer else {}
+            ordered = sorted(remaining, key=lambda x: rank.get(x.alias, len(rank))) \
+                if rank else remaining
             for t in ordered:
                 for sql, rs in parsed:
                     if t.alias not in rs:
@@ -464,7 +510,11 @@ def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
     if not chain.pinned_head:
         alias = _driving_alias(chain, groups[0], list(plan.tagged_constraints or []),
                                {t.alias for t in quad_tables})
-        if alias is None or not _hoist_driving_table(groups[0], alias):
+        tagged_l = list(plan.tagged_constraints or [])
+        known_l = {t.alias for t in quad_tables}
+        hoist = ([alias] + _filter_aliases(chain, groups[0], tagged_l, known_l, alias)
+                 if alias else [])
+        if alias is None or not _hoist_driving_table(groups[0], hoist):
             return HOP_WISE.decline(
                 "the driving end is constrained and its constraint could not "
                 "be hoisted out of the criteria fence",
@@ -475,9 +525,9 @@ def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
     # placement and to the body for scope. Both facts are needed below.
     body_aliases = {g.link_alias for g in groups}
     for g in groups:
-        if g.hoisted is not None:
-            hop_of[g.hoisted.alias] = g.index
-            body_aliases.add(g.hoisted.alias)
+        for h in g.hoisted:
+            hop_of[h.alias] = g.index
+            body_aliases.add(h.alias)
 
     # Variables split by where they bind: on the hop's LINK, or on one of its
     # criterion tables. The two sit in different scopes once the criteria are
@@ -541,10 +591,9 @@ def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
 
         parts = [f"SELECT {', '.join(cols) if cols else '1 AS _dummy'}",
                  f"FROM {g.tables[0].table_name} AS {g.tables[0].alias}"]
-        if g.hoisted is not None:
-            parts.append(
-                f"JOIN {g.hoisted.table_name} AS {g.hoisted.alias} ON "
-                + (" AND ".join(g.hoisted_on) if g.hoisted_on else "TRUE"))
+        for h, on in zip(g.hoisted, g.hoisted_on):
+            parts.append(f"JOIN {h.table_name} AS {h.alias} ON "
+                         + (" AND ".join(on) if on else "TRUE"))
         if has_crit:
             parts.append(f"CROSS JOIN LATERAL (\n{_criteria(i)}\n) AS crit{i}")
         elif i + 1 < len(groups):
