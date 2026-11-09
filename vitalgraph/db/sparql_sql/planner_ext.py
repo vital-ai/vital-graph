@@ -242,6 +242,12 @@ async def plan_with_qtree(plan, ctx, var_map: Dict[str, str], space_id: Optional
         return None
     from .plan_decisions import recorder_for
     rec = recorder_for(ctx.aliases)
+    if ctx.aliases.sorted_driver_page:
+        # `emit_slice._emit_sorted_driver_page`: an exact early stop from a
+        # sorted driver. The planner renders a value order as sort-then-limit
+        # over the whole pattern (l2_page on lead 100k: 3-15 s against 0.5 s).
+        rec.declined("qtree_plan", "the emitted SQL pages from a sorted driver")
+        return None
     from . import qplan
     # derived-table leaves (edge, frame_slot), sub-select filters and property paths
     # are priced from PostgreSQL's own statistics and estimates, loaded before

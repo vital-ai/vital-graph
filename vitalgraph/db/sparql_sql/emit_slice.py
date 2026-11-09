@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import logging
+import re
 from typing import Optional
 from .space_names import space_prefix
 
@@ -440,6 +442,276 @@ def _emit_late_text_ordered(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
             f"FROM (\nSELECT {r_alias}_p.*, row_number() OVER () AS {rn} FROM (\n"
             f"SELECT * FROM (\n{child_sql}\n) AS {r_alias}_i\n{page}\n) AS {r_alias}_p\n"
             f") AS {r_alias}\n" + "\n".join(joins) + f"\nORDER BY {r_alias}.{rn}")
+
+
+_QUALIFIED = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_]")
+
+
+def _alias_only_constraints(bgp, alias: str):
+    """The BGP's constraints on `alias` that name no OTHER relation: its
+    constants (predicate, object, graph), which a driver can carry alone.
+
+    Anything qualified by another name is left out, a string literal that
+    merely looks qualified included. Leaving a constraint out only makes the
+    driver a SUPERSET of the true holders, which keeps the page exact (a row
+    before the N-th key of a superset is before it in the set too); carrying
+    one that names a relation the driver lacks would not run."""
+    out = []
+    for owner, sql in bgp.tagged_constraints or []:
+        if owner != alias:
+            continue
+        if any(a != alias for a in _QUALIFIED.findall(sql)):
+            continue
+        out.append(sql)
+    return out
+
+
+#: `_emit_sorted_driver_page` fires only when the driver's pin holds more
+#: than this many rows per candidate (a smaller pattern sorts cheaply as is)...
+SORTED_DRIVER_MIN_ROWS_PER_CANDIDATE = 20
+#: ...and no other constant leaf is this many times smaller than the pin.
+SORTED_DRIVER_MARGIN = 10
+
+
+def _emit_sorted_driver_page(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
+    """`ORDER BY ?v ... LIMIT k` where `?v` is a typed holder's value: exact
+    early stop from a sorted DRIVER, not from the whole joined pattern.
+
+    `issues/333` follow-up (`l2_page` on lead 100k): `?c hasKGSlotType <S> .
+    ?c hasDoubleSlotValue ?rating` plus the rest of the pattern, `ORDER BY
+    DESC(?rating) LIMIT 25`. Both generators built EVERY row of the pattern,
+    100,000 leads with three slots each, sorted them and kept 25: >30 s on RDS,
+    EKS and locally, the planner included (`qplan` only renders
+    sort-then-limit for a value order).
+
+    THE DRIVER is the holder of `?v` and nothing else: `?s`'s constant-typed
+    quads joined to the quad binding `?v`, with `?v`'s number and date. Its
+    top-N by the query's own value order is cheap (100,000 typed slots: 287 ms
+    measured, against the whole pattern's 45 s).
+
+    EXACT, by construction. Let `thr` be the N-th driver row's key. CANDIDATES
+    are every driver row whose key sorts at or before `thr` in the query's
+    order — ties included, so the set is closed under equal keys. The full
+    query restricted to candidate holders (`fast`) is computed; every row it
+    returns sorts at or before `thr`, and every solution row OUTSIDE it has a
+    holder sorting strictly after `thr`. So if `fast` has at least
+    `limit + offset` rows, its first `limit + offset` ARE the answer's. If not
+    (the rest of the pattern rejected too many candidates), the full query
+    runs instead, unchanged, behind a one-time filter PostgreSQL evaluates
+    first, so only one branch ever executes.
+
+    The key is compared on its first two value tiers (`__num`, then `__dt`),
+    matching `emit_order.variable_order_parts`: DESC NULLS LAST, ASC NULLS
+    FIRST. Equal on both tiers counts as a tie whatever the text says, which
+    only widens the candidate set.
+
+    Declines (None) unless the shape is exactly SLICE -> PROJECT -> ORDER ->
+    BGP, the first order key a variable bound once, as the object of a quad
+    whose subject also carries at least one quad with a constant predicate and
+    object. Everything else keeps its current emission.
+    """
+    from .emit import emit
+    from .ir import TiebreakVar
+    from .sql_type_generation import ColumnInfo, COMPANION_SUFFIXES, TypeRegistry
+    from ..jena_sparql.jena_types import ExprVar
+
+    if plan.limit < 0 or plan.sorted_driver_branch:
+        return None
+    proj = plan.child
+    if proj is None or proj.kind != KIND_PROJECT or not proj.children:
+        return None
+    order = proj.children[0]
+    if order.kind != KIND_ORDER or not order.order_conditions or not order.children:
+        return None
+    bgp = order.children[0]
+    if bgp.kind != "bgp" or not bgp.tables:
+        return None
+    first, direction = order.order_conditions[0]
+    if isinstance(first, TiebreakVar):
+        return None
+    v = first.lstrip("?") if isinstance(first, str) else (
+        first.var if isinstance(first, ExprVar) else None)
+    if not v:
+        return None
+    direction = "DESC" if str(direction).upper().startswith("DESC") else "ASC"
+    project_vars = list(proj.project_vars or [])
+    if not project_vars or "*" in project_vars:
+        return None
+
+    vslot = (bgp.var_slots or {}).get(v)
+    if not vslot or len(vslot.positions) != 1:
+        return None
+    qv, col = vslot.positions[0]
+    tables = {t.alias: t for t in bgp.tables}
+    if col != "object_uuid" or tables.get(qv) is None or tables[qv].kind != "quad":
+        return None
+    s_var = next((name for name, sl in bgp.var_slots.items()
+                  if (qv, "subject_uuid") in sl.positions), None)
+    if not s_var:
+        return None
+    holder_quads = [a for a, c in bgp.var_slots[s_var].positions
+                    if c == "subject_uuid" and a != qv
+                    and tables.get(a) is not None and tables[a].kind == "quad"]
+    typed = []
+    for a in holder_quads:
+        cons = _alias_only_constraints(bgp, a)
+        if (any(f"{a}.predicate_uuid" in c for c in cons)
+                and any(f"{a}.object_uuid" in c for c in cons)):
+            typed.append((a, cons))
+    v_cons = _alias_only_constraints(bgp, qv)
+    if not typed or not any(f"{qv}.predicate_uuid" in c for c in v_cons):
+        return None
+
+    need = plan.limit + max(plan.offset, 0)
+    n_driver = max(need * 4, 64)
+
+    # WORTH IT only when the driver is the pattern's narrowest way in and the
+    # pattern is large. Another leaf at least DRIVER_MARGIN times smaller than
+    # the driver's pin already bounds the sort, and PostgreSQL then nests the
+    # candidates under it (measured: a state-code constant, 931 rows against a
+    # 100,000-row pin, made the restricted branch 29 s). A range, FTS or text
+    # anchor is measured elsewhere and keeps its plan.
+    from .emit_bgp import _has_unpriced_anchor, _leaf_cardinality
+    card = _leaf_cardinality(bgp, ctx)
+    if _has_unpriced_anchor(bgp, card):
+        return None
+    pins = [card[a] for a, _c in typed if a in card]
+    if not pins:
+        return None
+    driver_rows = min(pins)
+    holder = {qv} | {a for a, _c in typed}
+    others = [n for a, n in card.items()
+              if a not in holder and isinstance(n, (int, float))]
+    if driver_rows <= SORTED_DRIVER_MIN_ROWS_PER_CANDIDATE * n_driver:
+        return None
+    if others and min(others) * SORTED_DRIVER_MARGIN < driver_rows:
+        return None
+    quad_table = tables[qv].table_name
+    term_table = ctx.term_table
+    tag = ctx.aliases.next("sd")
+
+    def rename(sql: str, old: str, new: str) -> str:
+        return re.sub(rf"\b{re.escape(old)}\.", f"{new}.", sql)
+
+    from .emit_bgp import _DATETIME_DATATYPES
+    # The order's first two tiers, as the query computes them. `num_val` IS
+    # `__num`: a generated column on the same `numeric_term_expr`. `dt_val` is
+    # NOT `__dt` (it normalises offsets, the projection casts), so the date
+    # tier is the projection's own expression.
+    n_col = f"{tag}_t.num_val"
+    d_col = (f"CASE WHEN {tag}_t.datatype_id IN ({ctx.dt_ids_for_uris(_DATETIME_DATATYPES)})"
+             f" AND {tag}_t.term_text ~ '^\\d{{4}}-'"
+             f" THEN CAST({tag}_t.term_text AS TIMESTAMP) END")
+
+    def driver(extra_where: str = "", order_limit: str = "") -> str:
+        dv = f"{tag}_v"
+        joins = [f"JOIN {term_table} AS {tag}_t ON {tag}_t.term_uuid = {dv}.object_uuid"]
+        where = [rename(c, qv, dv) for c in v_cons]
+        for i, (a, cons) in enumerate(typed):
+            da = f"{tag}_h{i}"
+            joins.append(f"JOIN {quad_table} AS {da} ON {da}.subject_uuid = {dv}.subject_uuid")
+            where += [rename(c, a, da) for c in cons]
+        if extra_where:
+            where.append(extra_where)
+        return (f"SELECT DISTINCT {dv}.subject_uuid AS s, {n_col} AS n, {d_col} AS d "
+                f"FROM {quad_table} AS {dv} " + " ".join(joins)
+                + " WHERE " + " AND ".join(where) + order_limit)
+
+    # CANDIDATES: the driver's top N, plus every driver row TIED with the N-th
+    # on both tiers. Every row strictly before the N-th is in the top N, so
+    # this is exactly "at or before the N-th key". Ties are found by the
+    # number (an index lookup on `num_val`) or, when the N-th has none, among
+    # the number-less rows by the date. With fewer than N driver rows `thr` is
+    # empty, both tie branches are empty and the top N is the whole driver.
+    mod = "DESC NULLS LAST" if direction == "DESC" else "ASC NULLS FIRST"
+    k, thr = f"{tag}_k", f"{tag}_thr"
+    k_sql = (f"{k} AS MATERIALIZED ("
+             f"{driver(order_limit=f' ORDER BY n {mod}, d {mod} LIMIT {n_driver}')}),\n"
+             f"{thr} AS MATERIALIZED (SELECT n, d FROM {k} ORDER BY n {mod}, d {mod} "
+             f"OFFSET {n_driver - 1} LIMIT 1),\n")
+    candidates = (
+        f"SELECT s FROM {k} "
+        f"UNION SELECT s FROM ({driver(extra_where=f'{n_col} = (SELECT n FROM {thr})')}) AS {tag}_tn "
+        f"UNION SELECT s FROM ({driver(extra_where=f'{n_col} IS NULL AND EXISTS (SELECT 1 FROM {thr} WHERE n IS NULL) AND ({d_col}) IS NOT DISTINCT FROM (SELECT d FROM {thr})')}) AS {tag}_td")
+    # The fast branch runs only when the N-th key has a number or a date. With
+    # neither (a text-valued order) every driver row ties with it and the
+    # "candidates" are the whole driver: the full query is cheaper as itself.
+    gate = (f"(NOT EXISTS (SELECT 1 FROM {thr}) OR EXISTS (SELECT 1 FROM {thr} "
+            f"WHERE n IS NOT NULL OR d IS NOT NULL))")
+
+    # The same page twice, restricted to the candidates and as it is, each
+    # emitted as a SLICE so it takes whichever page handler below would serve
+    # it (late text, two-phase); without that the fallback lost them and ran
+    # 2.5x slower than the query alone. Marked so neither comes back here.
+    def branch():
+        b = copy.deepcopy(plan)
+        b.limit, b.offset, b.sorted_driver_branch = need, 0, True
+        return b
+    fast_plan, full_plan = branch(), branch()
+    fast_bgp = fast_plan.child.children[0].children[0]
+    fast_bgp.tagged_constraints = list(fast_bgp.tagged_constraints or []) + [
+        (qv, f"{qv}.subject_uuid = ANY(ARRAY({candidates}))")]
+    # The candidates are the anchor: a count for the join order (as an FTS pin
+    # is), and no slot-group CTE, which would rebuild the other groups whole.
+    fast_bgp.fts_leaf_rows = {**(fast_bgp.fts_leaf_rows or {}), qv: n_driver}
+    fast_bgp.driver_restricted = True
+    ctx_fast = ctx.child(types=TypeRegistry(aliases=ctx.aliases))
+    ctx_full = ctx.child(types=TypeRegistry(aliases=ctx.aliases))
+    try:
+        fast_sql = emit(fast_plan, ctx_fast)
+        full_sql = emit(full_plan, ctx_full)
+    except Exception as exc:
+        ctx.log("slice", f"sorted-driver page declined: child would not emit ({exc})")
+        return None
+    if not fast_sql or not full_sql:
+        return None
+
+    def columns(child_ctx, sql):
+        out = []
+        for var in project_vars:
+            info = child_ctx.types.get(var)
+            if not info or not info.sql_name:
+                return None
+            sn = info.sql_name
+            out.append((var, sn, info,
+                        [sn + suf for suf in ("",) + COMPANION_SUFFIXES if f"{sn}{suf}" in sql]))
+        return out
+    cols_fast, cols_full = columns(ctx_fast, fast_sql), columns(ctx_full, full_sql)
+    if not cols_fast or not cols_full:
+        return None
+    if [len(c[3]) for c in cols_fast] != [len(c[3]) for c in cols_full]:
+        return None
+    fast_cols = [c for _v, _s, _i, cs in cols_fast for c in cs]
+    full_cols = [f"{b} AS {a}" for (_v, _s, _i, ca), (_v2, _s2, _i2, cb)
+                 in zip(cols_fast, cols_full) for a, b in zip(ca, cb)]
+    for flag_ctx in (ctx_fast, ctx_full):
+        if getattr(flag_ctx, "needs_ordered_scan", False):
+            ctx.needs_ordered_scan = True
+    for var, sn, info, _cs in cols_fast:
+        ctx.types.register(ColumnInfo.simple_output(
+            var, sn, from_triple=info.from_triple, typed_lane=info.typed_lane,
+            text_materialized=info.text_materialized,
+            uuid_materialized=info.uuid_materialized, partial=info.partial))
+    # Read by `planner_ext.plan_with_qtree`: this page is served here, exactly
+    # and with early stop; the planner's own plan for it is sort-then-limit.
+    ctx.aliases.sorted_driver_page = True
+
+    rn = f"{tag}_rn"
+    page = f"OFFSET {plan.offset}\n" if plan.offset > 0 else ""
+    ctx.log("slice", f"sorted-driver page: ?{v} {direction} via ?{s_var}'s typed holder, "
+                     f"top {n_driver} candidates for LIMIT {need}")
+    return (f"SELECT {', '.join(fast_cols)} FROM (\n"
+            f"WITH {k_sql}"
+            f"{tag}_fast AS MATERIALIZED (\nSELECT * FROM (\n{fast_sql}\n) AS {tag}_f "
+            f"WHERE {gate}\n),\n"
+            f"{tag}_n AS MATERIALIZED (SELECT count(*) AS n FROM {tag}_fast)\n"
+            f"SELECT u.*, row_number() OVER () AS {rn} FROM (\n"
+            f"SELECT {', '.join(fast_cols)} FROM {tag}_fast "
+            f"WHERE (SELECT n FROM {tag}_n) >= {need}\n"
+            f"UNION ALL\n"
+            f"SELECT {', '.join(full_cols)} FROM (\n{full_sql}\n) AS {tag}_full "
+            f"WHERE (SELECT n FROM {tag}_n) < {need}\n"
+            f") AS u\n) AS {tag}\nORDER BY {tag}.{rn}\n{page}LIMIT {plan.limit}")
 
 
 def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
@@ -1024,6 +1296,11 @@ def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
         two_phase = _try_selective_driven(plan, ctx)
     if two_phase is not None:
         return two_phase
+
+    # A value order on a typed holder: exact early stop from a sorted driver.
+    sorted_page = _emit_sorted_driver_page(plan, ctx)
+    if sorted_page is not None:
+        return sorted_page
 
     # Last: page on uuids and resolve text for the page only. After every shape
     # above, so none of their behaviour changes (issues/088).

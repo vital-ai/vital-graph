@@ -69,6 +69,9 @@ class AliasGenerator:
         # call on a `cjk` index, read before emit (`fts_rarity.load_cjk_weights`).
         # Absent means the arm keeps `ts_rank_cd` (`issues/333` D2).
         self.cjk_weights: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
+        # Set by `emit_slice._emit_sorted_driver_page` when it serves the page:
+        # `planner_ext.plan_with_qtree` then keeps the emitted SQL.
+        self.sorted_driver_page: bool = False
         # Predicate cardinality stats.
         #
         # Keyed by (predicate, object). `{space}_rdf_stats` is stored per
@@ -237,6 +240,14 @@ class PlanV2:
     # emit; absent when the count hit its cap, because a lower bound would
     # understate a broad term and re-root plans that should not move.
     fts_leaf_rows: Dict[str, int] = field(default_factory=dict)
+    # Set on the candidate branch of `emit_slice._emit_sorted_driver_page`: one
+    # leaf is restricted to a small sorted-driver candidate set (its count is
+    # in `fts_leaf_rows`), so slot-group CTEs, which build each group over its
+    # whole pin, would undo the restriction and are not used.
+    driver_restricted: bool = False
+    # A SLICE that `_emit_sorted_driver_page` emits as one of its two branches:
+    # served by the other page handlers, never by that one again.
+    sorted_driver_branch: bool = False
 
     # --- Children ---
     # Relation kinds: join/left_join/union/minus have 2 children.

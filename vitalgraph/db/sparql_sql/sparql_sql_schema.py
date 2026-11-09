@@ -90,6 +90,9 @@ def numeric_datatype_ids() -> str:
 
 
 NUMERIC_TERM_COLUMN = "num_val"
+#: The non-key columns of the edge endpoint indexes: with the two endpoints,
+#: the whole edge row.
+EDGE_ENDPOINT_INCLUDE = "(context_uuid, edge_uuid, edge_type_uuid)"
 DATETIME_TERM_COLUMN = "dt_val"
 
 
@@ -1893,8 +1896,17 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_datatype_uri ON {t['datatype']} (datatype_uri)",
 
             # Edge table indexes
-            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_edge_src_dst ON {t['edge']} (source_node_uuid, dest_node_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_edge_dst_src ON {t['edge']} (dest_node_uuid, source_node_uuid)",
+            # The endpoint indexes COVER the row: every column a hop reads
+            # (`EDGE_ENDPOINT_INCLUDE`), so a walk is index-only. Without it each
+            # hop fetched the heap row for its context and edge uuid, and a
+            # three-hop walk up from 100,000 slots re-read ~400,000 heap pages
+            # on every run (lead 100k `high_rated_edge_count`: 15-20 s steady,
+            # 4.5 s covered). `scripts/migrate_edge_endpoint_covering.py`
+            # rebuilds them on existing spaces.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_edge_src_dst ON {t['edge']} "
+            f"(source_node_uuid, dest_node_uuid) INCLUDE {EDGE_ENDPOINT_INCLUDE}",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_edge_dst_src ON {t['edge']} "
+            f"(dest_node_uuid, source_node_uuid) INCLUDE {EDGE_ENDPOINT_INCLUDE}",
             f"CREATE INDEX IF NOT EXISTS idx_{space_prefix(space_id)}_edge_edge ON {t['edge']} (edge_uuid)",
             # Typed traversal in each direction. A hop is normally "these
             # destinations, of this edge type", so the type leads and the

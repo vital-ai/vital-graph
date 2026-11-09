@@ -336,6 +336,8 @@ def _slot_group_ctes(plan: PlanV2, ctx: EmitContext, quad_tables, tagged,
                      inner_cols, leaf_card):
     """`slot_group_cte` for this BGP, or None. Never fails the query: the flat
     join is correct without it, and losing it costs speed only."""
+    if getattr(plan, "driver_restricted", False):
+        return None
     consts = getattr(ctx.aliases, "constants", None) or {}
     resolved = getattr(ctx.aliases, "resolved_constants", None) or {}
 
