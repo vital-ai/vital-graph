@@ -26,6 +26,7 @@ from vitalgraph.document.segmentation_job_manager import (
     SegmentationJobDTO,
     SegmentationJobManager,
 )
+from vitalgraph.document import vectorization_completer as vc
 from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,8 @@ _IDLE_POLL_INTERVAL = 30.0
 _BUSY_POLL_INTERVAL = 0.2
 # Max concurrent segmentation tasks
 _MAX_CONCURRENT = 4
+# How often each space's stale 'vectorizing' jobs are swept (seconds).
+_SWEEP_INTERVAL = 300.0
 
 
 class SegmentationWorker:
@@ -77,6 +80,11 @@ class SegmentationWorker:
         self._skip_spaces: set = set()
         self._skip_basis: frozenset = frozenset()
 
+        # Jobs in 'vectorizing': one completer per space, not a poller per
+        # job (`vectorization_completer`). Plus the last sweep per space.
+        self._completer = vc.VectorizationCompleter(self._get_pool)
+        self._last_sweep: Dict[str, float] = {}
+
     def stop(self) -> None:
         """Signal the worker to stop after the current poll cycle."""
         self._running = False
@@ -93,6 +101,7 @@ class SegmentationWorker:
             "jobs_failed": self._jobs_failed,
             "listen_status": dict(self._listen_status),
             "listen_channels_active": len(self._listen_conns),
+            "jobs_vectorizing_tracked": self._completer.waiting(),
         }
 
     async def run(self) -> None:
@@ -128,6 +137,7 @@ class SegmentationWorker:
                 self._last_wake_reason = "timeout"
                 logger.info("Worker safety-net poll (timeout=%.1fs)", interval)
 
+        await self._completer.stop()
         await self._teardown_listeners()
         logger.info("Segmentation worker stopped")
 
@@ -282,8 +292,26 @@ class SegmentationWorker:
                     did_work = True
             except Exception as e:
                 logger.error(f"Error polling space {space_id}: {e}", exc_info=True)
+            await self._maybe_sweep(space_id)
 
         return did_work
+
+    async def _maybe_sweep(self, space_id: str) -> None:
+        """Finish this space's stale 'vectorizing' jobs, every _SWEEP_INTERVAL."""
+        now = asyncio.get_running_loop().time()
+        if now - self._last_sweep.get(space_id, float("-inf")) < _SWEEP_INTERVAL:
+            return
+        self._last_sweep[space_id] = now
+        try:
+            pool = await self._get_pool(space_id)
+            if not pool:
+                return
+            async with pool.acquire() as conn:
+                await vc.sweep(conn, space_id, tracked=self._completer.tracked(space_id))
+        except asyncpg.exceptions.UndefinedTableError:
+            pass
+        except Exception as e:
+            logger.warning("vectorize sweep %s: %s", space_id, vc.error_text("failed", e))
 
     async def _poll_space(self, space_id: str) -> bool:
         """Try to claim and process one job for a space. Returns True if a job was processed."""
@@ -397,14 +425,14 @@ class SegmentationWorker:
             self._jobs_failed += 1
             logger.warning(f"Job {job.job_id} lock timeout: {te}")
             try:
-                await manager.fail(job.job_id, f"Lock timeout: {te}")
+                await manager.fail(job.job_id, vc.error_text("Lock timeout", te))
             except Exception as fail_err:
                 logger.error(f"Could not mark job {job.job_id} as failed: {fail_err}")
         except Exception as e:
             self._jobs_failed += 1
             logger.error(f"Job {job.job_id} failed: {e}", exc_info=True)
             try:
-                await manager.fail(job.job_id, str(e)[:2000])
+                await manager.fail(job.job_id, (str(e) or type(e).__name__)[:2000])
             except Exception as fail_err:
                 logger.error(f"Could not mark job {job.job_id} as failed: {fail_err}")
 
@@ -834,29 +862,28 @@ class SegmentationWorker:
     def _fire_vectorization_background(
         self, space_impl, space_id: str, graph_id: str, output, job_id: int,
     ) -> None:
-        """Fire vectorization as a non-blocking background task.
+        """Queue the job's subjects for the index sync, then hand the job to
+        the space's completer, which marks it 'completed' once none of them
+        is queued.
 
-        When complete, transitions the job from 'vectorizing' to 'completed'.
-        On failure, still marks 'completed' (vectorization is non-fatal —
-        segments are already stored and searchable via FTS/CONTAINS).
+        A failure is non-fatal: the job is still completed, with the error
+        (segments are stored and searchable via FTS/CONTAINS). Nothing here
+        polls or writes the status itself (`vectorization_completer`).
         """
-        import asyncio
+        uris = [output.parent_copy_properties["URI"]]
+        for seg in output.segment_properties_list:
+            uris.append(seg["URI"])
 
-        async def _do_vectorize():
+        async def _enqueue():
             try:
                 backend_impl = getattr(space_impl, 'backend', None)
                 db_impl = getattr(backend_impl, 'db_impl', None) if backend_impl else None
                 if not db_impl:
                     logger.warning(
                         "Job %d: no db_impl for vectorization, marking completed", job_id)
-                    await self._complete_vectorization(space_id, job_id, error=None)
+                    self._completer.register(space_id, job_id, graph_id, [])
                     return
-
                 from vitalgraph.vectorization.auto_sync import schedule_sync
-                uris = [output.parent_copy_properties["URI"]]
-                for seg in output.segment_properties_list:
-                    uris.append(seg["URI"])
-
                 task = schedule_sync(
                     db_impl=db_impl,
                     space_id=space_id,
@@ -866,49 +893,18 @@ class SegmentationWorker:
                 )
                 if task is not None:
                     await task      # queued (`issues/291`), not yet synced
-                    from vitalgraph.vectorization.auto_sync import wait_until_synced
-                    if not await wait_until_synced(db_impl, space_id, uris, graph_id):
-                        # Still queued: the sync will happen, but the job
-                        # cannot claim it did. Said, not hidden.
-                        await self._complete_vectorization(
-                            space_id, job_id,
-                            error="vectorization still queued after 600s")
-                        return
-                    logger.info(f"Job {job_id}: vectorization completed for {len(uris)} subjects")
-
-                await self._complete_vectorization(space_id, job_id, error=None)
+                self._completer.register(space_id, job_id, graph_id, uris)
             except Exception as e:
-                error_msg = f"Vectorization task failed: {e}"
+                error_msg = vc.error_text("Vectorization task failed", e)
                 logger.error(f"Job {job_id}: {error_msg}", exc_info=True)
-                await self._complete_vectorization(space_id, job_id, error=error_msg)
+                self._completer.register(space_id, job_id, graph_id, [], error=error_msg)
 
         try:
             loop = asyncio.get_running_loop()
-            task = loop.create_task(
-                _do_vectorize(), name=f"vectorize_job:{job_id}",
-            )
-            # Swallow unhandled exceptions so they don't crash the worker
+            task = loop.create_task(_enqueue(), name=f"vectorize_job:{job_id}")
             task.add_done_callback(lambda t: (
                 logger.error("vectorize_job:%d unhandled: %s", job_id, t.exception())
-                if t.exception() else None
+                if not t.cancelled() and t.exception() else None
             ))
         except Exception as e:
             logger.error(f"Job {job_id}: could not fire vectorization task: {e}")
-
-    async def _complete_vectorization(
-        self, space_id: str, job_id: int, *, error: Optional[str],
-    ) -> None:
-        """Transition a job from 'vectorizing' to 'completed' (with or without error)."""
-        pool = await self._get_pool(space_id)
-        if not pool:
-            logger.error("Job %d: no pool to update vectorization status", job_id)
-            return
-        try:
-            async with pool.acquire() as conn:
-                manager = SegmentationJobManager(conn, space_id)
-                if error:
-                    await manager.vectorization_failed(job_id, error)
-                else:
-                    await manager.vectorization_complete(job_id)
-        except Exception as e:
-            logger.error(f"Job {job_id}: failed to update status after vectorization: {e}")

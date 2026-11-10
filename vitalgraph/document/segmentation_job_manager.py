@@ -393,3 +393,18 @@ class SegmentationJobManager:
             created_at=str(row["created_at"]) if row.get("created_at") else None,
             updated_at=str(row["updated_at"]) if row.get("updated_at") else None,
         )
+
+
+async def delete_jobs_for_graph(conn, space_id: str, graph_uri: str) -> int:
+    """Delete a graph's segmentation job rows, with the graph.
+
+    A dropped or cleared graph kept every job row it ever had, some still
+    'vectorizing' (nothing would finish them: their subjects are gone). Run
+    in the transaction that removes the graph's quads. A space without the
+    table has nothing to delete.
+    """
+    table = f"{space_prefix(space_id)}_segmentation_jobs"
+    if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", table):
+        return 0
+    result = await conn.execute(f"DELETE FROM {table} WHERE graph_id = $1", graph_uri)
+    return int(result.split()[-1]) if result else 0

@@ -544,6 +544,10 @@ class _SparqlSQLGraphsAdapter:
                             ctx_uuid,
                         )
                         await delete_edges_for_context(conn, space_id, ctx_uuid)
+                        # Its segmentation job rows go too.
+                        from ...document.segmentation_job_manager import (
+                            delete_jobs_for_graph)
+                        await delete_jobs_for_graph(conn, space_id, graph_uri)
             # Invalidate entity graph + count cache (local, synchronous)
             try:
                 from ...cache.entity_graph_cache import _entity_graph_cache
@@ -1174,6 +1178,10 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                             ctx_uuid,
                         )
                         await delete_edges_for_context(conn, space_id, ctx_uuid)
+                        # Its segmentation job rows go too.
+                        from ...document.segmentation_job_manager import (
+                            delete_jobs_for_graph)
+                        await delete_jobs_for_graph(conn, space_id, graph_uri)
             # Remove graph record
             await self._db.execute_query(
                 "DELETE FROM graph WHERE space_id = $1 AND graph_uri = $2",
@@ -3143,8 +3151,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         if _subj:
                             await _orph(conn, space_id, _subj)
                             await _ins(conn, space_id, _subj)
+                        from ...document.segmentation_job_manager import (
+                            delete_jobs_for_graph as _del_jobs)
                         for _g in _cleared_graphs_from_update_ops(cr.update_ops):
                             await _del_ctx(conn, space_id, _generate_term_uuid(_g, 'U'))
+                            await _del_jobs(conn, space_id, _g)
 
                     # Keep {space}_edge in sync — this write path bypasses the
                     # bulk sync. For every concrete subject the update touched:
