@@ -65,10 +65,13 @@ Service, which follows it at once.
 * `application_name_add_host: 1`. The server sees PgBouncer's address; this
   puts the client's address in `application_name` for `pg_stat_activity`.
 * Two pooler pods, one per zone and never on one node (`DoNotSchedule` plus
-  required anti-affinity), on the database nodes, with Guaranteed resources
-  (100m / 128Mi) so they are not the first evicted, and a
-  PodDisruptionBudget of `minAvailable: 1` (the operator creates PDBs for
-  the instances, not for a Pooler). On EKS the NLB is cross-zone,
+  required anti-affinity), on the database nodes. Memory 128Mi requested
+  and limited, so they are not the first evicted; CPU 250m requested, up to
+  one CPU, because PgBouncer is single-threaded and does TLS on both sides
+  (a 0.1 CPU limit throttles it). A PodDisruptionBudget of
+  `minAvailable: 1` (the operator creates PDBs for the instances, not for a
+  Pooler). Rollouts never surge (`maxSurge: 0, maxUnavailable: 1`): a surge
+  pod would need a third database node. On EKS the NLB is cross-zone,
   health-checked every 5 s, with a 10 s deregistration delay and a 3,600 s
   idle timeout, because pooled connections live long.
 * **Session settings go in a `SET` after connecting, never in startup

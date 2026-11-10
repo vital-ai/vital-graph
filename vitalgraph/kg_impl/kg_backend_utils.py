@@ -30,7 +30,6 @@ from ..model.kgentities_model import EntityCreateResponse, EntityUpdateResponse
 
 # Graph retrieval utilities
 from .kg_graph_retrieval_utils import GraphObjectRetriever
-from ..db.connection_config import require
 
 
 # ---------------------------------------------------------------------------
@@ -1299,19 +1298,14 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         Designed to be called via ``asyncio.to_thread()`` so the event loop
         is never blocked.  Mirrors MaintenanceJob._sync_run_tables().
         """
-        import psycopg
         from psycopg import sql as psql
+        # The maintenance fences, SET after connecting: this ANALYZE ran on
+        # the role's read-path 60 s / 10 s (`issues/136`).
+        from ..process.maintenance_job import connect_maintenance_sync
 
         cfg = self._pg_config
         assert cfg is not None, "_sync_analyze_tables requires _pg_config"
-        conn = psycopg.connect(
-            host=require(cfg, 'host'),
-            port=require(cfg, 'port'),
-            dbname=require(cfg, 'database'),
-            user=require(cfg, 'username'),
-            password=require(cfg, 'password'),
-            autocommit=True,
-        )
+        conn = connect_maintenance_sync(cfg)
         completed = 0
         try:
             for table in tables:

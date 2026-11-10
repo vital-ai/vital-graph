@@ -56,11 +56,13 @@ async def _create_pool(config):
     writes all the room they need and still collects an abandoned session.
     """
     import asyncpg
+    from ..db.pool import reset_then
 
     stmt_timeout = os.getenv('VITALGRAPH_EXPORT_STATEMENT_TIMEOUT', '0')
     idle_timeout = os.getenv('VITALGRAPH_EXPORT_IDLE_TIMEOUT', '10min')
 
     db_cfg = config.get_database_config()
+    settings = _session_settings(stmt_timeout, idle_timeout)
     pool = await asyncpg.create_pool(
         host=require(db_cfg, 'host'),
         port=int(require(db_cfg, 'port')),
@@ -69,10 +71,12 @@ async def _create_pool(config):
         password=require(db_cfg, 'password'),
         min_size=2,
         max_size=6,
-        # SET on each new connection, not `server_settings`: those are startup
-        # parameters, and PgBouncer refuses a connection that carries one it
-        # does not track ("unsupported startup parameter").
-        init=_session_settings(stmt_timeout, idle_timeout),
+        # SET, not `server_settings`: those are startup parameters, and
+        # PgBouncer refuses a connection that carries one it does not track
+        # ("unsupported startup parameter"). Re-applied on every release,
+        # because the pool's reset ends in RESET ALL (`reset_then`).
+        init=settings,
+        reset=reset_then(settings),
     )
     return pool
 

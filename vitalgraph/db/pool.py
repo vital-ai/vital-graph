@@ -257,6 +257,28 @@ class _LoggingAcquireContext:
         return conn
 
 
+def reset_then(apply):
+    """A pool `reset=` that keeps session settings made with `SET`.
+
+    asyncpg resets a connection each time it goes back to the pool, and the
+    default reset includes `RESET ALL`, which discards any `SET` an `init=`
+    made: the setting held for the connection's FIRST use only. Startup
+    `server_settings` survived that (they are the session's defaults), but
+    PgBouncer refuses them, so settings now go in a `SET`.
+
+    A custom `reset=` REPLACES the default one in asyncpg 0.30, it does not
+    run after it. So this runs the default reset query first (advisory locks
+    released, cursors closed, UNLISTEN, RESET ALL), then `apply(conn)` again.
+    Pass the same `apply` as `init=`.
+    """
+    async def reset(conn):
+        query = conn.get_reset_query()
+        if query:
+            await conn.execute(query)
+        await apply(conn)
+    return reset
+
+
 class TimeoutPool(asyncpg.pool.Pool):
     """An ``asyncpg.Pool`` that applies a default timeout to ``acquire()``."""
 

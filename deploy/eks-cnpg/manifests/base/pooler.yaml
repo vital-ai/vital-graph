@@ -28,6 +28,15 @@ spec:
   cluster: {name: vitalgraph-pg}
   instances: 2
   type: rw
+  # Replace a pod, then start its successor; never surge. Each pod needs its
+  # own database node (anti-affinity below) and there are two: a surge pod
+  # has nowhere to go, so the node pool would launch a third database node
+  # for it (kept until consolidation) or the rollout would stall. One pod
+  # down at a time fits the PDB. Parameter changes are reloaded in place;
+  # this matters for image, resource and operator upgrades.
+  deploymentStrategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
   pgbouncer:
     poolMode: session
     parameters:
@@ -74,15 +83,19 @@ spec:
             - topologyKey: kubernetes.io/hostname
               labelSelector:
                 matchLabels: {cnpg.io/poolerName: vitalgraph-pg-pooler-rw}
-      # Requests equal to limits (Guaranteed): with none, the pooler is the
-      # first thing evicted under memory pressure on the database nodes, and
-      # each pod carries half the app's sessions. PgBouncer is single-threaded
-      # and small; a few hundred sessions use well under this.
+      # With no requests the pooler is the first thing evicted under memory
+      # pressure on the database nodes, and each pod carries half the app's
+      # sessions. Memory request = limit and small real use keep it among the
+      # last evicted. CPU: PgBouncer is single-threaded and does TLS on both
+      # sides; a 0.1 CPU limit throttles it in bursts and adds latency to
+      # every query. 250m is reserved (PostgreSQL requests 7 of a 2xlarge's
+      # ~7.9 allocatable CPUs), and it may burst to one CPU. Watch
+      # throttling on the pgbouncer containers in the first load test.
       containers:
         - name: pgbouncer
           resources:
-            requests: {cpu: 100m, memory: 128Mi}
-            limits: {cpu: 100m, memory: 128Mi}
+            requests: {cpu: 250m, memory: 128Mi}
+            limits: {cpu: "1", memory: 128Mi}
 ---
 # The operator does not create a PodDisruptionBudget for a Pooler (it does for
 # the instances). Keep one pooler pod through voluntary disruptions: node

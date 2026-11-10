@@ -95,6 +95,12 @@ async def _init_request_conn(conn):
     pool keeps `lock_timeout = 0` deliberately.
     """
     await _init_conn(conn)
+    await _request_conn_settings(conn)
+
+
+async def _request_conn_settings(conn):
+    """The request pool's session settings: applied at connect, and again on
+    every release, after the pool's RESET ALL (`pool.reset_then`)."""
     ms = int(_request_lock_timeout_s() * 1000)
     if ms > 0:
         await conn.execute(f"SET lock_timeout = '{ms}ms'")
@@ -215,6 +221,7 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
 
             from vitalgraph.db.pool import (
                 create_pool, register_pool, PoolClass, DEFAULT_ACQUIRE_TIMEOUT,
+                reset_then,
             )
             # The INTERNAL pool's client-side fence must match the maintenance
             # budget, not the read path's. See its `command_timeout` below.
@@ -309,6 +316,10 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                 command_timeout=self.config.get('command_timeout', 60),
                 acquire_timeout=acquire_timeout,
                 init=_init_request_conn,
+                # The lock_timeout `_init_request_conn` SETs would otherwise
+                # last only for the connection's first use: the pool's reset
+                # ends in RESET ALL.
+                reset=reset_then(_request_conn_settings),
             )
             # REQUEST, not QUERY: this pool still serves reads AND writes.
             # Calling it QUERY would file every mutation wait as a query wait,

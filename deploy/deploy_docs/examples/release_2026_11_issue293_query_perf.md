@@ -130,7 +130,7 @@ changed.
 | `527a7cbb` | Hop-wise SQL is the same in every process (table order no longer follows Python's per-process string hashing). | both |
 | `fb1543f0` | Hop-wise type checks as hashed set membership, with a per-statement `work_mem` raise; edge vitaltype checks read off a maintained `edge.edge_type_uuid`, re-checked by the executor in the query's snapshot. | both |
 | `11fa1229` | Edge-type marks are read only after the migration sets a database-wide flag. | both |
-| pooler fixes | Maintenance ANALYZE / VACUUM connections and the export command set their timeouts with `SET` after connecting, not as startup parameters, which PgBouncer drops or refuses. | EKS (harmless on RDS) |
+| pooler fixes | Maintenance ANALYZE / VACUUM connections and the export command set their timeouts with `SET` after connecting, not as startup parameters, which PgBouncer drops or refuses. Pools that `SET` at connect re-apply after each release's `RESET ALL` (the export's timeouts and the request pool's `lock_timeout` had held for a connection's first use only). | both |
 | deploy-review fixes | The sorted-driver page restricts candidate (holder, value) pairs, not holders: a holder with two values could return its worse value ahead of another holder's better one. Graph drops, clears, import replace and truncate, and subject removal delete the edge rows with the quads, in one transaction. SPARQL updates keep the edge table for the subjects they name inside their transaction, so only WHERE-bound vitaltype changes unmark a space. The reconcile is batched under REPEATABLE READ. Both migration scripts lift the read-path timeouts. | both |
 
 ## 3. Behaviour changes a caller or operator may notice
