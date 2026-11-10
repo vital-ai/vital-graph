@@ -93,5 +93,33 @@ def test_pools_that_SET_at_init_reapply_after_reset():
     import inspect
     from vitalgraph.cmd import vitalgraph_export_cmd as X
     from vitalgraph.db.sparql_sql import sparql_sql_db_impl as D
-    assert "reset=reset_then(settings)" in inspect.getsource(X)
-    assert "reset=reset_then(_request_conn_settings)" in inspect.getsource(D)
+    assert "reset=reset_then(settings_sql)" in inspect.getsource(X)
+    assert "reset=reset_then(_request_conn_settings_sql)" in inspect.getsource(D)
+
+
+def test_set_sql_quotes_the_value():
+    from vitalgraph.db.pool import set_sql
+    assert set_sql("statement_timeout", "0") == "SET statement_timeout = '0';"
+    assert set_sql("application_name", "a'b") == "SET application_name = 'a''b';"
+    with pytest.raises(ValueError):
+        set_sql("x; DROP TABLE y", "1")
+
+
+def test_reset_is_one_round_trip():
+    """The reset query and the settings go in one execute."""
+    import asyncio
+    from vitalgraph.db.pool import reset_then
+
+    class C:
+        def __init__(self):
+            self.sent = []
+
+        def get_reset_query(self):
+            return "RESET ALL;"
+
+        async def execute(self, q):
+            self.sent.append(q)
+
+    c = C()
+    asyncio.run(reset_then(lambda: "SET lock_timeout = '7s'")(c))
+    assert c.sent == ["RESET ALL;\nSET lock_timeout = '7s'"]

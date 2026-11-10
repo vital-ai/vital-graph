@@ -5,9 +5,10 @@ pool's `init=`, because PgBouncer refuses startup parameters it does not
 track. But asyncpg resets a connection on release, and the default reset
 ends in `RESET ALL`, which discards a `SET`: the export's statement timeout
 held on the first acquire and fell back to the role's on the next, even on a
-direct connection. `pool.reset_then(apply)` runs the default reset, then
-`apply` again. A custom `reset=` REPLACES the default one, so the test also
-checks that the default reset's work is still done.
+direct connection. `pool.reset_then(settings_sql)` sends the default reset
+query and the settings in one round trip. A custom `reset=` REPLACES the
+default one, so the test also checks that the default reset's work is still
+done.
 
 One connection per pool, so every acquire is the same backend.
 """
@@ -17,7 +18,7 @@ from __future__ import annotations
 import asyncpg
 import pytest
 
-from vitalgraph.cmd.vitalgraph_export_cmd import _session_settings
+from vitalgraph.cmd.vitalgraph_export_cmd import _session_settings_sql
 from vitalgraph.db.pool import reset_then
 
 from .conftest import HAS_PG, PG_DATABASE, PG_HOST, PG_PASSWORD, PG_PORT, PG_USER
@@ -28,11 +29,17 @@ pytestmark = [
 ]
 
 
-async def _pool(**extra):
-    settings = _session_settings("1234ms", "7min")
+_SQL = _session_settings_sql("1234ms", "7min")
+
+
+async def _settings(conn):
+    await conn.execute(_SQL())
+
+
+async def _pool(init=_settings, **extra):
     return await asyncpg.create_pool(
         host=PG_HOST, port=PG_PORT, database=PG_DATABASE, user=PG_USER,
-        password=PG_PASSWORD, min_size=1, max_size=1, init=settings, **extra)
+        password=PG_PASSWORD, min_size=1, max_size=1, init=init, **extra)
 
 
 async def _show(conn):
@@ -43,7 +50,7 @@ async def _show(conn):
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_settings_hold_after_release():
-    pool = await _pool(reset=reset_then(_session_settings("1234ms", "7min")))
+    pool = await _pool(reset=reset_then(_SQL))
     try:
         seen = []
         for _ in range(3):
@@ -57,7 +64,7 @@ async def test_settings_hold_after_release():
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_the_default_reset_still_runs():
-    pool = await _pool(reset=reset_then(_session_settings("1234ms", "7min")))
+    pool = await _pool(reset=reset_then(_SQL))
     try:
         async with pool.acquire() as conn:
             default_work_mem = await conn.fetchval("SHOW work_mem")
@@ -86,5 +93,24 @@ async def test_without_it_the_settings_are_lost():
         assert first[0] == second[0]
         assert first[1:] == ("1234ms", "7min")
         assert second[1:] != ("1234ms", "7min")
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_request_pool_lock_timeout_holds(monkeypatch):
+    """The app's request pool, with its own init and reset."""
+    from vitalgraph.db.sparql_sql import sparql_sql_db_impl as D
+    monkeypatch.setattr(D, "_request_lock_timeout_s", lambda: 7)
+    pool = await _pool(init=D._init_request_conn,
+                       reset=reset_then(D._request_conn_settings_sql))
+    try:
+        seen = []
+        for _ in range(3):
+            async with pool.acquire() as conn:
+                seen.append((await conn.fetchval("SELECT pg_backend_pid()"),
+                             await conn.fetchval("SHOW lock_timeout")))
+        assert len({pid for pid, _ in seen}) == 1
+        assert [lt for _, lt in seen] == ["7s"] * 3
     finally:
         await pool.close()

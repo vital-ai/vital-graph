@@ -257,7 +257,14 @@ class _LoggingAcquireContext:
         return conn
 
 
-def reset_then(apply):
+def set_sql(name: str, value: str) -> str:
+    """`SET name = 'value';`, the value quoted as a literal."""
+    if not name.replace("_", "").isalnum():
+        raise ValueError(f"not a setting name: {name!r}")
+    return "SET %s = '%s';" % (name, str(value).replace("'", "''"))
+
+
+def reset_then(settings_sql):
     """A pool `reset=` that keeps session settings made with `SET`.
 
     asyncpg resets a connection each time it goes back to the pool, and the
@@ -266,16 +273,19 @@ def reset_then(apply):
     `server_settings` survived that (they are the session's defaults), but
     PgBouncer refuses them, so settings now go in a `SET`.
 
-    A custom `reset=` REPLACES the default one in asyncpg 0.30, it does not
-    run after it. So this runs the default reset query first (advisory locks
-    released, cursors closed, UNLISTEN, RESET ALL), then `apply(conn)` again.
-    Pass the same `apply` as `init=`.
+    A custom `reset=` REPLACES the default one (asyncpg's `release()`); it
+    does not run after it. So this sends the default reset query (advisory
+    locks released, cursors closed, UNLISTEN, RESET ALL) and then the
+    settings, in ONE simple-query round trip. `settings_sql()` returns the
+    `SET ...;` statements, or "" for none; `init=` should send the same.
+    Needs asyncpg >= 0.30 for `get_reset_query`.
     """
     async def reset(conn):
-        query = conn.get_reset_query()
+        # The reset query ends in ';', so the settings follow it as their
+        # own statement(s).
+        query = "\n".join(q for q in (conn.get_reset_query(), settings_sql()) if q)
         if query:
             await conn.execute(query)
-        await apply(conn)
     return reset
 
 

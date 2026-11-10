@@ -86,7 +86,7 @@ server = [
     "uvicorn",
     "SQLAlchemy[asyncio]>=2.0.23",
     "psycopg[binary,pool]>=3.1.13",
-    "asyncpg>=0.29.0",
+    "asyncpg>=0.30.0",  # Connection.get_reset_query (pool.reset_then)
     # MODULE-LEVEL import in utils/resource_manager.py, which
     # db/sparql_sql/sparql_sql_db_impl.py imports for `track_pool`. Without it
     # the ENTIRE sparql_sql backend fails to load — the server starts, answers
@@ -162,7 +162,7 @@ dev = [
     #       -> auth.role_dependencies            -> fastapi.security, PyJWT
     # These are the light half of the `server` extra — deliberately NOT the whole
     # extra, which drags in torch via `heavy`, psycopg and SQLAlchemy.
-    "asyncpg>=0.29.0",
+    "asyncpg>=0.30.0",  # Connection.get_reset_query (pool.reset_then)
     "fastapi==0.147.0",     # same pin as `server` (issues/281)
     "PyJWT>=2.8.0",
     #   tests/unit/test_client_retry.py -> client.vitalgraph_client -> httpx,

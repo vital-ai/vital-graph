@@ -62,7 +62,10 @@ async def _create_pool(config):
     idle_timeout = os.getenv('VITALGRAPH_EXPORT_IDLE_TIMEOUT', '10min')
 
     db_cfg = config.get_database_config()
-    settings = _session_settings(stmt_timeout, idle_timeout)
+    settings_sql = _session_settings_sql(stmt_timeout, idle_timeout)
+
+    async def settings(conn):
+        await conn.execute(settings_sql())
     pool = await asyncpg.create_pool(
         host=require(db_cfg, 'host'),
         port=int(require(db_cfg, 'port')),
@@ -76,17 +79,16 @@ async def _create_pool(config):
         # ("unsupported startup parameter"). Re-applied on every release,
         # because the pool's reset ends in RESET ALL (`reset_then`).
         init=settings,
-        reset=reset_then(settings),
+        reset=reset_then(settings_sql),
     )
     return pool
 
 
-def _session_settings(stmt_timeout: str, idle_timeout: str):
-    async def init(conn):
-        await conn.execute("SELECT set_config('statement_timeout', $1, false), "
-                           "set_config('idle_in_transaction_session_timeout', $2, false)",
-                           stmt_timeout, idle_timeout)
-    return init
+def _session_settings_sql(stmt_timeout: str, idle_timeout: str):
+    from ..db.pool import set_sql
+    sql = (set_sql("statement_timeout", stmt_timeout)
+           + set_sql("idle_in_transaction_session_timeout", idle_timeout))
+    return lambda: sql
 
 
 async def _validate_space(pool, space_id: str) -> bool:

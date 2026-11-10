@@ -95,15 +95,17 @@ async def _init_request_conn(conn):
     pool keeps `lock_timeout = 0` deliberately.
     """
     await _init_conn(conn)
-    await _request_conn_settings(conn)
+    sql = _request_conn_settings_sql()
+    if sql:
+        await conn.execute(sql)
 
 
-async def _request_conn_settings(conn):
-    """The request pool's session settings: applied at connect, and again on
-    every release, after the pool's RESET ALL (`pool.reset_then`)."""
+def _request_conn_settings_sql() -> str:
+    """The request pool's session settings: sent at connect, and again on
+    every release in the same round trip as the pool's RESET ALL
+    (`pool.reset_then`)."""
     ms = int(_request_lock_timeout_s() * 1000)
-    if ms > 0:
-        await conn.execute(f"SET lock_timeout = '{ms}ms'")
+    return f"SET lock_timeout = '{ms}ms'" if ms > 0 else ""
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +321,7 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                 # The lock_timeout `_init_request_conn` SETs would otherwise
                 # last only for the connection's first use: the pool's reset
                 # ends in RESET ALL.
-                reset=reset_then(_request_conn_settings),
+                reset=reset_then(_request_conn_settings_sql),
             )
             # REQUEST, not QUERY: this pool still serves reads AND writes.
             # Calling it QUERY would file every mutation wait as a query wait,
