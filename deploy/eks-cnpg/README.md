@@ -50,13 +50,38 @@ Service, which follows it at once.
   connections even though the database refuses them. Set `PGSSLMODE=require`
   on the app task as well: asyncpg's default `prefer` would otherwise allow a
   fallback to plain text.
-* `default_pool_size` (per overlay). In session mode each client connection
-  holds a server connection. Size it from the real pools: tasks x
-  (`DB_POOL_SIZE` + `DB_INTERNAL_POOL_SIZE`), plus the maintenance job and
-  scripts, per pooler pod, under the role's connection limit.
-* Two pooler pods, one per zone, on the database nodes. On EKS the NLB is
-  cross-zone, health-checked every 5 s, with a 10 s deregistration delay and
-  a 3,600 s idle timeout, because pooled connections live long.
+* `default_pool_size` (per overlay; 150 on EKS). In session mode each client
+  connection holds a server connection, and the limit is per pooler pod.
+  Size it for a rolling deploy, when old and new tasks run together and the
+  NLB may send most of them to one pod: tasks x (`DB_POOL_SIZE` +
+  `DB_INTERNAL_POOL_SIZE` + LISTEN connections) at the peak, with margin,
+  under `max_connections`.
+* `query_wait_timeout: 20`. A client that finds the pool full fails after
+  20 s, instead of waiting PgBouncer's default 120 s.
+* TCP keepalives (`tcp_keepidle` 60, `tcp_keepintvl` 10, `tcp_keepcnt` 6).
+  LISTEN-only connections sit idle for hours. Past the NLB's idle timeout
+  the flow is dropped without notice, and without probes PgBouncer holds
+  that session's server slot for over 2 hours.
+* `application_name_add_host: 1`. The server sees PgBouncer's address; this
+  puts the client's address in `application_name` for `pg_stat_activity`.
+* Two pooler pods, one per zone and never on one node (`DoNotSchedule` plus
+  required anti-affinity), on the database nodes, with Guaranteed resources
+  (100m / 128Mi) so they are not the first evicted, and a
+  PodDisruptionBudget of `minAvailable: 1` (the operator creates PDBs for
+  the instances, not for a Pooler). On EKS the NLB is cross-zone,
+  health-checked every 5 s, with a 10 s deregistration delay and a 3,600 s
+  idle timeout, because pooled connections live long.
+* **Session settings go in a `SET` after connecting, never in startup
+  parameters.** PgBouncer drops libpq's `options` (the operator always lists
+  it in `ignore_startup_parameters`) and refuses any other parameter it does
+  not track, such as asyncpg's `server_settings`. A session-level `SET`
+  holds in session mode. VitalGraph's maintenance connections and scripts do
+  this; any other client must too.
+* TLS: the pooler presents the cluster's server certificate. The app uses
+  `PGSSLMODE=require`. A client that wants `verify-full` against the NLB's
+  name needs that name in the Cluster's `certificates.serverAltDNSNames`.
+* Latency: one more hop, NLB to PgBouncer to the primary, which can cross
+  zones twice.
 
 On a switchover the signal listener's session is closed, as a direct
 connection's would be, and it reconnects.

@@ -55,7 +55,11 @@ release to after:
 **Hosts.** On RDS, `<host>` is the instance endpoint. On EKS it is the
 PgBouncer pooler's internal NLB, never the primary (`deploy/eks-cnpg/README.md`).
 The scripts' session settings (the lifted timeouts) hold through it, because
-the pooler runs in session mode.
+the pooler runs in session mode and they are set with `SET`. The app's own
+ANALYZE / VACUUM connections, and the export command, keep their timeouts
+through the pooler only from the commit that sets them with `SET` (section 2):
+an older image's maintenance runs on the role's 60 s / 10 s there, and its
+export cannot connect. Point an app at the pooler only from that build.
 
 **Step 2.** Startup creates two admin tables, `edge_type_maintained` and
 `edge_type_maintenance_enabled`. On EKS, keep the app's `VG_PLANNER_EXTENSION`
@@ -126,6 +130,7 @@ changed.
 | `527a7cbb` | Hop-wise SQL is the same in every process (table order no longer follows Python's per-process string hashing). | both |
 | `fb1543f0` | Hop-wise type checks as hashed set membership, with a per-statement `work_mem` raise; edge vitaltype checks read off a maintained `edge.edge_type_uuid`, re-checked by the executor in the query's snapshot. | both |
 | `11fa1229` | Edge-type marks are read only after the migration sets a database-wide flag. | both |
+| pooler fixes | Maintenance ANALYZE / VACUUM connections and the export command set their timeouts with `SET` after connecting, not as startup parameters, which PgBouncer drops or refuses. | EKS (harmless on RDS) |
 | deploy-review fixes | The sorted-driver page restricts candidate (holder, value) pairs, not holders: a holder with two values could return its worse value ahead of another holder's better one. Graph drops, clears, import replace and truncate, and subject removal delete the edge rows with the quads, in one transaction. SPARQL updates keep the edge table for the subjects they name inside their transaction, so only WHERE-bound vitaltype changes unmark a space. The reconcile is batched under REPEATABLE READ. Both migration scripts lift the read-path timeouts. | both |
 
 ## 3. Behaviour changes a caller or operator may notice

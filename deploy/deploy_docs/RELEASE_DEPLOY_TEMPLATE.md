@@ -57,6 +57,9 @@ not plan.
    15 min / 60 s) and keep each statement short (batches). A test database
    with no timeout will not show the failure. A `CREATE INDEX CONCURRENTLY`
    cut off by a timeout leaves an INVALID index that must be dropped by hand.
+   Set them with `SET` after connecting, never as startup parameters: through
+   the EKS pooler, libpq's `options` is silently dropped and asyncpg's
+   `server_settings` makes the connection fail.
 4. **Dry run first.** Every script defaults to a dry run and prints its
    target. Pass `--host`, `--port` and `--database` (or `--dsn`) explicitly:
    the defaults point at the local test stack.

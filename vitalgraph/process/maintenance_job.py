@@ -34,7 +34,7 @@ import socket
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 from ..db.connection_config import require
@@ -119,14 +119,34 @@ MAINTENANCE_LOCK_TIMEOUT_MS = int(
     os.environ.get("VG_MAINTENANCE_LOCK_TIMEOUT_MS", 60 * 1000))
 
 
-def maintenance_conn_options() -> str:
-    """libpq `options` string clearing the read-path fences for maintenance.
+def connect_maintenance_sync(cfg: Dict[str, Any]):
+    """A psycopg autocommit connection carrying the maintenance fences.
 
-    Applied at CONNECT time rather than by a later `SET`, so there is no window
-    in which the session still carries the inherited value.
+    The fences are set by `SET` right after connecting, NOT through libpq's
+    `options` startup parameter. PgBouncer does not forward `options`, and
+    CloudNativePG's Pooler always lists it in `ignore_startup_parameters`, so
+    through the pooler the connection succeeded with the settings silently
+    dropped: ANALYZE / VACUUM ran on the role's read-path fences (60 s / 10 s)
+    and large VACUUMs were cancelled again (`issues/136`). A session-level
+    `SET` holds through a session-mode pooler and on a direct connection
+    alike. Nothing runs on the connection before the two `SET`s.
     """
-    return (f"-c statement_timeout={MAINTENANCE_STATEMENT_TIMEOUT_MS} "
-            f"-c lock_timeout={MAINTENANCE_LOCK_TIMEOUT_MS}")
+    import psycopg
+    conn = psycopg.connect(
+        host=require(cfg, 'host'),
+        port=require(cfg, 'port'),
+        dbname=require(cfg, 'database'),
+        user=require(cfg, 'username'),
+        password=require(cfg, 'password'),
+        autocommit=True,
+    )
+    try:
+        conn.execute(f"SET statement_timeout = {MAINTENANCE_STATEMENT_TIMEOUT_MS}")
+        conn.execute(f"SET lock_timeout = {MAINTENANCE_LOCK_TIMEOUT_MS}")
+    except BaseException:
+        conn.close()
+        raise
+    return conn
 
 @asynccontextmanager
 async def maintenance_timeouts(conn):
@@ -145,7 +165,7 @@ async def maintenance_timeouts(conn):
     that is fixed while the thing behind it is not looks exactly like a fixed
     gate.
 
-    RAISES BOTH FENCES, matching `maintenance_conn_options`. The first version
+    RAISES BOTH FENCES, matching `connect_maintenance_sync`. The first version
     raised only `statement_timeout`, which is why the backfill lost 43 lock
     races at the read path's 10s: a 133s walk-INSERT cannot hold to a fence
     sized for user queries.
@@ -153,7 +173,7 @@ async def maintenance_timeouts(conn):
     The probes run on the shared pool, which carries the read path's
     `statement_timeout` (60s on prod). That is a fence for USER queries; a probe
     is maintenance and should get the maintenance budget, exactly as
-    `maintenance_conn_options` gives it to ANALYZE/VACUUM.
+    `connect_maintenance_sync` gives it to ANALYZE/VACUUM.
 
     Not academic. `entity_slot_sort_drift` computes its expected count with the
     full unseeded `WITH RECURSIVE frame_walk`, measured at **76s on prod against
@@ -3273,18 +3293,9 @@ class MaintenanceJob:
         Used by thread-offloaded helpers so ANALYZE / VACUUM never touch the
         asyncpg pool or the event loop.
         """
-        import psycopg
         cfg = self._pg_config
         assert cfg is not None, "_make_sync_connection requires postgresql_config"
-        return psycopg.connect(
-            host=require(cfg, 'host'),
-            port=require(cfg, 'port'),
-            dbname=require(cfg, 'database'),
-            user=require(cfg, 'username'),
-            password=require(cfg, 'password'),
-            autocommit=True,
-            options=maintenance_conn_options(),
-        )
+        return connect_maintenance_sync(cfg)
 
     #: Per-table need query. The space-level pick decides WHICH space; this
     #: decides which of its tables actually have work (`issues/236`).
@@ -3401,8 +3412,8 @@ class MaintenanceJob:
         conn = await self._pool.acquire()
         completed = 0
         try:
-          # The SYNC path gets these fences at CONNECT time via
-          # `maintenance_conn_options`; this async fallback had neither. ANALYZE
+          # The SYNC path gets these fences at connect via
+          # `connect_maintenance_sync`; this async fallback had neither. ANALYZE
           # on the big quad table measured 50,224 ms on production against the
           # read path's 60s -- under it, but only just, and `issues/136` is the
           # record of what happens when a maintenance operation is run inside a

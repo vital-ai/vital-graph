@@ -2,9 +2,16 @@
 # ECS connects through. It replaces an NLB on the primary's rw Service, which kept
 # sending new connections to a demoted primary for ~30 s after a switchover.
 #
-# The pooler's pods run on the database nodes (nodepool.yaml), one per zone. Set
-# default_pool_size from the real pools: tasks x (DB_POOL_SIZE + DB_INTERNAL_POOL_SIZE)
-# + the maintenance job + scripts, per pooler pod, under the role's connection limit.
+# The pooler's pods run on the database nodes (nodepool.yaml), one per zone.
+#
+# default_pool_size is PER POOLER POD and the NLB balances per connection, so
+# size it for the PEAK, not the rest state: a rolling deploy runs old and new
+# tasks together, and one pod can take most of them. Measured at rest, a task
+# holds ~25 connections; under load up to DB_POOL_SIZE + DB_INTERNAL_POOL_SIZE
+# plus its LISTEN connections. 150 covers twice the usual task count at load,
+# with margin, and 2 x 150 stays far under max_connections (cluster-size.yaml).
+# Re-derive it if the task count or the app's pool sizes change. A client that
+# finds the pool full fails after query_wait_timeout (base: 20 s), not 120 s.
 apiVersion: postgresql.cnpg.io/v1
 kind: Pooler
 metadata:
@@ -12,7 +19,7 @@ metadata:
 spec:
   pgbouncer:
     parameters:
-      default_pool_size: "80"
+      default_pool_size: "150"
   serviceTemplate:
     metadata:
       annotations:
@@ -44,4 +51,3 @@ spec:
         - key: vitalgraph.ai/database
           operator: Exists
           effect: NoSchedule
-      containers: []

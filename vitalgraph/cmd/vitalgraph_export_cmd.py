@@ -69,12 +69,20 @@ async def _create_pool(config):
         password=require(db_cfg, 'password'),
         min_size=2,
         max_size=6,
-        server_settings={
-            'statement_timeout': stmt_timeout,
-            'idle_in_transaction_session_timeout': idle_timeout,
-        },
+        # SET on each new connection, not `server_settings`: those are startup
+        # parameters, and PgBouncer refuses a connection that carries one it
+        # does not track ("unsupported startup parameter").
+        init=_session_settings(stmt_timeout, idle_timeout),
     )
     return pool
+
+
+def _session_settings(stmt_timeout: str, idle_timeout: str):
+    async def init(conn):
+        await conn.execute("SELECT set_config('statement_timeout', $1, false), "
+                           "set_config('idle_in_transaction_session_timeout', $2, false)",
+                           stmt_timeout, idle_timeout)
+    return init
 
 
 async def _validate_space(pool, space_id: str) -> bool:

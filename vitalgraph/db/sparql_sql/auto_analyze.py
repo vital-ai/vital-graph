@@ -14,7 +14,6 @@ import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional
-from ..connection_config import require
 from ...utils.background import BackgroundTasks
 from .space_names import space_prefix
 
@@ -79,23 +78,15 @@ def _sync_analyze(tables: List[str], pg_config: Dict[str, Any]) -> int:
     Designed to be called via ``asyncio.to_thread()`` so the event loop
     is never blocked.
     """
-    import psycopg
     from psycopg import sql as psql
 
-    # Same reason as `maintenance_job.maintenance_conn_options` — a fresh
+    # Same reason as `maintenance_job.connect_maintenance_sync`: a fresh
     # connection is not a fresh CONFIGURATION, and a deployment-level
     # `statement_timeout` is inherited here too. Imported rather than
-    # duplicated so the two cannot drift.
-    from ...process.maintenance_job import maintenance_conn_options
-    conn = psycopg.connect(
-        host=require(pg_config, 'host'),
-        port=require(pg_config, 'port'),
-        dbname=require(pg_config, 'database'),
-        user=require(pg_config, 'username'),
-        password=require(pg_config, 'password'),
-        autocommit=True,
-        options=maintenance_conn_options(),
-    )
+    # duplicated so the two cannot drift; both SET the fences after
+    # connecting, which survives a pooler (a startup `options` does not).
+    from ...process.maintenance_job import connect_maintenance_sync
+    conn = connect_maintenance_sync(pg_config)
     completed = 0
     try:
         for table in tables:

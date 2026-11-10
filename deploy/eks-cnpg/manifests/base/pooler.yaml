@@ -40,16 +40,58 @@ spec:
       # TLS only, end to end: without it PgBouncer's client side accepts a plain
       # connection even though the database refuses one.
       client_tls_sslmode: require
+      # A client that finds the pool full fails after this many seconds instead
+      # of PgBouncer's default 120 s, so a pool sized too small shows as errors.
+      query_wait_timeout: "20"
+      # Keepalives on PgBouncer's sockets. Several app connections only LISTEN
+      # and can sit idle for hours; past the NLB's idle timeout the NLB drops the
+      # flow without a word, and without probes PgBouncer holds that session's
+      # server slot until the OS default notices (over 2 hours). Probing after
+      # 60 s idle keeps the flow alive and finds a dead peer in ~2 minutes.
+      tcp_keepalive: "1"
+      tcp_keepidle: "60"
+      tcp_keepintvl: "10"
+      tcp_keepcnt: "6"
+      # The server sees PgBouncer's address; this appends the client's to
+      # application_name, so pg_stat_activity still says which task it is.
+      application_name_add_host: "1"
   template:
     metadata:
       labels:
         app: vitalgraph-pg-pooler
     spec:
-      # One per zone, like the instances.
+      # One per zone, like the instances, and never both on one node: a drain
+      # or a lost node would then take every app session at once.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
-          whenUnsatisfiable: ScheduleAnyway
+          whenUnsatisfiable: DoNotSchedule
           labelSelector:
             matchLabels: {cnpg.io/poolerName: vitalgraph-pg-pooler-rw}
-      containers: []
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels: {cnpg.io/poolerName: vitalgraph-pg-pooler-rw}
+      # Requests equal to limits (Guaranteed): with none, the pooler is the
+      # first thing evicted under memory pressure on the database nodes, and
+      # each pod carries half the app's sessions. PgBouncer is single-threaded
+      # and small; a few hundred sessions use well under this.
+      containers:
+        - name: pgbouncer
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+---
+# The operator does not create a PodDisruptionBudget for a Pooler (it does for
+# the instances). Keep one pooler pod through voluntary disruptions: node
+# drains, Auto Mode consolidation, upgrades.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vitalgraph-pg-pooler-rw
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {cnpg.io/poolerName: vitalgraph-pg-pooler-rw}

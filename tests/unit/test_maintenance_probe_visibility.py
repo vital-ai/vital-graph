@@ -205,9 +205,8 @@ def test_every_repair_runs_under_the_maintenance_budget():
     Checks EVERY call site, not the first: an earlier version of this test used
     `src.index()` and passed while the orphan sweep was still unwrapped.
 
-    The psycopg sync path is exempt — `_make_sync_connection` applies
-    `maintenance_conn_options` at CONNECT time, which is the same fences by
-    another route.
+    The psycopg sync path is exempt — `_make_sync_connection` SETs the
+    same fences right after connecting (`connect_maintenance_sync`).
     """
     import inspect
     lines = inspect.getsource(M).split("\n")
