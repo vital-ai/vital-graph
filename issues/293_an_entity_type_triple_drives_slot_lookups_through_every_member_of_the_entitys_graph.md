@@ -1717,3 +1717,64 @@ of every query, the SQL `ae6fece8` generates (this morning) against HEAD
 contract timings mix in two weeks of machine drift (category_page today's arm
 375 -> 461 ms in the contract, against 383 -> 398 ms side by side), so the
 A/B above is the comparison that counts.
+
+### 2026-11-10: deploy review, and the fixes
+
+An independent review of the release before deployment. Each finding was
+checked against the code before it was fixed.
+
+* **Wrong rows from the sorted-driver page (confirmed).** The fast branch
+  restricted candidate HOLDERS, so a holder's other, worse value (a slot with
+  two values, or one slot in two graphs) entered the fast rows and could fill
+  the page ahead of another holder's better value. It now also restricts the
+  value (`object_uuid = ANY(candidate values)`). Subject in S and value in V
+  is exactly the candidate pairs, because the key is a function of the value
+  term. Reproduced in `test_sorted_driver_page.py` (a second, low value on
+  every top holder): without the fix, the `fallback` page returned a 0.25
+  value for another holder's better one; with it, all ten cases are identical
+  to the plain page. Cost on lead 100k: `l2_page` 683 -> 779 ms median; its
+  variants at parity.
+* **The fallback branch paired columns by position.** It now compares the
+  companion suffixes by name and declines if they differ.
+* **Edge rows outlived their quads (confirmed).** `drop_graph`, the adapter's
+  `clear_graph`, the three import replace modes, the bulk loader's
+  `force` truncate and `remove_quads_by_subject_uris` deleted quads and left
+  edge rows. Where edge types are read off the edge table those rows passed
+  the type check. They now delete the edge rows in the same transaction (the
+  truncate truncates the edge table too). Test: dropping a graph through the
+  graph API leaves no edge rows and counts nothing.
+* **Migration scripts and production's fences (confirmed).** Production
+  enforces a 60 s statement timeout and a 10 s lock timeout per role or
+  database; the test database has none. Both scripts now set the maintenance
+  job's fences at connect (`MAINTENANCE_*_TIMEOUT_MS`), and the reconcile
+  runs in 50,000-edge batches. Simulated on a local database
+  (`ALTER DATABASE ... SET statement_timeout`):
+  * the index rebuild without the lift was cancelled at 200 ms and left an
+    INVALID `_migrating` index; the script then refuses until it is dropped,
+    and with the lift it rebuilt in 0.9 s;
+  * the edge-type migration without the lift was cancelled at 1 s (flag not
+    set); with it, all spaces were marked and the flag set.
+* **Reconcile race (confirmed).** Under READ COMMITTED, a row retyped by a
+  concurrent write after the UPDATE's snapshot was set back to the
+  snapshot's type, and the space was marked. Each batch is now its own
+  REPEATABLE READ transaction, retried on a serialization failure.
+* **Marker contention.** Every SPARQL INSERT DATA of a vitaltype bumped the
+  per-space marker row. A SPARQL update now keeps the edge table for its
+  concrete subjects and named CLEAR/DROP graphs INSIDE its transaction
+  (orphan cleanup, then the insert sync), so `edge_type_uuid` is exact at
+  commit for those. Only a WHERE-bound vitaltype change, an unscoped CLEAR,
+  or an unrecognised op (LOAD) dirties the space. Tests: an update naming
+  the edge keeps the mark and reads the new type; a WHERE-bound retype
+  unmarks the space until a reconcile.
+* **Rollback order (confirmed).** `--disable` must run BEFORE a rollback
+  starts, while only new tasks serve; the deploy documents now say so.
+
+Also from the review: the "after" numbers are local (large RAM, mostly warm),
+and a 16 GB AWS node will be slower cold. The gains are on the default
+generator, so RDS gets them without EKS.
+
+Deployment documents are now in the repository: `deploy/deploy_docs/
+RELEASE_DEPLOY_TEMPLATE.md` (the rules every release follows) and
+`examples/release_2026_11_issue293_query_perf.md` (this release, both
+targets). `deploy/eks-cnpg` gains the PgBouncer pooler every client connects
+through, with a switchover drill in `local/verify.sh`.

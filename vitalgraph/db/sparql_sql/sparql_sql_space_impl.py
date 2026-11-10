@@ -316,30 +316,41 @@ def _concrete_subjects_from_update_ops(ops) -> set:
 
 
 def _may_change_an_edge_vitaltype(ops) -> bool:
-    """Could this SPARQL update change an edge's vitaltype? (`issues/293`)
+    """Could this SPARQL update leave an edge's `edge_type_uuid` out of step
+    with its vitaltype past its own transaction? (`issues/293`)
 
-    The update's edge sync runs AFTER it, in its own transaction, and
-    WHERE-bound subjects are left to a background repair, so between the two
-    `edge.edge_type_uuid` can disagree with the quads. The update then dirties
-    the space's marker in its own transaction (`sync_edge_table`), and no query
-    reads an edge's type off the column until a reconcile.
+    Inside the update's transaction the edge table is kept for every CONCRETE
+    subject and every named CLEAR/DROP graph (`execute_sparql_update`). What
+    that cannot reach: a quad pattern whose subject is a VARIABLE (bound by a
+    WHERE) with a vitaltype or variable predicate, CLEAR/DROP of DEFAULT,
+    NAMED or ALL, and any operation this does not recognise (LOAD). Those
+    dirty the space's marker in the update's transaction, so no query reads
+    edge types off the column until a reconcile.
 
-    Conservative: a quad pattern whose predicate is vitaltype or a VARIABLE
-    (which may bind it), and any operation this does not recognise. INSERT DATA
-    / DELETE DATA with other constant predicates, the common case, is not.
+    INSERT DATA / DELETE DATA (every subject concrete) never dirties: the
+    common SPARQL write does not contend on the marker row.
     """
     from ..jena_sparql.jena_types import (
-        URINode, UpdateDataInsert, UpdateDataDelete, UpdateModify, UpdateDeleteWhere,
+        URINode, UpdateClear, UpdateDataInsert, UpdateDataDelete, UpdateDrop,
+        UpdateModify, UpdateDeleteWhere,
     )
     vt = "http://vital.ai/ontology/vital-core#vitaltype"
+    named = _cleared_graphs_from_update_ops(ops)
     for op in ops or []:
         if isinstance(op, (UpdateDataInsert, UpdateDataDelete, UpdateDeleteWhere)):
             quads = list(getattr(op, 'quads', []))
         elif isinstance(op, UpdateModify):
             quads = list(getattr(op, 'delete_quads', [])) + list(getattr(op, 'insert_quads', []))
+        elif isinstance(op, (UpdateClear, UpdateDrop)):
+            g = getattr(op, 'graph', None) or getattr(op, 'target', None)
+            if g in named:
+                continue
+            return True
         else:
             return True
         for q in quads:
+            if isinstance(q.subject, URINode):
+                continue
             p = q.predicate
             if not isinstance(p, URINode) or p.value == vt:
                 return True
@@ -522,10 +533,17 @@ class _SparqlSQLGraphsAdapter:
                     graph_uri,
                 )
                 if ctx_uuid:
-                    await conn.execute(
-                        f"DELETE FROM {t['rdf_quad']} WHERE context_uuid = $1",
-                        ctx_uuid,
-                    )
+                    # The graph's edge rows go WITH its quads, in one
+                    # transaction (`issues/293`). Left behind they are orphans
+                    # every edge walk joins, and where edge types are read off
+                    # the edge table they pass the type check as well.
+                    from .sync_edge_table import delete_edges_for_context
+                    async with conn.transaction():
+                        await conn.execute(
+                            f"DELETE FROM {t['rdf_quad']} WHERE context_uuid = $1",
+                            ctx_uuid,
+                        )
+                        await delete_edges_for_context(conn, space_id, ctx_uuid)
             # Invalidate entity graph + count cache (local, synchronous)
             try:
                 from ...cache.entity_graph_cache import _entity_graph_cache
@@ -694,14 +712,20 @@ class _SparqlSQLDbOpsAdapter:
         t = self._impl.schema.get_table_names(space_id)
         removed = 0
         async with self._impl._db._pool.acquire() as conn:
-            for uri in subject_uris:
-                s_uuid = _generate_term_uuid(uri, 'U')
-                result = await conn.execute(
-                    f"DELETE FROM {t['rdf_quad']} WHERE subject_uuid = $1",
-                    s_uuid,
-                )
-                if 'DELETE' in result:
-                    removed += 1
+            # An edge subject's row in the edge table goes with its quads, in
+            # one transaction (`issues/293`): left behind it is an orphan every
+            # edge walk joins, and passes an edge-type check read off the table.
+            from .sync_edge_table import sync_edge_table_before_delete
+            s_uuids = [_generate_term_uuid(uri, 'U') for uri in subject_uris]
+            async with conn.transaction():
+                await sync_edge_table_before_delete(conn, space_id, s_uuids)
+                for s_uuid in s_uuids:
+                    result = await conn.execute(
+                        f"DELETE FROM {t['rdf_quad']} WHERE subject_uuid = $1",
+                        s_uuid,
+                    )
+                    if 'DELETE' in result:
+                        removed += 1
         return removed
 
 
@@ -1139,10 +1163,17 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     graph_uri,
                 )
                 if ctx_uuid:
-                    await conn.execute(
-                        f"DELETE FROM {t['rdf_quad']} WHERE context_uuid = $1",
-                        ctx_uuid,
-                    )
+                    # The graph's edge rows go WITH its quads, in one
+                    # transaction (`issues/293`). Left behind they are orphans
+                    # every edge walk joins, and where edge types are read off
+                    # the edge table they pass the type check as well.
+                    from .sync_edge_table import delete_edges_for_context
+                    async with conn.transaction():
+                        await conn.execute(
+                            f"DELETE FROM {t['rdf_quad']} WHERE context_uuid = $1",
+                            ctx_uuid,
+                        )
+                        await delete_edges_for_context(conn, space_id, ctx_uuid)
             # Remove graph record
             await self._db.execute_query(
                 "DELETE FROM graph WHERE space_id = $1 AND graph_uri = $2",
@@ -3095,6 +3126,25 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                             from .sync_edge_table import dirty_edge_types
                             await dirty_edge_types(conn, space_id)
                         await conn.execute(sql)
+                        # The edge table for what the update names, IN its
+                        # transaction (`issues/293`): every concrete subject's
+                        # row added, retyped or removed, and a named
+                        # CLEAR/DROP graph's rows gone, as object writes do.
+                        # Then `edge_type_uuid` is exact at commit for these,
+                        # and only a WHERE-bound vitaltype change dirties the
+                        # space. The best-effort sync below stays (idempotent)
+                        # for the other derived tables.
+                        from .sync_edge_table import (
+                            cleanup_orphan_edges_for_subjects as _orph,
+                            delete_edges_for_context as _del_ctx,
+                            sync_edge_table_after_insert as _ins)
+                        _subj = [_generate_term_uuid(u, 'U')
+                                 for u in _concrete_subjects_from_update_ops(cr.update_ops)]
+                        if _subj:
+                            await _orph(conn, space_id, _subj)
+                            await _ins(conn, space_id, _subj)
+                        for _g in _cleared_graphs_from_update_ops(cr.update_ops):
+                            await _del_ctx(conn, space_id, _generate_term_uuid(_g, 'U'))
 
                     # Keep {space}_edge in sync — this write path bypasses the
                     # bulk sync. For every concrete subject the update touched:

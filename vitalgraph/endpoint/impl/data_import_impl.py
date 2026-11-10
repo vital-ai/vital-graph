@@ -622,8 +622,15 @@ class ImportEngine:
                 if force:
                     logger.info("Truncating tables (%d terms, %d quads)",
                                 existing_terms, existing_quads)
-                    await conn.execute(f"TRUNCATE {quad_tbl}")
-                    await conn.execute(f"TRUNCATE {term_tbl} CASCADE")
+                    # The edge table with them (`issues/293`): rows describing
+                    # quads that are gone would pass an edge-type check read off
+                    # it until the load's final resync.
+                    from vitalgraph.db.sparql_sql.space_names import space_prefix as _sp
+                    async with conn.transaction():
+                        await conn.execute(f"TRUNCATE {quad_tbl}")
+                        await conn.execute(f"TRUNCATE {term_tbl} CASCADE")
+                        if await conn.fetchval("SELECT to_regclass($1)", f"{_sp(space_id)}_edge"):
+                            await conn.execute(f"TRUNCATE {_sp(space_id)}_edge")
                 else:
                     raise RuntimeError(
                         f"Tables not empty ({existing_terms:,} terms, "
@@ -873,9 +880,15 @@ class ImportEngine:
                         graph_uri, space_id)
             graph_term_uuid = _term_uuid(graph_uri, "U")
             async with self._pool.acquire() as conn:
-                await conn.execute(
-                    f"DELETE FROM {quad_tbl} WHERE context_uuid = $1",
-                    graph_term_uuid)
+                # The graph's edge rows go with its quads (`issues/293`):
+                # orphans would pass an edge-type check read off the edge table
+                # until the import's final resync.
+                from vitalgraph.db.sparql_sql.sync_edge_table import delete_edges_for_context
+                async with conn.transaction():
+                    await conn.execute(
+                        f"DELETE FROM {quad_tbl} WHERE context_uuid = $1",
+                        graph_term_uuid)
+                    await delete_edges_for_context(conn, space_id, graph_term_uuid)
 
         file_size = os.path.getsize(file_path)
         graph_uuid = _term_uuid(graph_uri, "U")
@@ -1083,9 +1096,15 @@ class ImportEngine:
                         graph_uri, space_id)
             graph_term_uuid = _term_uuid(graph_uri, "U")
             async with self._pool.acquire() as conn:
-                await conn.execute(
-                    f"DELETE FROM {quad_tbl} WHERE context_uuid = $1",
-                    graph_term_uuid)
+                # The graph's edge rows go with its quads (`issues/293`):
+                # orphans would pass an edge-type check read off the edge table
+                # until the import's final resync.
+                from vitalgraph.db.sparql_sql.sync_edge_table import delete_edges_for_context
+                async with conn.transaction():
+                    await conn.execute(
+                        f"DELETE FROM {quad_tbl} WHERE context_uuid = $1",
+                        graph_term_uuid)
+                    await delete_edges_for_context(conn, space_id, graph_term_uuid)
 
         file_size = os.path.getsize(file_path)
         default_graph_uuid = _term_uuid(graph_uri, "U")
@@ -1332,9 +1351,15 @@ class ImportEngine:
                         graph_uri, space_id)
             graph_term_uuid = _term_uuid(graph_uri, "U")
             async with self._pool.acquire() as conn:
-                await conn.execute(
-                    f"DELETE FROM {quad_tbl} WHERE context_uuid = $1",
-                    graph_term_uuid)
+                # The graph's edge rows go with its quads (`issues/293`):
+                # orphans would pass an edge-type check read off the edge table
+                # until the import's final resync.
+                from vitalgraph.db.sparql_sql.sync_edge_table import delete_edges_for_context
+                async with conn.transaction():
+                    await conn.execute(
+                        f"DELETE FROM {quad_tbl} WHERE context_uuid = $1",
+                        graph_term_uuid)
+                    await delete_edges_for_context(conn, space_id, graph_term_uuid)
 
         graph_uuid = _term_uuid(graph_uri, "U")
 

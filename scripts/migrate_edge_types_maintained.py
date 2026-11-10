@@ -47,6 +47,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 
 
+
+#: The maintenance job's fences (`maintenance_job.maintenance_timeouts`): the
+#: role's read-path defaults (production: 60 s statement, 10 s lock) would
+#: abort this script's long statements part-way.
+async def _lift_timeouts(conn) -> None:
+    from vitalgraph.process.maintenance_job import (
+        MAINTENANCE_LOCK_TIMEOUT_MS, MAINTENANCE_STATEMENT_TIMEOUT_MS)
+    await conn.execute(f"SET statement_timeout = {MAINTENANCE_STATEMENT_TIMEOUT_MS}")
+    await conn.execute(f"SET lock_timeout = {MAINTENANCE_LOCK_TIMEOUT_MS}")
+
+
 async def run(args) -> int:
     import asyncpg
     from vitalgraph.db.sparql_sql.space_names import space_prefix
@@ -58,6 +69,7 @@ async def run(args) -> int:
     conn = await asyncpg.connect(host=args.host, port=args.port, database=args.database,
                                  user=args.user, password=args.password or None)
     try:
+        await _lift_timeouts(conn)
         await load_storage_keys(conn)
         print(f"target: {describe_target(args)}{'' if args.apply else '  [DRY RUN]'}\n")
 

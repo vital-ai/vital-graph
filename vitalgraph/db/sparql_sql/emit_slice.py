@@ -492,9 +492,10 @@ def _emit_sorted_driver_page(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     EXACT, by construction. Let `thr` be the N-th driver row's key. CANDIDATES
     are every driver row whose key sorts at or before `thr` in the query's
     order — ties included, so the set is closed under equal keys. The full
-    query restricted to candidate holders (`fast`) is computed; every row it
-    returns sorts at or before `thr`, and every solution row OUTSIDE it has a
-    holder sorting strictly after `thr`. So if `fast` has at least
+    query restricted to candidate (holder, value) PAIRS (`fast`) is computed;
+    every row it returns sorts at or before `thr`, and every solution row
+    OUTSIDE it has a value sorting strictly after `thr`. (Restricted by holder
+    alone, a holder's other, worse value got in and broke this.) So if `fast` has at least
     `limit + offset` rows, its first `limit + offset` ARE the answer's. If not
     (the rest of the pattern rejected too many candidates), the full query
     runs instead, unchanged, behind a one-time filter PostgreSQL evaluates
@@ -613,7 +614,8 @@ def _emit_sorted_driver_page(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
             where += [rename(c, a, da) for c in cons]
         if extra_where:
             where.append(extra_where)
-        return (f"SELECT DISTINCT {dv}.subject_uuid AS s, {n_col} AS n, {d_col} AS d "
+        return (f"SELECT DISTINCT {dv}.subject_uuid AS s, {dv}.object_uuid AS o, "
+                f"{n_col} AS n, {d_col} AS d "
                 f"FROM {quad_table} AS {dv} " + " ".join(joins)
                 + " WHERE " + " AND ".join(where) + order_limit)
 
@@ -629,10 +631,11 @@ def _emit_sorted_driver_page(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
              f"{driver(order_limit=f' ORDER BY n {mod}, d {mod} LIMIT {n_driver}')}),\n"
              f"{thr} AS MATERIALIZED (SELECT n, d FROM {k} ORDER BY n {mod}, d {mod} "
              f"OFFSET {n_driver - 1} LIMIT 1),\n")
-    candidates = (
-        f"SELECT s FROM {k} "
-        f"UNION SELECT s FROM ({driver(extra_where=f'{n_col} = (SELECT n FROM {thr})')}) AS {tag}_tn "
-        f"UNION SELECT s FROM ({driver(extra_where=f'{n_col} IS NULL AND EXISTS (SELECT 1 FROM {thr} WHERE n IS NULL) AND ({d_col}) IS NOT DISTINCT FROM (SELECT d FROM {thr})')}) AS {tag}_td")
+    def candidates(col: str) -> str:
+        return (
+            f"SELECT {col} FROM {k} "
+            f"UNION SELECT {col} FROM ({driver(extra_where=f'{n_col} = (SELECT n FROM {thr})')}) AS {tag}_tn "
+            f"UNION SELECT {col} FROM ({driver(extra_where=f'{n_col} IS NULL AND EXISTS (SELECT 1 FROM {thr} WHERE n IS NULL) AND ({d_col}) IS NOT DISTINCT FROM (SELECT d FROM {thr})')}) AS {tag}_td")
     # The fast branch runs only when the N-th key has a number or a date. With
     # neither (a text-valued order) every driver row ties with it and the
     # "candidates" are the whole driver: the full query is cheaper as itself.
@@ -650,7 +653,16 @@ def _emit_sorted_driver_page(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     fast_plan, full_plan = branch(), branch()
     fast_bgp = fast_plan.child.children[0].children[0]
     fast_bgp.tagged_constraints = list(fast_bgp.tagged_constraints or []) + [
-        (qv, f"{qv}.subject_uuid = ANY(ARRAY({candidates}))")]
+        (qv, f"{qv}.subject_uuid = ANY(ARRAY({candidates('s')}))"),
+        # AND the value. A candidate holder's OTHER value (a slot with two, or
+        # one slot in two graphs) sorts after the N-th key; restricted by
+        # subject alone it entered the fast rows and could fill the page ahead
+        # of another holder's better value: page 2, A has 100 and 5, B has 50,
+        # returned [A:100, A:5] for [A:100, B:50]. Subject in S and value in
+        # V is exactly the candidate pairs: the key is a function of the value
+        # term, so a row (s, o) with o in V sorts at or before the N-th key and
+        # is itself a candidate.
+        (qv, f"{qv}.object_uuid = ANY(ARRAY({candidates('o')}))")]
     # The candidates are the anchor: a count for the join order (as an FTS pin
     # is), and no slot-group CTE, which would rebuild the other groups whole.
     fast_bgp.fts_leaf_rows = {**(fast_bgp.fts_leaf_rows or {}), qv: n_driver}
@@ -679,7 +691,10 @@ def _emit_sorted_driver_page(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     cols_fast, cols_full = columns(ctx_fast, fast_sql), columns(ctx_full, full_sql)
     if not cols_fast or not cols_full:
         return None
-    if [len(c[3]) for c in cols_fast] != [len(c[3]) for c in cols_full]:
+    # Paired BY NAME: the two branches must expose the same companions for
+    # each variable, or a column would be read as another's.
+    if ([[c[len(sn):] for c in cs] for _v, sn, _i, cs in cols_fast]
+            != [[c[len(sn):] for c in cs] for _v, sn, _i, cs in cols_full]):
         return None
     fast_cols = [c for _v, _s, _i, cs in cols_fast for c in cs]
     full_cols = [f"{b} AS {a}" for (_v, _s, _i, ca), (_v2, _s2, _i2, cb)

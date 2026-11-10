@@ -25,26 +25,36 @@ def q(p, s=S):
 
 
 class TestWhichUpdatesUnmarkTheSpace:
+    """The update keeps the edge table for its CONCRETE subjects and named
+    CLEAR/DROP graphs inside its own transaction; only what that cannot reach
+    unmarks the space."""
 
-    def test_a_vitaltype_quad_does(self):
-        assert _may_change_an_edge_vitaltype([UpdateDataInsert(quads=[q(VT)])])
-        assert _may_change_an_edge_vitaltype([UpdateDataDelete(quads=[q(VT)])])
-        assert _may_change_an_edge_vitaltype([UpdateModify(insert_quads=[q(VT)])])
+    V = VarNode(name="e")
 
-    def test_a_variable_predicate_does_since_it_may_bind_vitaltype(self):
+    def test_a_where_bound_vitaltype_change_does(self):
         assert _may_change_an_edge_vitaltype(
-            [UpdateModify(delete_quads=[q(VarNode(name="p"))])])
+            [UpdateModify(delete_quads=[q(VT, self.V)], insert_quads=[q(VT, self.V)])])
+        assert _may_change_an_edge_vitaltype(
+            [UpdateModify(delete_quads=[q(VarNode(name="p"), self.V)])])
 
-    def test_an_operation_it_does_not_know_does(self):
-        """CLEAR's edge cleanup also runs after the update: conservative."""
+    def test_unscoped_clear_and_unknown_operations_do(self):
         assert _may_change_an_edge_vitaltype([UpdateClear(target="ALL")])
+        assert _may_change_an_edge_vitaltype([UpdateClear(target="DEFAULT")])
 
-    def test_other_constant_predicates_do_not(self):
-        """INSERT DATA / DELETE DATA of ordinary properties, the common case."""
-        assert not _may_change_an_edge_vitaltype([UpdateDataInsert(quads=[q(NAME)])])
+    def test_concrete_subjects_do_not_since_the_transaction_keeps_them(self):
+        """INSERT DATA / DELETE DATA, the common SPARQL write: no contention on
+        the marker row."""
+        assert not _may_change_an_edge_vitaltype([UpdateDataInsert(quads=[q(VT)])])
+        assert not _may_change_an_edge_vitaltype([UpdateDataDelete(quads=[q(VT)])])
         assert not _may_change_an_edge_vitaltype(
-            [UpdateModify(delete_quads=[q(NAME, VarNode(name="s"))],
-                          insert_quads=[q(NAME, VarNode(name="s"))])])
+            [UpdateModify(delete_quads=[q(VarNode(name="p"))], insert_quads=[q(VT)])])
+
+    def test_a_named_clear_does_not(self):
+        assert not _may_change_an_edge_vitaltype([UpdateClear(graph="urn:g")])
+
+    def test_other_predicates_on_variable_subjects_do_not(self):
+        assert not _may_change_an_edge_vitaltype(
+            [UpdateModify(delete_quads=[q(NAME, self.V)], insert_quads=[q(NAME, self.V)])])
 
 
 class TestTheWritePathKeepsTheTypeInStep:
@@ -65,3 +75,16 @@ class TestTheWritePathKeepsTheTypeInStep:
             src = inspect.getsource(fn)
             assert "EDGE_TYPE_ON_CONFLICT" in src, fn.__name__
             assert "DISTINCT ON (src.subject_uuid, src.context_uuid)" in src, fn.__name__
+
+
+
+class TestReconcileIsBatchedUnderRepeatableRead:
+
+    def test_batches_in_repeatable_read_and_retries_a_conflict(self):
+        """Under READ COMMITTED a row retyped concurrently was set back to the
+        snapshot's type, then marked."""
+        import inspect
+        src = inspect.getsource(se.reconcile_edge_types)
+        assert 'isolation="repeatable_read"' in src
+        assert "SerializationError" in src
+        assert se.RECONCILE_BATCH_ROWS <= 100_000

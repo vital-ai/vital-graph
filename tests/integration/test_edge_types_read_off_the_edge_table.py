@@ -163,12 +163,11 @@ async def test_an_edge_typed_after_its_endpoints_gets_its_type(
     assert await _count(gen, pg_conn) == EXPECTED
 
 
-async def test_an_update_that_retypes_an_edge_unmarks_until_reconciled(
+async def test_an_update_naming_the_edge_keeps_the_column_and_the_mark(
         make_space, space_impl, pg_conn, pg_pool):
-    """The update's edge sync runs after it, so the update unmarks the space
-    in its own transaction. Retyping one slot edge drops its lead from the
-    count; the answer is right throughout."""
-    from vitalgraph.db.sparql_sql.sync_edge_table import reconcile_edge_types
+    """A SPARQL update on a CONCRETE edge keeps the edge table in its own
+    transaction, so the space stays marked and the column reads the new type.
+    Retyping one slot edge drops its lead from the count."""
     space = await _setup(make_space, space_impl, pg_conn)
     se1 = "urn:inttest:edgetype:se_1"           # i = 1: a counted lead
     ok = await space_impl.execute_sparql_update(
@@ -176,6 +175,26 @@ async def test_an_update_that_retypes_an_edge_unmarks_until_reconciled(
         f"DELETE {{ GRAPH <{G}> {{ <{se1}> <{VC}vitaltype> <{H}Edge_hasKGSlot> }} }} "
         f"INSERT {{ GRAPH <{G}> {{ <{se1}> <{VC}vitaltype> <{H}Edge_hasKGFrame> }} }} "
         f"WHERE {{ GRAPH <{G}> {{ <{se1}> <{VC}vitaltype> <{H}Edge_hasKGSlot> }} }}")
+    assert ok is not False
+    assert await _marked(pg_conn, space)
+    gen = await _generate(space, pg_pool)
+    assert _fired(gen)
+    assert await _count(gen, pg_conn) == EXPECTED - 1
+
+
+async def test_a_where_bound_retype_unmarks_until_reconciled(
+        make_space, space_impl, pg_conn, pg_pool):
+    """An update whose edge subject is a WHERE variable cannot name its rows,
+    so it unmarks the space in its own transaction; the answer stays right and
+    a reconcile marks it again."""
+    from vitalgraph.db.sparql_sql.sync_edge_table import reconcile_edge_types
+    space = await _setup(make_space, space_impl, pg_conn)
+    ok = await space_impl.execute_sparql_update(
+        space,
+        f"DELETE {{ GRAPH <{G}> {{ ?e <{VC}vitaltype> <{H}Edge_hasKGSlot> }} }} "
+        f"INSERT {{ GRAPH <{G}> {{ ?e <{VC}vitaltype> <{H}Edge_hasKGFrame> }} }} "
+        f"WHERE {{ GRAPH <{G}> {{ ?e <{VC}vitaltype> <{H}Edge_hasKGSlot> . "
+        f"?e <{VC}hasEdgeSource> <urn:inttest:edgetype:f1_1> }} }}")
     assert ok is not False
     assert not await _marked(pg_conn, space)
 
@@ -188,6 +207,20 @@ async def test_an_update_that_retypes_an_edge_unmarks_until_reconciled(
     gen = await _generate(space, pg_pool)
     assert _fired(gen)
     assert await _count(gen, pg_conn) == EXPECTED - 1
+
+
+async def test_dropping_a_graph_takes_its_edge_rows(
+        make_space, space_impl, pg_conn, pg_pool):
+    """Through the graph API, not SPARQL: the quads and the edge rows go in one
+    transaction. Left behind, the rows passed an edge-type check read off the
+    table."""
+    from vitalgraph.db.sparql_sql.space_names import space_prefix
+    space = await _setup(make_space, space_impl, pg_conn)
+    p = space_prefix(space)
+    assert await pg_conn.fetchval(f"SELECT count(*) FROM {p}_edge") > 0
+    assert await space_impl.drop_graph(space, G)
+    assert await pg_conn.fetchval(f"SELECT count(*) FROM {p}_edge") == 0
+    assert await _count(await _generate(space, pg_pool), pg_conn) == 0
 
 
 async def test_an_unmarked_space_keeps_the_quad_checks_until_reconciled(

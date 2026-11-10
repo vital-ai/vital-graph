@@ -160,33 +160,75 @@ async def disable_edge_types(conn) -> None:
             pass
 
 
-async def reconcile_edge_types(conn, space_id: str, timeout: float | None = None) -> dict:
+#: Edge rows per reconcile batch: each batch is one short REPEATABLE READ
+#: transaction, so no statement nears a read-path statement timeout.
+RECONCILE_BATCH_ROWS = 50_000
+
+
+async def reconcile_edge_types(conn, space_id: str, timeout: float | None = None,
+                               batch_rows: int = RECONCILE_BATCH_ROWS) -> dict:
     """Make every edge row's `edge_type_uuid` its edge's vitaltype in its
     graph (NULL where it has none), then mark the space, but only if no
     write dirtied it meanwhile. Returns {"fixed": n, "marked": bool}.
 
-    One UPDATE over the edge table: minutes on a large space, so it is for the
-    migration and the maintenance job, never the query path. A concurrent
-    dirtying write committed before its snapshot is included; one committed
-    after it moves `dirty_gen`, so the mark is refused and the next run
-    reconciles again."""
+    IN BATCHES of `batch_rows` edges in key order, each its own REPEATABLE
+    READ transaction. Short statements, and no stale overwrite: under READ
+    COMMITTED a row a concurrent write retyped after this statement's
+    snapshot was set back to the type the snapshot computed (the UPDATE
+    re-checks the row but keeps its snapshot's subquery), and the space was
+    then marked. Under REPEATABLE READ that row raises a serialization
+    failure and the batch is retried with a fresh snapshot. A write that
+    changes a vitaltype without keeping the column (a WHERE-bound SPARQL
+    update) moves `dirty_gen`, so the mark is refused and the next run tries
+    again. Rows inserted in a range already done are typed by the write path.
+
+    For the migration and the maintenance job, never the query path.
+    """
+    import asyncpg
     t_edge = f"{space_prefix(space_id)}_edge"
     t_quad = f"{space_prefix(space_id)}_rdf_quad"
     row = await _maint(conn, f"SELECT dirty_gen FROM {EDGE_TYPES_TABLE} WHERE space_id = $1",
                        space_id, fetch=True)
     start = int(row["dirty_gen"]) if row is not None else 0
-    result = await conn.execute(f"""
-        UPDATE {t_edge} e SET edge_type_uuid = x.vt
-        FROM (SELECT e2.edge_uuid, e2.context_uuid, vt.object_uuid AS vt
-              FROM {t_edge} e2
-              LEFT JOIN {t_quad} vt
-                     ON vt.subject_uuid = e2.edge_uuid
-                    AND vt.context_uuid = e2.context_uuid
-                    AND vt.predicate_uuid = $1) x
-        WHERE e.edge_uuid = x.edge_uuid AND e.context_uuid = x.context_uuid
-          AND e.edge_type_uuid IS DISTINCT FROM x.vt
-    """, _VITALTYPE_UUID, timeout=timeout)
-    fixed = int(result.split()[-1]) if result else 0
+    fixed, last = 0, None
+    while True:
+        for attempt in range(5):
+            try:
+                async with conn.transaction(isolation="repeatable_read"):
+                    bound = await conn.fetchrow(f"""
+                        SELECT edge_uuid, context_uuid FROM (
+                            SELECT edge_uuid, context_uuid FROM {t_edge}
+                            WHERE $1::uuid IS NULL OR (edge_uuid, context_uuid) > ($1::uuid, $2::uuid)
+                            ORDER BY edge_uuid, context_uuid LIMIT $3) b
+                        ORDER BY edge_uuid DESC, context_uuid DESC LIMIT 1""",
+                        last[0] if last else None, last[1] if last else None,
+                        batch_rows, timeout=timeout)
+                    if bound is None:
+                        break
+                    result = await conn.execute(f"""
+                        UPDATE {t_edge} e SET edge_type_uuid = x.vt
+                        FROM (SELECT e2.edge_uuid, e2.context_uuid, vt.object_uuid AS vt
+                              FROM {t_edge} e2
+                              LEFT JOIN {t_quad} vt
+                                     ON vt.subject_uuid = e2.edge_uuid
+                                    AND vt.context_uuid = e2.context_uuid
+                                    AND vt.predicate_uuid = $1
+                              WHERE ($2::uuid IS NULL
+                                     OR (e2.edge_uuid, e2.context_uuid) > ($2::uuid, $3::uuid))
+                                AND (e2.edge_uuid, e2.context_uuid) <= ($4::uuid, $5::uuid)) x
+                        WHERE e.edge_uuid = x.edge_uuid AND e.context_uuid = x.context_uuid
+                          AND e.edge_type_uuid IS DISTINCT FROM x.vt
+                    """, _VITALTYPE_UUID, last[0] if last else None, last[1] if last else None,
+                        bound["edge_uuid"], bound["context_uuid"], timeout=timeout)
+                    fixed += int(result.split()[-1]) if result else 0
+                break
+            except asyncpg.SerializationError:
+                if attempt == 4:
+                    raise
+                continue
+        if bound is None:
+            break
+        last = (bound["edge_uuid"], bound["context_uuid"])
     done = await _maint(conn, f"""
         INSERT INTO {EDGE_TYPES_TABLE} (space_id, dirty_gen, clean_gen, verified_at)
         VALUES ($1, $2, $2, NOW())

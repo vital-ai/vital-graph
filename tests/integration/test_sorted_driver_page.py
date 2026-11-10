@@ -157,3 +157,33 @@ async def test_a_selective_constant_elsewhere_keeps_the_plain_page(
                "?d ?name ?r")
     sql = await sparql_query_sql(query, test_space)
     assert "_fast AS MATERIALIZED" not in sql
+
+
+async def test_a_holder_with_two_values_cannot_crowd_out_a_better_one(
+        pg_conn, test_space, sparql_update, sparql_query_sql, monkeypatch,
+        small_pattern_qualifies):
+    """Malformed but possible: a slot with two values. Restricted by holder
+    alone, a candidate's OTHER, worse value entered the fast rows and filled
+    the page ahead of another holder's better one (A has 100 and 5, B has 50:
+    [A:100, A:5] for [A:100, B:50]). The fast branch now keeps candidate
+    (holder, value) pairs. Runs last: it adds the second values to the module's
+    space."""
+    from vitalgraph.db.sparql_sql.generator import invalidate_stats_cache
+    from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
+    # every top-rated holder also gets the lowest value
+    body = " ".join(
+        f'<urn:inttest:sdpage:c{i}> <{H}hasDoubleSlotValue> "0.25"^^<{XSD}double> .'
+        for i in range(LEADS) if i % 9 > 1)
+    await sparql_update(f"INSERT DATA {{ GRAPH <{G}> {{ {body} }} }}", test_space)
+    await recompute_stats_tables(pg_conn, test_space)
+    invalidate_stats_cache(test_space)
+    for name in ("desc", "offset", "fallback", "page beyond the driver"):
+        query = CASES[name]
+        new_sql = await sparql_query_sql(query, test_space)
+        assert "_fast AS MATERIALIZED" in new_sql, name
+        with monkeypatch.context() as m:
+            m.setattr(emit_slice, "_emit_sorted_driver_page", lambda *a, **k: None)
+            old_sql = await sparql_query_sql(query, test_space)
+        old = [tuple(r) for r in await pg_conn.fetch(old_sql)]
+        new = [tuple(r) for r in await pg_conn.fetch(new_sql)]
+        assert new == old, f"{name}: a holder's second value changed the page"

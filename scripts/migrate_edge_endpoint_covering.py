@@ -104,9 +104,23 @@ async def migrate_index(conn, space: str, index_name: str, table: str, keys: str
           f"(now {size})")
 
 
+
+#: The maintenance job's fences (`maintenance_job.maintenance_timeouts`): the
+#: role's read-path defaults (production: 60 s statement, 10 s lock) would
+#: abort this script's long statements part-way.
+async def _lift_timeouts(conn) -> None:
+    from vitalgraph.process.maintenance_job import (
+        MAINTENANCE_LOCK_TIMEOUT_MS, MAINTENANCE_STATEMENT_TIMEOUT_MS)
+    await conn.execute(f"SET statement_timeout = {MAINTENANCE_STATEMENT_TIMEOUT_MS}")
+    await conn.execute(f"SET lock_timeout = {MAINTENANCE_LOCK_TIMEOUT_MS}")
+
+
 async def run(target: str, only_space: str | None, dry_run: bool) -> int:
     # autocommit: CONCURRENTLY cannot run inside a transaction block.
     conn = await asyncpg.connect(target)
+    # Before anything: a CREATE INDEX CONCURRENTLY cut off by a statement
+    # timeout leaves an INVALID index behind, to be dropped by hand.
+    await _lift_timeouts(conn)
     await load_storage_keys(conn)
     try:
         db = await conn.fetchval("SELECT current_database()")
