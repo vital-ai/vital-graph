@@ -72,6 +72,19 @@ EDGE_TYPE_ON_CONFLICT = (
 # of an update together with the column from before it.
 
 EDGE_TYPES_TABLE = "edge_type_maintained"
+#: One row once `scripts/migrate_edge_types_maintained.py` has reconciled every
+#: space after the rollout. Marks are READ only while it exists: during a
+#: rollout, old tasks (which neither keep the column in step nor dirty a space)
+#: can make a mark wrong, so marks written then -- a new space's, or one the
+#: maintenance job re-set -- are not trusted until the migration clears them all
+#: and marks afresh. `--disable` drops the row and every mark, for a rollback.
+EDGE_TYPES_ENABLED_TABLE = "edge_type_maintenance_enabled"
+EDGE_TYPES_ENABLED_DDL = f'''
+    CREATE TABLE IF NOT EXISTS {EDGE_TYPES_ENABLED_TABLE} (
+        id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        enabled_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+'''
 EDGE_TYPES_DDL = f'''
     CREATE TABLE IF NOT EXISTS {EDGE_TYPES_TABLE} (
         space_id VARCHAR(255) PRIMARY KEY REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -112,11 +125,39 @@ async def dirty_edge_types(conn, space_id: str) -> None:
 
 async def edge_types_marked(conn, space_id: str):
     """(True, dirty_gen) when the space's column is known exact, else (False, None)."""
-    row = await _maint(conn, f"SELECT dirty_gen, clean_gen FROM {EDGE_TYPES_TABLE} "
-                             f"WHERE space_id = $1", space_id, fetch=True)
+    # The flag in the SAME statement, so the executor's snapshot re-check sees
+    # mark and flag at one moment.
+    row = await _maint(conn, f"SELECT m.dirty_gen, m.clean_gen FROM {EDGE_TYPES_TABLE} m "
+                             f"WHERE m.space_id = $1 AND EXISTS "
+                             f"(SELECT 1 FROM {EDGE_TYPES_ENABLED_TABLE})", space_id, fetch=True)
     if row is None or row["dirty_gen"] != row["clean_gen"]:
         return False, None
     return True, int(row["dirty_gen"])
+
+
+async def edge_types_enabled(conn) -> bool:
+    row = await _maint(conn, f"SELECT 1 AS x FROM {EDGE_TYPES_ENABLED_TABLE}", fetch=True)
+    return row is not None
+
+
+async def enable_edge_types(conn) -> None:
+    """Start reading marks. For the migration, after it has cleared every mark
+    and reconciled every space."""
+    await conn.execute(EDGE_TYPES_ENABLED_DDL)
+    await conn.execute(f"INSERT INTO {EDGE_TYPES_ENABLED_TABLE} (id) VALUES (1) "
+                       f"ON CONFLICT (id) DO NOTHING")
+
+
+async def disable_edge_types(conn) -> None:
+    """Stop reading marks and forget them all (a rollback): writes by an image
+    that does not maintain the column make every earlier mark untrustworthy.
+    Flag first, so no reader trusts a mark while they are being removed."""
+    import asyncpg
+    for sql in (f"DELETE FROM {EDGE_TYPES_ENABLED_TABLE}", f"DELETE FROM {EDGE_TYPES_TABLE}"):
+        try:
+            await conn.execute(sql)
+        except asyncpg.UndefinedTableError:
+            pass
 
 
 async def reconcile_edge_types(conn, space_id: str, timeout: float | None = None) -> dict:

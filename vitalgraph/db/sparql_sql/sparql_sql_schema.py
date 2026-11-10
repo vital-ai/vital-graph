@@ -92,9 +92,9 @@ def numeric_datatype_ids() -> str:
 NUMERIC_TERM_COLUMN = "num_val"
 
 
-def _edge_types_ddl() -> str:
-    from .sync_edge_table import EDGE_TYPES_DDL
-    return EDGE_TYPES_DDL
+def _edge_types_ddl(enabled: bool = False) -> str:
+    from .sync_edge_table import EDGE_TYPES_DDL, EDGE_TYPES_ENABLED_DDL
+    return EDGE_TYPES_ENABLED_DDL if enabled else EDGE_TYPES_DDL
 #: The non-key columns of the edge endpoint indexes: with the two endpoints,
 #: the whole edge row.
 EDGE_ENDPOINT_INCLUDE = "(context_uuid, edge_uuid, edge_type_uuid)"
@@ -655,6 +655,7 @@ class SparqlSQLSchema:
         # `scripts/migrate_edge_types_maintained.py`. Read by the generator and
         # re-checked by the executor in the query's own snapshot.
         ("edge_type_maintained", _edge_types_ddl()),
+        ("edge_type_maintenance_enabled", _edge_types_ddl(enabled=True)),
         ("slot_sort_coverage", '''
             CREATE TABLE IF NOT EXISTS slot_sort_coverage (
                 space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,

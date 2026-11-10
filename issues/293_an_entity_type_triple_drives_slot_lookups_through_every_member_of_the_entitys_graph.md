@@ -1663,3 +1663,21 @@ rating_999_edge_count 18 -> 17 ms. Every other query is level or faster
 
 **Suites** (vg test stack rebuilt for this code): unit 6,312, integration
 1,006, conformance 1,532, API 718, all passing.
+
+#### 2026-11-09: marks are read only once the migration has run (the rollout window)
+
+Old tasks neither keep `edge_type_uuid` in step nor dirty a space, so during a
+mixed rollout (or after a rollback) a mark can be wrong. The new code writes
+marks before the migration runs (a new space at creation, a re-mark by the
+maintenance job), and a new task would have read them. Now
+`edge_types_marked` also requires a database-wide flag,
+`edge_type_maintenance_enabled`, in the same statement, so the executor's
+snapshot re-check sees mark and flag together. Only
+`scripts/migrate_edge_types_maintained.py --all --apply` sets the flag: it
+clears every mark, reconciles and marks every space, and sets the flag only
+if all were marked. `--disable` drops the flag and every mark, before rolling
+forward after a rollback. Test:
+`test_marks_are_not_read_until_the_migration_sets_the_flag`.
+
+(Correction to "Production re-measure after v0.0.97" above: `issues/330` was
+resolved on 2026-10-30 and released in v0.0.99.)

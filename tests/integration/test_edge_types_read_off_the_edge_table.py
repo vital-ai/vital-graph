@@ -88,6 +88,9 @@ async def _setup(make_space, space_impl, pg_conn, extra=()):
         await space_impl.add_rdf_quads_batch(space, batch)
     await recompute_stats_tables(pg_conn, space)
     invalidate_stats_cache(space)
+    # Marks are read only once the migration has set the database-wide flag.
+    from vitalgraph.db.sparql_sql.sync_edge_table import enable_edge_types
+    await enable_edge_types(pg_conn)
     return space
 
 
@@ -251,3 +254,29 @@ async def test_the_executor_rechecks_the_mark_in_the_querys_snapshot(
             impl_mod.generate_sql = orig
     assert seen and seen[0] is not None, "the first plan read the column"
     assert seen[-1] is None, "the re-plan after the mark moved does not"
+
+
+
+async def test_marks_are_not_read_until_the_migration_sets_the_flag(
+        make_space, space_impl, pg_conn, pg_pool):
+    """During a rollout, old tasks can make a mark wrong, so marks are read only
+    once the migration has cleared them all, re-marked, and set the flag.
+    `--disable` (a rollback) drops the flag and every mark."""
+    from vitalgraph.db.sparql_sql.sync_edge_table import (
+        EDGE_TYPES_ENABLED_TABLE, EDGE_TYPES_TABLE, disable_edge_types, enable_edge_types)
+    space = await _setup(make_space, space_impl, pg_conn)
+    try:
+        await pg_conn.execute(f"DELETE FROM {EDGE_TYPES_ENABLED_TABLE}")
+        assert await pg_conn.fetchval(
+            f"SELECT dirty_gen = clean_gen FROM {EDGE_TYPES_TABLE} WHERE space_id = $1", space)
+        assert not await _marked(pg_conn, space), "a mark without the flag is not read"
+        assert not _fired(await _generate(space, pg_pool))
+
+        await enable_edge_types(pg_conn)
+        assert _fired(await _generate(space, pg_pool))
+
+        await disable_edge_types(pg_conn)
+        assert await pg_conn.fetchval(f"SELECT count(*) FROM {EDGE_TYPES_TABLE}") == 0
+        assert not _fired(await _generate(space, pg_pool))
+    finally:
+        await enable_edge_types(pg_conn)
