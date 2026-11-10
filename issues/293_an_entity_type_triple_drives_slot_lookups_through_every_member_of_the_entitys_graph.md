@@ -1681,3 +1681,39 @@ forward after a rollback. Test:
 
 (Correction to "Production re-measure after v0.0.97" above: `issues/330` was
 resolved on 2026-10-30 and released in v0.0.99.)
+
+### 2026-11-09: the whole planner corpus after today's changes
+
+All four volumes, with the planner app stopped (its maintenance distorts
+timings) and `migrate_edge_types_maintained.py --all --apply` run on each, so
+the edge-type column is read where it applies. For each volume: the contract
+(`results/*_c44.txt`, today's arm against the planner), and an interleaved A/B
+of every query, the SQL `ae6fece8` generates (this morning) against HEAD
+(`11fa1229`), 3 runs each, rows compared as multisets.
+
+**Rows: identical on every query of every volume** (A/B and contract).
+
+**A/B medians, `ae6fece8` -> HEAD:**
+
+| volume | query | before | after |
+|---|---|---:|---:|
+| uw_prodshape2 | all 11 dashboard queries | | parity (within +/-4%) |
+| uw_prodshape2 | latest_per_deal_by_outcome (issues/330) | 205 ms | 211 ms |
+| uw_prodshape2 | decision_page (issues/330) | 190 ms | 193 ms |
+| uw_prodshape2 | category_page | 383 ms | 398 ms |
+| uw_prodshape2 | by_outcome | 187 ms | 174 ms |
+| lead 10k | mql_edge_count | 1,684 ms | 89 ms |
+| lead 10k | high_rated_edge_count | 318 ms | 109 ms |
+| lead 10k | the rest (4) | | parity |
+| wordnet_frames | all 4 | | parity |
+| lead 100k | mql_edge_count | timeout (120 s) | 4.5-9.0 s (cold after the volume switch; 0.6 s warm in c44) |
+| lead 100k | l5_pair_by_frame | 24.7 s | 2.3 s |
+| lead 100k | l2_page | 11.3 s | 0.65 s |
+| lead 100k | high_rated_edge_count | 8.4 s | 1.1 s |
+| lead 100k | l6 / l1 / state_ca count / rating_990 count | | faster |
+| lead 100k | pages, l4 | | parity |
+
+`issues/330`'s fix is intact: its two queries are at parity. The c44-vs-c41
+contract timings mix in two weeks of machine drift (category_page today's arm
+375 -> 461 ms in the contract, against 383 -> 398 ms side by side), so the
+A/B above is the comparison that counts.
