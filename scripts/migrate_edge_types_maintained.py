@@ -16,11 +16,15 @@ but only if every space ended up marked.
 
 LATER RUNS (flag set): reconcile and mark only the spaces not marked.
 
-`--disable`: clear the flag and every mark. Run it after a ROLLBACK, before
-rolling forward again: the old image's writes did not keep the column.
+`--disable`: clear the flag and every mark. ROLLBACK ORDER: run it BEFORE
+the rollback starts, while only new tasks serve. During a rolling rollback old
+tasks write without keeping the column while the remaining new tasks still
+read it; disabling afterwards is too late. Before rolling forward again, run
+the first run (`--all --apply`) once the new rollout has finished.
 
-One UPDATE over each edge table: minutes on a large space. It takes row locks
-on the rows it changes, not the table.
+Reconciles in batches of 50,000 edges, each its own REPEATABLE READ
+transaction, under the maintenance job's timeouts (set at connect). Minutes on
+a large space; row locks on the rows it changes, not the table.
 
 RUN AS THE TABLES' OWNER, the app role on production, not the RDS master.
 
@@ -141,7 +145,7 @@ def main() -> int:
     g.add_argument("--space", action="append")
     g.add_argument("--all", action="store_true")
     g.add_argument("--disable", action="store_true",
-                   help="clear the flag and every mark (after a rollback)")
+                   help="clear the flag and every mark; run BEFORE a rollback starts")
     ap.add_argument("--apply", action="store_true", help="make the changes (default: dry run)")
     add_pg_arguments(ap)
     return asyncio.run(run(ap.parse_args()))

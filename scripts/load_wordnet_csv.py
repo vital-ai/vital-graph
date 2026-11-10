@@ -135,6 +135,7 @@ async def run(space: str, quads_csv: str, terms_csv: str,
         await kc.close()
     term_tbl = f"{space_prefix(space)}_term"
     quad_tbl = f"{space_prefix(space)}_rdf_quad"
+    edge_tbl = f"{space_prefix(space)}_edge"
     stage_tbl = f"stage_{space_prefix(space)}_quads"
 
     for p in (quads_csv, terms_csv):
@@ -163,9 +164,26 @@ async def run(space: str, quads_csv: str, terms_csv: str,
                     await cur.execute(f"DROP INDEX IF EXISTS {name}")
                 print(f"🔧 dropped {len(saved)} secondary indexes")
 
+            # COPY bypasses the write path, so the edge table's types stop
+            # being maintained from here: unmark the space first, before any
+            # quad changes (`issues/293`). Autocommit, so it is visible at once.
+            # A deployment without the marker table has nothing to unmark.
+            await cur.execute("SELECT to_regclass('edge_type_maintained') IS NOT NULL")
+            if (await cur.fetchone())[0]:
+                await cur.execute(
+                    "INSERT INTO edge_type_maintained (space_id, dirty_gen, clean_gen) "
+                    "VALUES (%s, 1, 0) ON CONFLICT (space_id) DO UPDATE "
+                    "SET dirty_gen = edge_type_maintained.dirty_gen + 1", (space,))
+
             if truncate:
-                await cur.execute(f"TRUNCATE {quad_tbl}, {term_tbl}")
-                print("🗑️  truncated term + quad tables")
+                # The edge rows go with the quads they describe: left behind,
+                # they answer type checks until the resync (or for good with
+                # --skip-resync).
+                await cur.execute("SELECT to_regclass(%s) IS NOT NULL", (edge_tbl,))
+                has_edge = (await cur.fetchone())[0]
+                tables = [quad_tbl, term_tbl] + ([edge_tbl] if has_edge else [])
+                await cur.execute(f"TRUNCATE {', '.join(tables)}")
+                print("🗑️  truncated " + ", ".join(tables))
 
             # ---- terms: CSV columns match the term table exactly ----
             dt = await copy_file(
@@ -297,11 +315,17 @@ async def resync_aux(space: str) -> None:
     await load_storage_keys(conn)
     try:
         counts = await resync_all_auxiliary_tables(conn, space)
+        # The load unmarked the space; the rebuilt edge table is exact again.
+        # Mark it now rather than wait for the maintenance job.
+        from vitalgraph.db.sparql_sql.sync_edge_table import reconcile_edge_types
+        marked = (await reconcile_edge_types(conn, space))["marked"]
     finally:
         await conn.close()
     print(f"🔗 resynced auxiliary tables in {time.time()-t0:.1f}s: "
           + ", ".join(f"{k}={v:,}" for k, v in sorted(counts.items())
                       if isinstance(v, int)))
+    print("🏷️  edge types " + ("marked maintained" if marked
+                              else "NOT marked: the maintenance job will reconcile"))
 
 
 def main() -> int:
