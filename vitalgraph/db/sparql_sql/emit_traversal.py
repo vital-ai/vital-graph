@@ -440,6 +440,225 @@ def _place(groups: List[HopGroup], tagged, known: set,
     return True
 
 
+#: A type set is checked by hashed membership only up to this many rows (its
+#: `rdf_stats` pair count). The budget the executor gives it
+#: (`generator._hashed_work_mem_kb`) grows with it; 300,000 rows asks ~37 MB.
+HASHED_SET_MAX_ROWS = 300_000
+#: Bytes a hashed uuid set costs per row, generously (PostgreSQL reckons ~40).
+HASHED_SET_BYTES_PER_ROW = 64
+#: A set is hashed only when the walk's driving end holds at least this
+#: fraction of its rows. Hashing scans and builds the WHOLE set up front; a
+#: walk carrying few rows probes cheaper. Measured on lead 100k:
+#: `rating_999_edge_count` 20 -> 115 ms and `state_ca_edge_count` (9,227
+#: driving rows against 100,000- and 300,000-row sets) 543 -> 1,288 ms when
+#: hashed; `mql_edge_count` (~39,000 against the same sets) 2.4 -> 1.2 s.
+HASHED_SET_MIN_PROBE_FRACTION = 0.1
+
+_CONST_COLS = ("predicate_uuid", "object_uuid", "context_uuid")
+
+
+_VITALTYPE_URI = "http://vital.ai/ontology/vital-core#vitaltype"
+
+
+def _type_check_tables(plan: PlanV2, quad_tables, skip=frozenset()):
+    """{alias: (consts, (corr_alias, corr_col), constraint entries)} for each
+    quad table that is a pure TYPE CHECK: constant predicate and object (and
+    optionally graph), one correlation `T.subject_uuid = A.col`, nothing else
+    read from it. Shared by `hash_type_checks` and `absorb_edge_types`."""
+    known = {t.alias for t in quad_tables}
+    tagged = list(plan.tagged_constraints or [])
+    out = {}
+    for t in quad_tables:
+        alias = t.alias
+        if t.kind != "quad" or alias in skip:
+            continue
+        consts, corr, ok, mine = {}, None, True, []
+        for entry in tagged:
+            owner, sql = entry
+            if alias not in _refs(sql, known):
+                continue
+            mine.append(entry)
+            m = re.fullmatch(rf"\s*{re.escape(alias)}\.({'|'.join(_CONST_COLS)})\s*=\s*(\S+)\s*", sql)
+            if m and not _QUALIFIER_RE.search(m.group(2)):
+                consts[m.group(1)] = m.group(2)
+                continue
+            m = (re.fullmatch(rf"\s*{re.escape(alias)}\.subject_uuid\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*", sql)
+                 or re.fullmatch(rf"\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*{re.escape(alias)}\.subject_uuid\s*", sql))
+            if m and m.group(1) != alias and m.group(1) in known and corr is None:
+                corr = (m.group(1), m.group(2))
+                continue
+            ok = False
+            break
+        if not ok or corr is None or "predicate_uuid" not in consts or "object_uuid" not in consts:
+            continue
+        if any(a == alias and c != "subject_uuid"
+               for slot in (plan.var_slots or {}).values() for a, c in slot.positions):
+            continue
+        out[alias] = (consts, corr, mine)
+    return out
+
+
+def _without_tables(plan: PlanV2, removed: Dict[str, tuple], added: List[tuple]):
+    """A COPY of the BGP with `removed` tables and their constraints gone,
+    `added` constraints appended, and each variable bound at a removed table's
+    subject rebound to that table's correlated column (which equals it)."""
+    import copy as _copy
+    new = _copy.copy(plan)
+    drop = {id(x) for v in removed.values() for x in v[2]}
+    new.tagged_constraints = [x for x in (plan.tagged_constraints or [])
+                              if id(x) not in drop] + list(added)
+    new.tables = [t for t in plan.tables if t.alias not in removed]
+    slots = {}
+    for v, slot in (plan.var_slots or {}).items():
+        pos = []
+        for a, c in slot.positions:
+            if a in removed:
+                a, c = removed[a][1]
+            if (a, c) not in pos:
+                pos.append((a, c))
+        s2 = _copy.copy(slot)
+        s2.positions = pos
+        slots[v] = s2
+    new.var_slots = slots
+    new.leaf_terms = {k: v for k, v in (plan.leaf_terms or {}).items()
+                      if k[0] not in removed}
+    return new
+
+
+def absorb_edge_types(plan: PlanV2, quad_tables: Sequence[TableRef]):
+    """An edge's `vitaltype` check read off `edge.edge_type_uuid`, or None.
+
+    `issues/293`. Only where the space is MARKED: its column is maintained
+    equal to every edge's vitaltype (`sync_edge_table`: a graph object has
+    exactly one vitaltype, every write keeps the column in step, and a write
+    that cannot unmarks the space in its own transaction). The executor
+    re-checks the mark in the query's snapshot (`edge_types_guard`). Then
+
+        ?e vitaltype <T>   (T.subject_uuid = mv.edge_uuid, T in graph C)
+     == mv.edge_type_uuid = <T>   when mv is pinned to the same graph C
+
+    and the per-row quad probe (or a 900,000- / 4,000,000-row set the hashed
+    check cannot afford) becomes a column test on the row the walk already
+    read, index-only with the covering endpoint indexes. Measured on
+    `mql_edge_count` (lead 100k): cold 249k -> 102k reads, warm 1.38M -> 0.88M
+    buffers, 1.8 s -> 0.65 s, same count.
+
+    Narrow by design, after the `rdf:type` form of this was reverted
+    (`issues/182`: zero rows on 8 tests; a vacuous verdict or a variable mapped
+    too broadly). Only `vitaltype`, the predicate the column is filled from;
+    only a pure type check (`_type_check_tables`) whose ONE correlation is
+    `<edge>.edge_uuid`; only an edge table pinned to the very graph constant
+    the check carries. Returns (plan copy, quad tables, absorbed aliases).
+    """
+    by_alias = {t.alias: t for t in quad_tables}
+    leaf_terms = getattr(plan, "leaf_terms", None) or {}
+    tagged = list(plan.tagged_constraints or [])
+
+    def edge_ctx(mv):
+        for owner, sql in tagged:
+            m = re.fullmatch(rf"\s*{re.escape(mv)}\.context_uuid\s*=\s*(\S+)\s*", sql)
+            if m and not _QUALIFIER_RE.search(m.group(1)):
+                return m.group(1)
+        return None
+
+    found = {}
+    for alias, (consts, (ca, cc), mine) in _type_check_tables(plan, quad_tables).items():
+        pred = leaf_terms.get((alias, "predicate_uuid"))
+        if not pred or pred[0] != _VITALTYPE_URI or (len(pred) > 1 and pred[1] != "U"):
+            continue
+        if cc != "edge_uuid" or getattr(by_alias.get(ca), "kind", None) != "edge":
+            continue
+        ctx = consts.get("context_uuid")
+        if ctx is None or edge_ctx(ca) != ctx:
+            continue
+        found[alias] = (consts, (ca, cc), mine)
+    if not found:
+        return None
+    added = [(ca, f"{ca}.edge_type_uuid = {consts['object_uuid']}")
+             for consts, (ca, _cc), _m in found.values()]
+    return (_without_tables(plan, found, added),
+            [t for t in quad_tables if t.alias not in found], sorted(found))
+
+
+def hash_type_checks(plan: PlanV2, chain: TraversalChain,
+                     quad_tables: Sequence[TableRef], card: Dict[str, float],
+                     direction: Optional[str] = None):
+    """A hop-wise walk's TYPE CHECKS as hashed set membership, or None.
+
+    `issues/293`. After the walk each surviving row checks its entity, frame
+    and edge types with a per-row probe each: on lead 100k `mql_edge_count`,
+    ~50,000 rows x 5-6 random lookups, and on a cold cache 388,000 page reads
+    (18 s). The planner checks a type ONCE against the whole set, a hash of
+    one index-only scan. Written as membership, the same:
+
+        (mv0.dest_node_uuid IN (SELECT subject_uuid FROM quad
+                                WHERE predicate_uuid = P AND object_uuid = O
+                                  AND context_uuid = C)) IS TRUE
+
+    PostgreSQL hashes the uncorrelated set once per statement and keeps it
+    across the laterals' rescans. `IS TRUE` keeps it a hashed SubPlan:
+    unwrapped, the sublink is pulled back up into a per-row semi-join. Measured
+    on `mql_edge_count`, four sets of <= 300,000 rows: cold 18.3 s -> 8.4 s
+    (388k -> 249k reads), warm 3.2-4.0 s -> 1.9 s, 2.37M -> 1.38M buffers.
+
+    EXACT. A qualifying table T has constant predicate, object and (optionally)
+    context, one correlation `T.subject_uuid = A.col`, and nothing else read
+    from it. For fixed (predicate, object, context), `subject_uuid` is unique
+    (a prefix of the quad key), so the join matched at most one row: it was
+    already a semi-join, and membership is the same filter. A variable bound
+    at `T.subject_uuid` is bound at `A.col` instead, which equals it.
+
+    SIZE-GATED. If PostgreSQL's estimate of a set does not fit `hash_mem` it
+    rescans the subquery per outer row, which is a catastrophe, not a slow
+    plan. So only sets of at most HASHED_SET_MAX_ROWS by the stats count, and
+    the statement carries a `work_mem` sized for the largest one. A table the
+    stats cannot count stays a probe.
+
+    Never the walk's driving constraint or the end filters it hoists (those
+    drive; they are not checks). Returns (plan, quad_tables, {alias: rows}) on a
+    COPY of the plan, or None to change nothing.
+    """
+    by_alias = {t.alias: t for t in quad_tables}
+    links = set()
+    for l in chain.links:
+        links |= set(getattr(l, "aliases", (l.ref_id,)))
+    # The DRIVING end's constraint and filters drive the walk (they are
+    # hoisted); the other end's constraint is a check like any other.
+    end = "tail" if direction == "tail" else "head"
+    protect = {a for a in (getattr(chain, f"{end}_constraint_alias", None),) if a}
+    protect |= set(getattr(chain, f"{end}_filter_aliases", ()) or ())
+    # How many rows the walk starts from: the driving end's size, as the
+    # direction choice priced it. Unknown: hash nothing.
+    sizes = [card.get(getattr(chain, f"{end}_constraint_alias", None)),
+             getattr(chain, f"{end}_range_rows", None),
+             getattr(chain, f"{end}_filter_rows", None)]
+    sizes = [x for x in sizes if isinstance(x, (int, float)) and x > 0]
+    if getattr(chain, f"pinned_{end}", False) or not sizes:
+        return None
+    drive_rows = min(sizes)
+
+    found = {}
+    for alias, info in _type_check_tables(plan, quad_tables, skip=links | protect).items():
+        rows = card.get(alias)
+        if not isinstance(rows, (int, float)) or rows <= 0 or rows > HASHED_SET_MAX_ROWS:
+            continue
+        if drive_rows < rows * HASHED_SET_MIN_PROBE_FRACTION:
+            continue
+        found[alias] = info + (rows,)
+    # A correlation onto another table being removed would dangle.
+    found = {a: v for a, v in found.items() if v[1][0] not in found}
+    if not found:
+        return None
+    added = []
+    for alias, (consts, (ca, cc), _mine, _rows) in found.items():
+        where = " AND ".join(f"{c} = {consts[c]}" for c in _CONST_COLS if c in consts)
+        added.append((ca, f"({ca}.{cc} IN (SELECT subject_uuid FROM {by_alias[alias].table_name} "
+                          f"WHERE {where})) IS TRUE"))
+    return (_without_tables(plan, found, added),
+            [t for t in quad_tables if t.alias not in found],
+            {a: int(v[3]) for a, v in found.items()})
+
+
 def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
                   quad_tables: Sequence[TableRef],
                   sql_names: Dict[str, str],

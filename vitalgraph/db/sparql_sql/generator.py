@@ -76,6 +76,11 @@ class GenerateResult:
     # with eight or fewer relations Postgres re-plans the order from the very
     # estimates the model corrects (`issues/293`).
     fixed_join_order: bool = False
+    # `work_mem` (kB) the statement needs so PostgreSQL hashes the type sets a
+    # hop-wise walk checks by membership (`emit_traversal.hash_type_checks`).
+    # The executor RAISES the session's value to it for the statement, never
+    # lowers it. None: nothing hashed, nothing set.
+    work_mem_kb: Optional[int] = None
     # Every pass that considered a faster shape for this query and refused,
     # with the values it refused on (`declines.py`). Carried on the result
     # rather than left in the log because the question it answers — "why is
@@ -102,6 +107,11 @@ class GenerateResult:
     # stored pattern verdict (`pattern_verdict`): the executor must run it in a
     # snapshot where the space is still exactly that, or plan again without.
     verdict_guard: Optional[tuple] = None
+    # (space_id, dirty_gen) when the SQL reads an edge's vitaltype off
+    # `edge.edge_type_uuid` (`issues/293`): the executor re-checks, in the
+    # snapshot the query runs in, that the space is still marked at that
+    # generation, and plans again without it if not.
+    edge_types_guard: Optional[tuple] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1620,6 +1630,22 @@ def _equality_criterion(chains, pair_rows, pair_bounds, pred_stats,
     return crit, pred
 
 
+def _hashed_work_mem_kb(rows: int) -> int:
+    """work_mem for a statement hashing a type set of `rows` rows.
+
+    PostgreSQL hashes an `IN (subquery)` only when ITS estimate of the set fits
+    `hash_mem` (work_mem x hash_mem_multiplier); otherwise it rescans the
+    subquery for every outer row, which on a 100,000-row set is a catastrophe.
+    So the budget is generous: HASHED_SET_BYTES_PER_ROW per row (PostgreSQL
+    reckons ~40 for a uuid) and twice the stats count, ignoring the multiplier.
+    """
+    from .emit_traversal import HASHED_SET_BYTES_PER_ROW
+    # Floored at 1 MB: a small set asks for a few kB, below PostgreSQL's 64 kB
+    # minimum, which the executor never applies (it only raises) but any
+    # caller setting it directly would fail on.
+    return max(1024, -(-int(rows) * HASHED_SET_BYTES_PER_ROW * 2 // 1024))
+
+
 async def generate_sql(
     compile_result: CompileResult,
     space_id: str,
@@ -1681,14 +1707,20 @@ async def _generate_sql(
 
     # --- UPDATE dispatch ---
     if compile_result.update_ops:
-        from .emit_update import update_to_sql
+        from .emit_update import update_to_sql, UPDATE_WORK_MEM_KB
         _lock_plans: List[Any] = []
-        sql = await update_to_sql(compile_result.update_ops, space_id,
-                                  conn_params=conn_params, conn=conn,
-                                  default_graph_uri=default_graph,
-                                  plans_out=_lock_plans)
+        _wm: List[int] = []
+        _wm_token = UPDATE_WORK_MEM_KB.set(_wm)
+        try:
+            sql = await update_to_sql(compile_result.update_ops, space_id,
+                                      conn_params=conn_params, conn=conn,
+                                      default_graph_uri=default_graph,
+                                      plans_out=_lock_plans)
+        finally:
+            UPDATE_WORK_MEM_KB.reset(_wm_token)
         return GenerateResult(ok=True, sql=sql, var_map={}, sparql_vars=[],
-                              update_lock_plans=_lock_plans)
+                              update_lock_plans=_lock_plans,
+                              work_mem_kb=max(_wm) if _wm else None)
 
     algebra = compile_result.algebra
     meta = compile_result.meta
@@ -1877,6 +1909,25 @@ async def _generate_sql(
                     logger.debug("frame-type agreement prefetch skipped: %s", exc)
                     _decisions.declined("frame_type_absorbable",
                                         f"prefetch failed: {exc}")
+                # Whether an edge's vitaltype can be read off
+                # `edge.edge_type_uuid` (`issues/293`, read by
+                # `emit_traversal.absorb_edge_types`): the space's marker says
+                # the column is maintained. The executor re-checks it in the
+                # query's own snapshot (`edge_types_guard`). Not inside an
+                # update's WHERE, which runs in the update's transaction with
+                # no such check, nor when the caller asked for no stored state.
+                aliases.edge_vitaltype_absorbable = False
+                aliases.edge_types_guard = None
+                from .emit_update import UPDATE_WORK_MEM_KB as _UPD
+                if use_stored_verdicts and _UPD.get() is None:
+                    try:
+                        from .sync_edge_table import edge_types_marked
+                        _ok, _gen = await edge_types_marked(conn, space_id)
+                        if _ok:
+                            aliases.edge_vitaltype_absorbable = True
+                            aliases.edge_types_guard = (space_id, _gen)
+                    except Exception as exc:
+                        logger.debug("edge types marker unread: %s", exc)
                 from .rewrite_edge_table import rewrite_edge_table
                 plan = rewrite_edge_table(plan, aliases, space_id)
 
@@ -2661,8 +2712,13 @@ async def _generate_sql(
             fixed_join_order=(plan_source == "qtree" and qtree_pin) or (
                 plan_source is None and ctx.fixed_join_order),
             traversal_decision=getattr(aliases, "traversal_decision", None),
+            work_mem_kb=(_hashed_work_mem_kb(ctx.hashed_set_rows)
+                         if plan_source is None and ctx.hashed_set_rows else None),
             plan_source=plan_source,
             verdict_guard=verdict_guard,
+            edge_types_guard=(getattr(aliases, "edge_types_guard", None)
+                              if plan_source is None
+                              and getattr(aliases, "edge_types_absorbed", False) else None),
         )
 
     except UnindexableTextSearch as e:

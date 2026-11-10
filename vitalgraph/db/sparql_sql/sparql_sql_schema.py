@@ -90,6 +90,11 @@ def numeric_datatype_ids() -> str:
 
 
 NUMERIC_TERM_COLUMN = "num_val"
+
+
+def _edge_types_ddl() -> str:
+    from .sync_edge_table import EDGE_TYPES_DDL
+    return EDGE_TYPES_DDL
 #: The non-key columns of the edge endpoint indexes: with the two endpoints,
 #: the whole edge row.
 EDGE_ENDPOINT_INCLUDE = "(context_uuid, edge_uuid, edge_type_uuid)"
@@ -641,6 +646,15 @@ class SparqlSQLSchema:
         # Written by the maintenance coverage probe, which already computes both
         # numbers. `complete` is stored rather than derived at read time so a
         # reader never has to know how the two counts were obtained.
+        # Whether a space's `{space}_edge.edge_type_uuid` is known to equal
+        # every edge's vitaltype (`issues/293`, `sync_edge_table`). Marked when
+        # clean_gen = dirty_gen: a write that may change an edge's vitaltype
+        # without keeping the column in step bumps dirty_gen in its own
+        # transaction, and a reconcile sets clean_gen to the dirty_gen it
+        # started from. A new space starts marked; an existing one is marked by
+        # `scripts/migrate_edge_types_maintained.py`. Read by the generator and
+        # re-checked by the executor in the query's own snapshot.
+        ("edge_type_maintained", _edge_types_ddl()),
         ("slot_sort_coverage", '''
             CREATE TABLE IF NOT EXISTS slot_sort_coverage (
                 space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,

@@ -630,10 +630,61 @@ def _try_hop_wise(plan: PlanV2, ctx: EmitContext, quad_tables,
                 "the walk's start is far dearer than the flat join", **dearer)
         # The direction is the decision's, not the emitter's: it is chosen
         # from statistics loaded at an earlier stage (issues/090).
-        return emit_hop_wise(plan, decision.chain, quad_tables, sql_names,
-                             direction=getattr(decision, 'direction', None))
+        # An edge's vitaltype read off `edge.edge_type_uuid` where the space's
+        # verdict allows it (`emit_traversal.absorb_edge_types`). A column test
+        # on the row the walk already read.
+        #
+        # NOT UNDER A LIMIT, like the other walk rules. On a page the column
+        # test made PostgreSQL drive the edge from `(edge_type_uuid, source)`
+        # through the heap and lose the early sort that stops at the page:
+        # `rating_990_edge_page` (lead 100k) 18 -> 114 ms, 12,680 -> 126,678
+        # buffers, same rows (`issues/293`).
+        absorbed = None
+        _paged = True
+        if _root is not None:
+            from .traversal_decision import _has_limit as _hl
+            _paged = _hl(_root)
+        if getattr(ctx.aliases, "edge_vitaltype_absorbable", False) and not _paged:
+            from .emit_traversal import absorb_edge_types
+            absorbed = absorb_edge_types(plan, quad_tables)
+            if absorbed is not None:
+                plan, quad_tables, _absorbed_aliases = absorbed
+                # The executor's snapshot re-check is armed only when the SQL
+                # actually reads the column (`GenerateResult.edge_types_guard`).
+                ctx.aliases.edge_types_absorbed = True
+        # Type checks as hashed sets, not per-row probes, when nothing above
+        # stops early: a page's per-row probes end at its LIMIT, while a set
+        # is hashed whole up front (`emit_traversal.hash_type_checks`).
+        hashed = None
+        if _root is not None:
+            from .traversal_decision import _has_limit
+            if not _has_limit(_root):
+                from .emit_traversal import hash_type_checks
+                hashed = hash_type_checks(plan, decision.chain, quad_tables,
+                                          _leaf_cardinality(plan, ctx),
+                                          direction=getattr(decision, 'direction', None))
+        if hashed is not None:
+            h_plan, h_tables, h_rows = hashed
+            sql = emit_hop_wise(h_plan, decision.chain, h_tables, sql_names,
+                                direction=getattr(decision, 'direction', None))
+            if sql is not None:
+                ctx.note_hashed_set(max(h_rows.values()))
+                from .plan_decisions import recorder_for
+                recorder_for(ctx.aliases).fired(
+                    "hashed_type_checks", "", tables=sorted(h_rows), rows=h_rows)
+                if absorbed is not None:
+                    recorder_for(ctx.aliases).fired(
+                        "absorb_edge_types", "", tables=absorbed[2])
+                return sql
+        sql = emit_hop_wise(plan, decision.chain, quad_tables, sql_names,
+                            direction=getattr(decision, 'direction', None))
+        if sql is not None and absorbed is not None:
+            from .plan_decisions import recorder_for
+            recorder_for(ctx.aliases).fired(
+                "absorb_edge_types", "", tables=absorbed[2])
+        return sql
     except Exception as exc:
-        logger.warning("hop-wise emission failed, using the flat join: %s", exc)
+        logger.warning("hop-wise emission failed, using the flat join: %s", exc, exc_info=True)
         return None
 
 

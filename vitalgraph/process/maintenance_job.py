@@ -737,6 +737,11 @@ class MaintenanceJob:
             if edge_result:
                 summary["edge_integrity"] = edge_result
 
+            # --- Edge types: re-mark spaces a SPARQL update dirtied ---
+            reconcile_result = await self._run_edge_type_reconcile(list(stats.keys()))
+            if reconcile_result:
+                summary["edge_type_reconcile"] = reconcile_result
+
 
             # --- Frame-slot integrity: report, then repair the worst ---
             #
@@ -882,6 +887,7 @@ class MaintenanceJob:
             one = [space_id]
             for key, phase in (
                 ("edge_integrity", self._run_edge_integrity),
+                ("edge_type_reconcile", self._run_edge_type_reconcile),
                 # The step KEY keeps its spelling — a running deployment has
                 # persisted and gated on it, so renaming it is a migration
                 # rather than a rename. The function it calls acts on
@@ -1772,6 +1778,47 @@ class MaintenanceJob:
         if failed:
             out["failed"] = failed
         return out
+
+    async def _run_edge_type_reconcile(self, space_ids: List[str]) -> Optional[Dict]:
+        """Re-mark the spaces whose edge types a SPARQL update dirtied (`issues/293`).
+
+        A query reads an edge's vitaltype off `edge.edge_type_uuid` only in a
+        MARKED space (`sync_edge_table`). An update that may change an edge's
+        vitaltype unmarks its space in its own transaction, because its edge
+        sync runs after it. This reconciles the column against the quads and
+        marks the space again, unless it was dirtied meanwhile (next cycle).
+
+        Only spaces with a marker row whose counters differ, which is to say
+        only after such an update: one indexed read otherwise. A space never
+        marked has no row until an update dirties it, and is otherwise left to
+        `scripts/migrate_edge_types_maintained.py`.
+        """
+        if not self._pool:
+            return None
+        from ..db.sparql_sql.sync_edge_table import EDGE_TYPES_TABLE, reconcile_edge_types
+        try:
+            async with self._pool.acquire() as conn:
+                if await conn.fetchval("SELECT to_regclass($1)", EDGE_TYPES_TABLE) is None:
+                    return None
+                dirty = [r["space_id"] for r in await conn.fetch(
+                    f"SELECT space_id FROM {EDGE_TYPES_TABLE} "
+                    f"WHERE dirty_gen <> clean_gen AND space_id = ANY($1::text[])",
+                    list(space_ids))]
+        except Exception as exc:
+            logger.warning("edge type reconcile: could not read markers: %s", exc)
+            return None
+        out = {}
+        for sid in dirty:
+            try:
+                async with self._pool.acquire() as conn:
+                    async with maintenance_timeouts(conn):
+                        out[sid] = await reconcile_edge_types(
+                            conn, sid, timeout=PROBE_CLIENT_TIMEOUT_S)
+            except Exception as exc:
+                # Left dirty: queries keep the quad checks, and the next cycle
+                # tries again.
+                logger.warning("edge type reconcile for %s failed: %s", sid, exc)
+        return out or None
 
     async def _run_type_agreement_refresh(self, space_ids: List[str],
                                           force: bool = False) -> Optional[Dict]:

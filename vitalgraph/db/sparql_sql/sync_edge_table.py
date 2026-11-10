@@ -39,6 +39,125 @@ def chunk_uuids(seq: List[uuid.UUID], n: int = SYNC_CHUNK):
         yield seq[i:i + n]
 
 
+#: An edge row that already exists takes the edge's CURRENT vitaltype
+#: (`issues/293`). Under `DO NOTHING` an edge typed in a later write than its
+#: endpoints kept a NULL, and a SPARQL update that changed an edge's vitaltype
+#: kept the old one, so `edge_type_uuid` could not stand in for the quads.
+#: Endpoints are left as they were. `DISTINCT ON` in the SELECT keeps one row
+#: per (edge, graph), which `DO UPDATE` requires: a malformed edge with two
+#: sources would otherwise update one row twice and fail the write.
+EDGE_TYPE_ON_CONFLICT = (
+    "ON CONFLICT (edge_uuid, context_uuid) DO UPDATE "
+    "SET edge_type_uuid = EXCLUDED.edge_type_uuid "
+    "WHERE {t_edge}.edge_type_uuid IS DISTINCT FROM EXCLUDED.edge_type_uuid")
+
+
+# ---------------------------------------------------------------------------
+# Whether a space's `edge_type_uuid` is MAINTAINED (`issues/293`)
+# ---------------------------------------------------------------------------
+#
+# A graph object has exactly one vitaltype, and every write path that keeps the
+# edge table in the same transaction as the quads keeps `edge_type_uuid` equal
+# to it (above). Two things do not: rows written before that (a stale NULL or
+# type), and a SPARQL update, whose edge sync runs after the update in its own
+# transaction and which leaves WHERE-bound subjects to a background repair.
+#
+# So a space is MARKED when its column is known exact, and only then may a
+# query read an edge's vitaltype off it (`emit_traversal.absorb_edge_types`).
+# Two counters per space: `dirty_gen`, bumped in the transaction of any SPARQL
+# update that may change an edge's vitaltype, and `clean_gen`, set by a
+# reconcile to the `dirty_gen` it started from, and only if nothing dirtied the
+# space meanwhile. Marked = (clean_gen = dirty_gen). The executor re-checks
+# that in the snapshot the query runs in, so a query can never see the quads
+# of an update together with the column from before it.
+
+EDGE_TYPES_TABLE = "edge_type_maintained"
+EDGE_TYPES_DDL = f'''
+    CREATE TABLE IF NOT EXISTS {EDGE_TYPES_TABLE} (
+        space_id VARCHAR(255) PRIMARY KEY REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
+        dirty_gen BIGINT NOT NULL DEFAULT 0,
+        clean_gen BIGINT NOT NULL DEFAULT 0,
+        verified_at TIMESTAMPTZ
+    )
+'''
+
+
+async def _maint(conn, sql, *args, fetch=False):
+    """Run against the marker table; a deployment without it reads as
+    unmarked and writes nothing. Inside a savepoint when the caller holds a
+    transaction, so a missing table cannot abort it."""
+    import asyncpg
+    try:
+        if conn.is_in_transaction():
+            async with conn.transaction():
+                return await (conn.fetchrow(sql, *args) if fetch else conn.execute(sql, *args))
+        return await (conn.fetchrow(sql, *args) if fetch else conn.execute(sql, *args))
+    except asyncpg.UndefinedTableError:
+        return None
+
+
+async def mark_new_space_edge_types(conn, space_id: str) -> None:
+    """A new space's edge table is empty and every write keeps it exact."""
+    await _maint(conn, f"INSERT INTO {EDGE_TYPES_TABLE} (space_id, dirty_gen, clean_gen) "
+                       f"VALUES ($1, 0, 0) ON CONFLICT (space_id) DO NOTHING", space_id)
+
+
+async def dirty_edge_types(conn, space_id: str) -> None:
+    """In the transaction of a write that may change an edge's vitaltype
+    without keeping the column in step. Unmarks the space until a reconcile."""
+    await _maint(conn, f"INSERT INTO {EDGE_TYPES_TABLE} (space_id, dirty_gen, clean_gen) "
+                       f"VALUES ($1, 1, 0) ON CONFLICT (space_id) DO UPDATE "
+                       f"SET dirty_gen = {EDGE_TYPES_TABLE}.dirty_gen + 1", space_id)
+
+
+async def edge_types_marked(conn, space_id: str):
+    """(True, dirty_gen) when the space's column is known exact, else (False, None)."""
+    row = await _maint(conn, f"SELECT dirty_gen, clean_gen FROM {EDGE_TYPES_TABLE} "
+                             f"WHERE space_id = $1", space_id, fetch=True)
+    if row is None or row["dirty_gen"] != row["clean_gen"]:
+        return False, None
+    return True, int(row["dirty_gen"])
+
+
+async def reconcile_edge_types(conn, space_id: str, timeout: float | None = None) -> dict:
+    """Make every edge row's `edge_type_uuid` its edge's vitaltype in its
+    graph (NULL where it has none), then mark the space, but only if no
+    write dirtied it meanwhile. Returns {"fixed": n, "marked": bool}.
+
+    One UPDATE over the edge table: minutes on a large space, so it is for the
+    migration and the maintenance job, never the query path. A concurrent
+    dirtying write committed before its snapshot is included; one committed
+    after it moves `dirty_gen`, so the mark is refused and the next run
+    reconciles again."""
+    t_edge = f"{space_prefix(space_id)}_edge"
+    t_quad = f"{space_prefix(space_id)}_rdf_quad"
+    row = await _maint(conn, f"SELECT dirty_gen FROM {EDGE_TYPES_TABLE} WHERE space_id = $1",
+                       space_id, fetch=True)
+    start = int(row["dirty_gen"]) if row is not None else 0
+    result = await conn.execute(f"""
+        UPDATE {t_edge} e SET edge_type_uuid = x.vt
+        FROM (SELECT e2.edge_uuid, e2.context_uuid, vt.object_uuid AS vt
+              FROM {t_edge} e2
+              LEFT JOIN {t_quad} vt
+                     ON vt.subject_uuid = e2.edge_uuid
+                    AND vt.context_uuid = e2.context_uuid
+                    AND vt.predicate_uuid = $1) x
+        WHERE e.edge_uuid = x.edge_uuid AND e.context_uuid = x.context_uuid
+          AND e.edge_type_uuid IS DISTINCT FROM x.vt
+    """, _VITALTYPE_UUID, timeout=timeout)
+    fixed = int(result.split()[-1]) if result else 0
+    done = await _maint(conn, f"""
+        INSERT INTO {EDGE_TYPES_TABLE} (space_id, dirty_gen, clean_gen, verified_at)
+        VALUES ($1, $2, $2, NOW())
+        ON CONFLICT (space_id) DO UPDATE SET clean_gen = $2, verified_at = NOW()
+        WHERE {EDGE_TYPES_TABLE}.dirty_gen = $2
+        RETURNING 1""", space_id, start, fetch=True)
+    marked = done is not None
+    logger.info("reconcile_edge_types(%s): %d rows fixed, %s", space_id, fixed,
+                "marked" if marked else "NOT marked (dirtied meanwhile)")
+    return {"fixed": fixed, "marked": marked}
+
+
 async def sync_edge_table_after_insert(
     conn,
     space_id: str,
@@ -60,7 +179,7 @@ async def sync_edge_table_after_insert(
         result = await conn.execute(f"""
             INSERT INTO {t_edge} (edge_uuid, source_node_uuid, dest_node_uuid,
                                   context_uuid, edge_type_uuid)
-            SELECT
+            SELECT DISTINCT ON (src.subject_uuid, src.context_uuid)
                 src.subject_uuid,
                 src.object_uuid,
                 dst.object_uuid,
@@ -77,7 +196,8 @@ async def sync_edge_table_after_insert(
             WHERE src.predicate_uuid = $1
               AND dst.predicate_uuid = $2
               AND src.subject_uuid = ANY($3)
-            ON CONFLICT DO NOTHING
+            ORDER BY src.subject_uuid, src.context_uuid
+            {EDGE_TYPE_ON_CONFLICT.format(t_edge=t_edge)}
         """, _EDGE_SRC_UUID, _EDGE_DST_UUID, chunk, _VITALTYPE_UUID)
         inserted += int(result.split()[-1]) if result else 0
 
@@ -386,7 +506,7 @@ async def backfill_edge_table(conn, space_id: str,
         WHERE src.predicate_uuid = $1
           AND dst.predicate_uuid = $2
         ORDER BY src.subject_uuid, src.context_uuid
-        ON CONFLICT DO NOTHING
+        {EDGE_TYPE_ON_CONFLICT.format(t_edge=t_edge)}
     """, _EDGE_SRC_UUID, _EDGE_DST_UUID, _VITALTYPE_UUID, timeout=timeout)
 
     inserted = int(result.split()[-1]) if result else 0

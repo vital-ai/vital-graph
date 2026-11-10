@@ -612,3 +612,98 @@ class TestTheEndsFilterTablesAreHoistedToo:
         sql = emit_hop_wise(plan, self._ch(("qf",)), plan.tables, _names(plan))
         assert sql is not None
         assert "AS qf ON" not in sql.split("CROSS JOIN LATERAL")[0]
+
+
+class TestTypeChecksAsHashedSets:
+    """`issues/293`: a hop's TYPE CHECK (constant predicate and object, one
+    correlation to its subject, nothing else read) becomes hashed membership
+    instead of a per-row probe. `mql_edge_count` (lead 100k): cold 14.1 s ->
+    5.8 s, warm 2.4 s -> 1.2 s, 2.37M -> 1.38M buffers, same count."""
+
+    def _plan(self):
+        """`_constrained_plan` plus a type check `qy` on hop 1's frame."""
+        plan = _constrained_plan(3)
+        plan.tables.append(_q("qy"))
+        plan.tagged_constraints += [
+            ("qy", "qy.subject_uuid = femv1.dest_entity_uuid"),
+            ("qy", "qy.predicate_uuid = __CONST_c_1__"),
+            ("qy", "qy.object_uuid = __CONST_c_2__"),
+            ("qy", "qy.context_uuid = __CONST_c_3__"),
+        ]
+        plan.var_slots["e2"].positions.append(("qy", "subject_uuid"))
+        return plan
+
+    def _ch(self):
+        return _chain(3, head=False, head_c=KIND, head_alias="qk")
+
+    def test_the_check_becomes_membership_on_its_correlated_column(self):
+        from vitalgraph.db.sparql_sql.emit_traversal import hash_type_checks
+        plan = self._plan()
+        got = hash_type_checks(plan, self._ch(), plan.tables, {"qy": 100_000, "qk": 50_000})
+        assert got is not None
+        new, tables, rows = got
+        assert rows == {"qy": 100_000}
+        assert "qy" not in {t.alias for t in tables}
+        conds = [c for o, c in new.tagged_constraints if o == "femv1"]
+        assert ("(femv1.dest_entity_uuid IN (SELECT subject_uuid FROM s_rdf_quad "
+                "WHERE predicate_uuid = __CONST_c_1__ AND object_uuid = __CONST_c_2__ "
+                "AND context_uuid = __CONST_c_3__)) IS TRUE") in conds
+        assert not any("qy." in c for _o, c in new.tagged_constraints)
+        assert ("qy", "subject_uuid") not in new.var_slots["e2"].positions
+        # the original plan is untouched: the flat fallback still has it
+        assert "qy" in {t.alias for t in plan.tables}
+
+    def test_the_hop_wise_sql_carries_it_and_not_the_table(self):
+        from vitalgraph.db.sparql_sql.emit_traversal import hash_type_checks
+        plan = self._plan()
+        new, tables, _ = hash_type_checks(plan, self._ch(), plan.tables, {"qy": 100_000, "qk": 50_000})
+        sql = emit_hop_wise(new, self._ch(), tables, _names(plan))
+        assert sql is not None
+        assert "AS qy" not in sql and ") IS TRUE" in sql
+
+    def test_a_set_too_large_or_uncounted_stays_a_probe(self):
+        """Unhashed, PostgreSQL rescans the set per row: a timeout, not a slow
+        plan (4 MB work_mem, a 300,000-row set: > 60 s)."""
+        from vitalgraph.db.sparql_sql.emit_traversal import (HASHED_SET_MAX_ROWS,
+                                                             hash_type_checks)
+        plan = self._plan()
+        assert hash_type_checks(plan, self._ch(), plan.tables,
+                                {"qy": HASHED_SET_MAX_ROWS + 1, "qk": 10**6}) is None
+        assert hash_type_checks(plan, self._ch(), plan.tables, {"qk": 10**6}) is None
+
+    def test_a_walk_carrying_few_rows_keeps_its_probes(self):
+        """Hashing builds the whole set up front: `state_ca_edge_count`, 9,227
+        driving rows against 100,000-row sets, 543 -> 1,288 ms hashed."""
+        from vitalgraph.db.sparql_sql.emit_traversal import hash_type_checks
+        plan = self._plan()
+        assert hash_type_checks(plan, self._ch(), plan.tables,
+                                {"qy": 100_000, "qk": 9_227}) is None
+        assert hash_type_checks(plan, self._ch(), plan.tables,
+                                {"qy": 100_000}) is None, "an unknown driving size hashes nothing"
+
+    def test_the_driving_constraint_is_not_a_check(self):
+        from vitalgraph.db.sparql_sql.emit_traversal import hash_type_checks
+        plan = _constrained_plan(3)
+        plan.tagged_constraints += [("qk", "qk.context_uuid = __CONST_c_3__")]
+        got = hash_type_checks(plan, self._ch(), plan.tables, {"qk": 10})
+        assert got is None or "qk" not in got[2]
+
+    def test_a_table_read_for_more_than_its_subject_stays(self):
+        from vitalgraph.db.sparql_sql.emit_traversal import hash_type_checks
+        plan = self._plan()
+        plan.var_slots["x"] = VarSlot(name="x", positions=[("qy", "object_uuid")])
+        assert hash_type_checks(plan, self._ch(), plan.tables, {"qy": 100, "qk": 50}) is None
+        plan = self._plan()
+        plan.tagged_constraints.append(("qy", "qy.object_uuid <> qc1.object_uuid"))
+        assert hash_type_checks(plan, self._ch(), plan.tables, {"qy": 100, "qk": 50}) is None
+
+
+class TestTheHashedWorkMem:
+    def test_twice_the_set_at_a_generous_row_size(self):
+        from vitalgraph.db.sparql_sql.generator import _hashed_work_mem_kb
+        assert _hashed_work_mem_kb(300_000) == 37_500
+
+    def test_a_small_set_still_asks_for_a_settable_value(self):
+        """PostgreSQL refuses work_mem below 64 kB."""
+        from vitalgraph.db.sparql_sql.generator import _hashed_work_mem_kb
+        assert _hashed_work_mem_kb(60) == 1024

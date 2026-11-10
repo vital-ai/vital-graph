@@ -31,7 +31,7 @@ from .compile_cache import SparqlCompileCache
 from .generator import invalidate_datatype_cache
 from . import db_provider
 from .uri_limit import check_uri
-from .space_names import space_id_for_prefix
+from .space_names import space_id_for_prefix, space_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,24 @@ async def _apply_join_order(conn, gen) -> None:
             return          # the advice carries the order (planner_ext.RETIRED)
         # A qtree plan's written JOIN nesting IS the plan: always kept.
         await conn.execute("SET LOCAL join_collapse_limit = 1")
+
+
+async def _apply_work_mem(conn, gen) -> None:
+    """Raise `work_mem` for a statement that checks type sets by hashed
+    membership (`emit_traversal.hash_type_checks`, `issues/293`).
+
+    PostgreSQL hashes `x IN (subquery)` only when its estimate of the set fits
+    `hash_mem`; otherwise it rescans the subquery for every outer row. The
+    generator says how much the largest set needs (`gen.work_mem_kb`); this
+    raises the session's value to it and never lowers it. SET LOCAL via
+    set_config(..., true): the CALLER holds the transaction.
+    """
+    kb = getattr(gen, "work_mem_kb", None)
+    if kb:
+        await conn.execute(
+            "SELECT set_config('work_mem', GREATEST("
+            "pg_size_bytes(current_setting('work_mem')) / 1024, $1::bigint)::text || 'kB', true)",
+            int(kb))
 
 
 async def _apply_planner_advice(conn, gen) -> None:
@@ -295,6 +313,37 @@ def _concrete_subjects_from_update_ops(ops) -> set:
             if isinstance(q.subject, URINode):
                 subjects.add(q.subject.value)
     return subjects
+
+
+def _may_change_an_edge_vitaltype(ops) -> bool:
+    """Could this SPARQL update change an edge's vitaltype? (`issues/293`)
+
+    The update's edge sync runs AFTER it, in its own transaction, and
+    WHERE-bound subjects are left to a background repair, so between the two
+    `edge.edge_type_uuid` can disagree with the quads. The update then dirties
+    the space's marker in its own transaction (`sync_edge_table`), and no query
+    reads an edge's type off the column until a reconcile.
+
+    Conservative: a quad pattern whose predicate is vitaltype or a VARIABLE
+    (which may bind it), and any operation this does not recognise. INSERT DATA
+    / DELETE DATA with other constant predicates, the common case, is not.
+    """
+    from ..jena_sparql.jena_types import (
+        URINode, UpdateDataInsert, UpdateDataDelete, UpdateModify, UpdateDeleteWhere,
+    )
+    vt = "http://vital.ai/ontology/vital-core#vitaltype"
+    for op in ops or []:
+        if isinstance(op, (UpdateDataInsert, UpdateDataDelete, UpdateDeleteWhere)):
+            quads = list(getattr(op, 'quads', []))
+        elif isinstance(op, UpdateModify):
+            quads = list(getattr(op, 'delete_quads', [])) + list(getattr(op, 'insert_quads', []))
+        else:
+            return True
+        for q in quads:
+            p = q.predicate
+            if not isinstance(p, URINode) or p.value == vt:
+                return True
+    return False
 
 
 def _has_where_bound_delete(ops) -> bool:
@@ -935,6 +984,18 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     registered_storage_key(space_id)
                     or await allocate_storage_key(conn),
                 )
+                # A new space's edge types are maintained from its first write
+                # (`sync_edge_table`, `issues/293`). Only while its edge table
+                # is still EMPTY: a row written over existing objects marks
+                # nothing, and those are left to the migration.
+                from .sync_edge_table import mark_new_space_edge_types
+                try:
+                    empty = await conn.fetchval(
+                        f"SELECT NOT EXISTS (SELECT 1 FROM {space_prefix(space_id)}_edge)")
+                except Exception:
+                    empty = False
+                if empty:
+                    await mark_new_space_edge_types(conn, space_id)
             return True
         except Exception as e:
             logger.error("create_space_metadata(%s) failed: %s", space_id, e)
@@ -2536,7 +2597,9 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # (`pattern_verdict`), which takes a REPEATABLE READ
                 # transaction of our own. Inside a caller's transaction there
                 # is none to be had: plan again without verdicts.
-                if gen.ok and getattr(gen, 'verdict_guard', None) and conn.is_in_transaction():
+                if gen.ok and (getattr(gen, 'verdict_guard', None)
+                               or getattr(gen, 'edge_types_guard', None)) \
+                        and conn.is_in_transaction():
                     gen = await generate_sql(
                         cr, space_id, conn=conn,
                         multi_vector_config=kwargs.get('multi_vector_config'),
@@ -2612,6 +2675,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                             await _apply_read_fence(conn)
                             await conn.execute("SET LOCAL enable_sort = off")
                             await _apply_join_order(conn, gen)
+                            await _apply_work_mem(conn, gen)
                             await _apply_planner_advice(conn, gen)
                             rows = await conn.fetch(sql)
                     else:
@@ -2620,6 +2684,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         async with conn.transaction():
                             await _apply_read_fence(conn)
                             await _apply_join_order(conn, gen)
+                            await _apply_work_mem(conn, gen)
                             await _apply_planner_advice(conn, gen)
                             rows = await conn.fetch(sql)
                     return rows
@@ -2627,15 +2692,28 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 sql = await _prepare(gen)
                 _stage = "execute"
                 rows = None
-                if getattr(gen, 'verdict_guard', None):
+                if getattr(gen, 'verdict_guard', None) or getattr(gen, 'edge_types_guard', None):
                     # The guard and the query in ONE snapshot: a write that
                     # lands between them is either visible to both or to
                     # neither. Read only, so it can never fail to serialise.
                     from .pattern_verdict import guard_holds
+                    from .sync_edge_table import edge_types_marked
+
+                    async def _guards_hold():
+                        vg = getattr(gen, 'verdict_guard', None)
+                        eg = getattr(gen, 'edge_types_guard', None)
+                        if vg and not await guard_holds(conn, vg[0], vg[1:]):
+                            return False
+                        if eg:
+                            ok, at = await edge_types_marked(conn, eg[0])
+                            if not ok or at != eg[1]:
+                                return False
+                        return True
                     async with conn.transaction(isolation='repeatable_read', readonly=True):
-                        if await guard_holds(conn, gen.verdict_guard[0], gen.verdict_guard[1:]):
+                        if await _guards_hold():
                             await _apply_read_fence(conn)
                             await _apply_join_order(conn, gen)
+                            await _apply_work_mem(conn, gen)
                             await _apply_planner_advice(conn, gen)
                             rows = await conn.fetch(sql)
                     if rows is None:
@@ -3006,6 +3084,16 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                 "for %s (%s) — proceeding UNSERIALISED against "
                                 "concurrent entity and frame writes (issues/174)",
                                 space_id, _le)
+                        # A WHERE walk may check type sets by hashed membership,
+                        # which needs the work_mem the generator asked for, or
+                        # PostgreSQL rescans each set per row (`issues/293`).
+                        await _apply_work_mem(conn, gen)
+                        # An edge vitaltype this update may change is synced
+                        # only after it: unmark the space IN this transaction,
+                        # so no query sees the new quads with the old column.
+                        if _may_change_an_edge_vitaltype(cr.update_ops):
+                            from .sync_edge_table import dirty_edge_types
+                            await dirty_edge_types(conn, space_id)
                         await conn.execute(sql)
 
                     # Keep {space}_edge in sync — this write path bypasses the

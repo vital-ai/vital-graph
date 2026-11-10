@@ -263,6 +263,11 @@ class EmitContext:
         # cheaper than the default (`issues/293`). The executor then keeps the
         # written order (`join_collapse_limit = 1`). Shared like the flag above.
         self._fixed_join_order = [False]
+        # The largest type set a hop-wise walk checks as a HASHED set
+        # (`emit_traversal.hash_type_checks`), in rows; 0 when none. The
+        # executor raises `work_mem` for the statement so PostgreSQL can hash
+        # it. Shared like the flags above.
+        self._hashed_set_rows = [0]
         # BGPs written in a HEURISTIC order (`reorder_joins`, not the model's),
         # by their first alias. Under the statement-wide pin above they are kept
         # as written, which is how a heuristic order got frozen (`issues/310`):
@@ -490,6 +495,13 @@ class EmitContext:
         self._needs_ordered_scan[0] = bool(value)
 
     @property
+    def hashed_set_rows(self) -> int:
+        return self._hashed_set_rows[0]
+
+    def note_hashed_set(self, rows: int) -> None:
+        self._hashed_set_rows[0] = max(self._hashed_set_rows[0], int(rows))
+
+    @property
     def fixed_join_order(self) -> bool:
         return self._fixed_join_order[0]
 
@@ -534,6 +546,7 @@ class EmitContext:
         ctx._needs_ordered_scan = self._needs_ordered_scan
         # Share the fixed-join-order flag (issues/293)
         ctx._fixed_join_order = self._fixed_join_order
+        ctx._hashed_set_rows = self._hashed_set_rows
         ctx.heuristic_orders = self.heuristic_orders
         # Share unresolved-variable records so nested contexts (EXISTS bodies,
         # UNION branches) surface to the same post-generation check

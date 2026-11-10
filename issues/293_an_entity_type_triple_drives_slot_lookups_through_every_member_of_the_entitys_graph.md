@@ -1431,3 +1431,235 @@ in both, using the same +/-15% work rule and exact plan shape.
 * W3C/DAWG conformance: 1,532 passed, 12 skipped, 88 xfailed.
 * Full `tests/api`: 718 passed, 9 skipped.
 * Performance tier: as above.
+
+### 2026-11-09 (later still): type checks as hashed sets on the hop-wise walk
+
+The cold-cache limit above. After the walk, each surviving row checked its
+entity, frame and edge types with a per-row probe each. The planner checks
+each type once against the whole set.
+
+`emit_traversal.hash_type_checks` rewrites a hop's TYPE CHECK as membership:
+
+    (mv0.dest_node_uuid IN (SELECT subject_uuid FROM quad
+                            WHERE predicate_uuid = P AND object_uuid = O
+                              AND context_uuid = C)) IS TRUE
+
+PostgreSQL hashes the uncorrelated set once and keeps it across the laterals'
+rescans. `IS TRUE` keeps it a hashed SubPlan; without it the sublink is
+pulled back up into a per-row semi-join.
+
+* **Exact.** A qualifying table has constant predicate, object and
+  (optionally) context, one correlation `T.subject_uuid = A.col`, and nothing
+  else read from it. `subject_uuid` is unique for a fixed (predicate, object,
+  context), since it is a prefix of the quad key, so the join was already a
+  semi-join. A variable bound at `T.subject_uuid` is rebound to `A.col`.
+* **Never the driving end's constraint or filters.** Those drive the walk and
+  are hoisted. The far end's constraint is a check like any other.
+* **Size-gated, because an unhashed set is a catastrophe, not a slow plan.**
+  If PostgreSQL's own estimate of the set does not fit `hash_mem`, it rescans
+  the set per outer row. Measured: work_mem 4 MB (the RDS default), a
+  300,000-row set, the statement timed out at 60 s. So:
+  * a set is hashed only up to 300,000 rows by its stats count
+    (`HASHED_SET_MAX_ROWS`);
+  * the statement carries `GenerateResult.work_mem_kb`, which is twice the
+    largest set at 64 bytes a row (37.5 MB for 300,000);
+  * the executor RAISES the session's work_mem to that for the statement and
+    never lowers it (`_apply_work_mem`, `set_config(..., true)`). That covers
+    the three read paths and the update path. An update's WHERE result
+    reaches the update's own result through `emit_update.UPDATE_WORK_MEM_KB`.
+* **Worth it only for a large walk.** A set is hashed only when the driving
+  end holds at least 10% of its rows (`HASHED_SET_MIN_PROBE_FRACTION`).
+  Hashing builds the whole set up front, and ungated it cost the selective
+  walks: rating_999 20 -> 115 ms, state_ca 543 -> 1,288 ms. Gated, those keep
+  their probes (parity with `814faceb`).
+* **Not under a LIMIT.** A page's probes stop at the LIMIT.
+
+Measured on `mql_edge_count` (lead 100k, today's generator), first run after
+a PostgreSQL restart and then warm, same count:
+
+| | `814faceb` | hashed |
+|---|---|---|
+| first run after restart | 14.1 s, 388k reads | 5.8 s, 249k reads |
+| warm | 2.4-3.2 s, 2.37M buffers | 1.1-1.2 s, 1.38M buffers |
+
+`high_rated_edge_count`: 8.5 s / 341k reads -> 4.1 s / 238k reads after a
+restart, and 1.8 s -> 1.3 s warm (2.11M -> 1.42M buffers).
+
+The 900,000-row edge-type set (`Edge_hasKGFrame`) hashed by hand took
+`mql_edge_count` further: 5.3 s and 199k reads cold, 1.45 s warm. That size is
+above the gate, because it would need ~110 MB of work_mem per statement. The
+4M-row `Edge_hasKGSlot` set is far past it. Edge types could instead be read
+from `edge.edge_type_uuid`. That absorption was reverted once
+(`edge_type_absorbable`, `issues/182`: zero rows on 8 tests), and it is the
+remaining lever.
+
+**Deterministic hop order.** `partition_hops` walked a Python `set` of
+aliases, so each hop's tables came out in string-hash order, which Python
+randomises per process. The same query emitted three different SQL texts in
+four runs, and under a pinned join order that means different plans. It now
+walks the plan's table order.
+
+#### Performance tier (`814faceb` against hashed type checks + deterministic hop order)
+
+The same persisted before/after as before (`--persist`, one volume, compared
+directly on the 125 benches measured in both runs).
+
+* Plan shapes: no change except `frame_nesting.edge_hops_index_only`, which
+  differs only in its index name (a fresh space prefix).
+* Eight `paging_fence_coverage[*range*-specific-100k]` pages read +22-38%
+  against `814faceb`. They are LIMIT pages, so no set is hashed; the change is
+  the deterministic order. Rerun on `814faceb` with only `PYTHONHASHSEED`
+  changed, `p25-range-tight-specific-100k` read 2,119,408 / 1,946,942 /
+  2,547,392 fenced buffers: its cost was a hash draw. The deterministic order
+  reads 2,654,388 under every seed. That is the figure `ae6fece8` measured in
+  both runs that morning (and 12,428,679 for `p100-range-tight`). So it is
+  against one draw, not against where the code stood.
+* Sorting by alias name happens to read 2,119,408. But "q11" sorts before
+  "q4", so that is another arbitrary order that is good on this bench. Plan
+  order is kept: it is what the flat path writes. Choosing the order within a
+  hop on cost is the follow-up, if these pages matter.
+
+#### Tests (vg test stack rebuilt for this code)
+
+* Unit: 6,303 passed, 9 skipped. This includes `TestTypeChecksAsHashedSets`,
+  `TestTheHashedWorkMem`, `TestApplyWorkMem`, and the transaction-scope guard
+  now covering `_apply_work_mem`.
+* Integration: 1,000 passed, 2 skipped, 3 xfailed.
+* W3C/DAWG conformance: 1,532 passed, 12 skipped, 88 xfailed.
+* Full `tests/api`: 718 passed, 9 skipped.
+
+### 2026-11-09: edge types read off `edge.edge_type_uuid` (exact, maintained)
+
+The edge-type checks are the sets too large to hash: `Edge_hasKGFrame` is
+900,000 rows and `Edge_hasKGSlot` 4.08M on lead 100k. Every edge row already
+carries `edge_type_uuid`, filled from its vitaltype, so a check correlated to
+`mv.edge_uuid` can be a column test on the row the walk read. That row is
+index-only with the covering endpoint indexes.
+
+**A first version was gated on a per-space verdict and dropped.** That version
+had a maintenance scan comparing every edge row with its vitaltype quads,
+trusted only under the write log. It was exact, but the economics were wrong.
+On lead 100k the scan took 210 s. On a space taking writes the verdict goes
+stale with the first write, and per `refresh_type_agreement` busy spaces
+almost never hold one. So it would have cost scans everywhere and fired only
+on quiet spaces.
+
+**The column is made exact by construction instead.** A KG graph object has
+exactly one vitaltype, by the ontology. The column was wrong in only two ways:
+
+* `sync_edge_table_after_insert` and `backfill_edge_table` used `ON CONFLICT DO
+  NOTHING`. An edge typed in a later write than its endpoints kept a NULL, and
+  a SPARQL update that changed an edge's vitaltype kept the old type. Both now
+  `DO UPDATE SET edge_type_uuid` (`EDGE_TYPE_ON_CONFLICT`). The SELECT is
+  `DISTINCT ON (edge, graph)`, because `DO UPDATE` may not touch a row twice in
+  one statement, and a malformed edge with two sources would otherwise fail
+  the write. Endpoints are left as they were.
+* The SPARQL UPDATE path syncs the edge table AFTER the update, in its own
+  transaction, and leaves WHERE-bound subjects to a background repair. Object
+  and quad writes sync in the same transaction as the quads, and those are
+  exact.
+
+**The marker.** `edge_type_maintained` holds `(space_id, dirty_gen, clean_gen)`;
+a space is MARKED when the two are equal.
+
+* A new space is marked when its metadata row is written, if its edge table
+  is still empty.
+* A SPARQL update that may change an edge's vitaltype bumps `dirty_gen` in its
+  own transaction (`_may_change_an_edge_vitaltype`). That covers a vitaltype
+  predicate, a variable predicate, and any op it does not recognise (CLEAR,
+  DROP, LOAD).
+* `reconcile_edge_types` rewrites every wrong or stale type from the quads,
+  then sets `clean_gen` to the `dirty_gen` it started from, and only if
+  nothing dirtied the space meanwhile. It is used by the maintenance job for
+  dirtied spaces, and by `scripts/migrate_edge_types_maintained.py` for
+  existing ones (dry run by default).
+* The generator reads the marker and returns
+  `GenerateResult.edge_types_guard = (space, dirty_gen)`. The executor
+  re-checks it in the REPEATABLE READ snapshot the query runs in, alongside
+  the verdict guard, and plans again without the column if the mark moved.
+  So a query never sees an update's quads with the column from before it.
+  Inside a caller's transaction, and inside an update's WHERE, the column is
+  not read.
+
+There is no recurring scan and no write-log dependency, and it works on busy
+spaces. The only cost is one counter bump on the rare update that touches a
+vitaltype (or CLEAR/DROP/LOAD), and one reconcile per such space.
+
+The store does not enforce the ontology. A raw SPARQL update could give an
+edge a second vitaltype; the column would hold the last one written. That is
+data outside the model.
+
+**The rewrite** (`emit_traversal.absorb_edge_types`) is unchanged from the
+first version. It applies only to a pure type check whose predicate is
+`vitaltype` (read from `leaf_terms`, not SQL), whose one correlation is
+`<edge>.edge_uuid`, and whose edge table is pinned to the same graph
+constant. The result is `mv.edge_type_uuid = <T>`. It applies on the hop-wise
+walk and NOT under a LIMIT: on a page the column test made PostgreSQL drive
+the edge from `(edge_type_uuid, source)` through the heap and lose the early
+sort that stops at the page (`rating_990_edge_page` 18 -> 114 ms, 12,680 ->
+126,678 buffers, same rows).
+
+**Measured** (lead 100k, today's generator, first run after a PostgreSQL
+restart, then warm; same counts, 49,775 / 35,003). These are with the column
+read; the SQL is the same whichever mechanism allows it:
+
+| query | hashed only | + edge types off the column |
+|---|---|---|
+| mql_edge_count, first run | 16.9 s, 249k reads | 2.4 s, 102k reads |
+| mql_edge_count, warm | 2.0-2.7 s, 1.38M buffers | 0.54-0.63 s, 0.88M |
+| high_rated_edge_count, first run | 8.4 s, 238k reads | 2.3 s, 124k reads |
+| high_rated_edge_count, warm | 1.9 s, 1.42M | 0.72-0.91 s, 1.06M |
+
+The lead 100k corpus against `814faceb`, with the LIMIT gate and the column
+read, 5-run warm medians, all 16 queries with identical rows:
+
+| query | `814faceb` | now |
+|---|---:|---:|
+| mql_edge_count | 3,274 ms | 748 ms |
+| high_rated_edge_count | 3,273 ms | 1,052 ms |
+| state_ca_edge_count | 510 ms | 291 ms |
+| rating_990_edge_count | 112 ms | 70 ms |
+| rating_999_edge_count | 20 ms | 18 ms |
+| the five pages | | parity |
+
+**Tests.**
+
+* `tests/integration/test_edge_types_read_off_the_edge_table.py`:
+  * a new space is marked, the rewrite fires, and the count equals the
+    count without it;
+  * an edge typed after its endpoints gets its type and the space stays
+    marked;
+  * a SPARQL update retyping an edge unmarks the space, the answer stays
+    right, and a reconcile re-marks it;
+  * an unmarked space keeps the quad checks until reconciled;
+  * a page is left alone;
+  * through the server's executor, a mark that moves after planning makes
+    it plan again without the column, with the same answer.
+* `tests/unit/sparql_sql/test_edge_types_are_maintained.py`: which updates
+  unmark, and the write path's conflict rule.
+
+The integration suite with the rewrite forced on passed, but the rewrite
+fired on no test: only large chains are walked hop-wise, and on small data
+the semi-join split is kept. The test above uses 2,000 bare entities to get
+there.
+
+**Deploy.** Startup creates `edge_type_maintained` (`init_tables`). New spaces
+are marked from creation. Existing spaces need
+`scripts/migrate_edge_types_maintained.py --all --apply`, run as the app role:
+one UPDATE over each edge table, then the mark. Until then they keep the quad
+checks.
+
+**Migration on lead 100k** (planner volume): `migrate_edge_types_maintained.py
+--space sp_lead_synth_100k --apply` created the marker table, reconciled
+5,277,000 edge rows in 106.8 s (0 fixed; the space was loaded consistently)
+and marked the space. A re-run reports nothing to mark.
+
+The corpus with the space marked, against `814faceb`, 3-run warm medians, all 16
+queries with identical rows. The counts that read the column:
+mql_edge_count 4,315 -> 557 ms, high_rated_edge_count 2,935 -> 870 ms,
+state_ca_edge_count 624 -> 340 ms, rating_990_edge_count 90 -> 76 ms,
+rating_999_edge_count 18 -> 17 ms. Every other query is level or faster
+(l1_by_state 684 -> 704 ms is the only one slower, within noise).
+
+**Suites** (vg test stack rebuilt for this code): unit 6,312, integration
+1,006, conformance 1,532, API 718, all passing.

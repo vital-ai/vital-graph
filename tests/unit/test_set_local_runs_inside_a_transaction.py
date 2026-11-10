@@ -24,7 +24,8 @@ ROOT = Path(vitalgraph.__file__).parent
 
 # Helpers whose docstring makes the caller own the transaction. Each one's call
 # sites are checked in turn.
-CALLER_HOLDS_THE_TRANSACTION = {"_apply_read_fence", "_apply_join_order", "_apply_planner_advice"}
+CALLER_HOLDS_THE_TRANSACTION = {"_apply_read_fence", "_apply_join_order", "_apply_planner_advice",
+                                "_apply_work_mem"}
 
 
 def _set_local_calls(tree):
@@ -113,3 +114,31 @@ def test_the_guard_catches_the_analytics_shape():
         "        await conn.execute(\"SET LOCAL statement_timeout = '120s'\")\n")
     (node, parents), = _set_local_calls(tree)
     assert not _in_transaction_block(parents)
+
+
+class TestApplyWorkMem:
+    """`issues/293`: a statement whose walk checks type sets by hashed
+    membership gets work_mem raised to what the generator asked, never lowered;
+    without it PostgreSQL rescans an unhashable set per row."""
+
+    def _run(self, kb):
+        import asyncio
+        from types import SimpleNamespace
+        from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _apply_work_mem
+        calls = []
+
+        class Conn:
+            async def execute(self, sql, *args):
+                calls.append((sql, args))
+        asyncio.run(_apply_work_mem(Conn(), SimpleNamespace(work_mem_kb=kb)))
+        return calls
+
+    def test_raises_to_the_generators_figure_never_below_the_session(self):
+        calls = self._run(37_500)
+        assert len(calls) == 1
+        sql, args = calls[0]
+        assert "set_config('work_mem', GREATEST(" in sql and sql.rstrip().endswith("true)")
+        assert args == (37_500,)
+
+    def test_nothing_hashed_sets_nothing(self):
+        assert self._run(None) == [] and self._run(0) == []

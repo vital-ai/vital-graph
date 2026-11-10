@@ -343,6 +343,12 @@ from .default_graph import DEFAULT_GRAPH_URI as _FALLBACK_DEFAULT_GRAPH
 from .uri_limit import check_uri
 
 
+#: work_mem (kB) each update WHERE asked for (`GenerateResult.work_mem_kb`),
+#: collected for the update's own result. Set by the generator's UPDATE
+#: dispatch; None outside it.
+UPDATE_WORK_MEM_KB = __import__("contextvars").ContextVar("update_work_mem_kb", default=None)
+
+
 async def update_to_sql(
     ops: List[UpdateOp],
     space_id: str,
@@ -783,6 +789,11 @@ async def _modify_sql(
         )
     where_sql = where_result.sql
     var_map = where_result.var_map
+    # The WHERE may check type sets by hashed membership, which needs the
+    # statement's work_mem raised (`issues/293`); the update's result says so.
+    _wm = UPDATE_WORK_MEM_KB.get()
+    if _wm is not None and getattr(where_result, "work_mem_kb", None):
+        _wm.append(where_result.work_mem_kb)
 
     stmts: List[str] = []
 
