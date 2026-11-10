@@ -14,17 +14,22 @@
 #      outside the cluster; no "read-only transaction" (25006) error, and the
 #      outage reported
 # On another cluster built from these manifests: LOCAL_PORT= skips 5, 7 and 8's
-# client side (no local port), and EXPECT_SHARED_BUFFERS sets the expected size.
+# client side (no local port), EXPECT_SHARED_BUFFERS sets the expected size, and
+# DB names the database (default sparql_sql_graph).
 set -e
 NS=vitalgraph-db; CL=vitalgraph-pg; POOLER=vitalgraph-pg-pooler-rw
+DB="${DB:-sparql_sql_graph}"
 LOCAL_PORT="${LOCAL_PORT-5443}"
 EXPECT_SHARED_BUFFERS="${EXPECT_SHARED_BUFFERS:-512MB}"
 # The app role's password: CloudNativePG's generated secret for the database owner.
 PW="$(kubectl -n $NS get secret ${CL}-app -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-pooler_conn() { echo "host=127.0.0.1 port=$LOCAL_PORT dbname=sparql_sql_graph user=vitalgraph_user sslmode=${1:-require} connect_timeout=${2:-5}"; }
+pooler_conn() { echo "host=127.0.0.1 port=$LOCAL_PORT dbname=$DB user=vitalgraph_user sslmode=${1:-require} connect_timeout=${2:-5}"; }
 have_client() { [ -n "$LOCAL_PORT" ] && [ -n "$PW" ] && command -v psql >/dev/null; }
 primary() { kubectl -n $NS get cluster $CL -o jsonpath='{.status.currentPrimary}'; }
-psql_on() { kubectl -n $NS exec "$1" -c postgres -- psql -X -At -d sparql_sql_graph -c "$2"; }
+psql_on() { kubectl -n $NS exec "$1" -c postgres -- psql -X -At -d "$DB" -c "$2"; }
+# Several statements in ONE session, each its own -c (session state carries over).
+psql_session() { p="$1"; shift; for q in "$@"; do set -- "$@" -c "$q"; shift; done
+  kubectl -n $NS exec "$p" -c postgres -- psql -X -At -d "$DB" "$@"; }
 fail=0; check() { if [ "$2" = "$3" ]; then echo "  PASS  $1"; else echo "  FAIL  $1: got [$2] want [$3]"; fail=1; fi; }
 
 P="$(primary)"; echo "primary: $P"
@@ -46,10 +51,12 @@ zones="$(kubectl -n $NS get pods -l cnpg.io/cluster=$CL,cnpg.io/podRole=instance
 check "instances in two zones" "$zones" "2"
 echo "4. advice applied"
 psql_on "$P" "CREATE TABLE IF NOT EXISTS vgp_t1 (a int, b int); CREATE TABLE IF NOT EXISTS vgp_t2 (a int, b int);" >/dev/null
-psql_on "$P" "/*vg:plan 1
+# The report is per session: read it in the session that planned the statement
+# (in a fresh one it is empty, and the check always saw 0).
+check "size item applied" "$(psql_session "$P" "/*vg:plan 1
 size k0 1234 x y
-*/ EXPLAIN SELECT 1 FROM vgp_t1 x JOIN vgp_t2 y ON x.a = y.a" >/dev/null
-check "size item applied" "$(psql_on "$P" "SELECT vg_planner_last_report()" | grep -c 'k0.*applied')" "1"
+*/ EXPLAIN SELECT 1 FROM vgp_t1 x JOIN vgp_t2 y ON x.a = y.a" "SELECT vg_planner_last_report()" \
+  | grep -c 'k0.*applied')" "1"
 psql_on "$P" "DROP TABLE vgp_t1, vgp_t2" >/dev/null
 echo "5. failover"
 psql_on "$P" "CREATE TABLE IF NOT EXISTS vgp_failover (id int, at timestamptz DEFAULT now()); INSERT INTO vgp_failover VALUES (1)" >/dev/null
