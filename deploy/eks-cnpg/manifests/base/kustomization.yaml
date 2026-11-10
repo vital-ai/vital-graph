@@ -4,6 +4,7 @@ namespace: vitalgraph-db
 resources:
   - namespace.yaml
   - cluster.yaml
+  - pooler.yaml
 configMapGenerator:
   # Rendered by deploy/postgres/render_config.py --format sql (render_all.sh); never edit.
   - name: vitalgraph-pg-bootstrap

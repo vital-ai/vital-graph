@@ -3,8 +3,8 @@
 # 12,000 IOPS / 500 MiB/s, a synchronous standby in another zone, backups to S3.
 #
 # Placeholders to set per install (all marked REPLACE_ME): the ECR image references
-# (pinned by digest), the S3 bucket, the IAM role for backups, the subnets the
-# internal NLB may use. Nothing here has been applied to AWS yet.
+# (pinned by digest), the S3 bucket, the IAM role for backups, the subnets and
+# security groups the pooler's internal NLB may use (pooler-eks.yaml). Nothing here has been applied to AWS yet.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
@@ -16,3 +16,4 @@ resources:
 patches:
   - path: cluster-size.yaml
   - path: cluster-eks.yaml
+  - path: pooler-eks.yaml

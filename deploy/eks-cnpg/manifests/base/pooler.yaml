@@ -1,0 +1,55 @@
+# PgBouncer in front of the primary, in session mode. Every client (the app on ECS,
+# its maintenance job, operator scripts) connects HERE, not to the primary.
+#
+# Why: on a switchover the old primary is demoted in place, and an address that
+# points at "the primary" through an NLB keeps sending new connections to it for
+# ~30 s, each failing with "read-only transaction" (SQLSTATE 25006; measured on AWS
+# 2026-11-08; reproduced on kind with a Service that follows the primary 30 s late:
+# 27 such errors in 30 s). With the pooler, the NLB's targets are the PgBouncer pods,
+# which never change role, and PgBouncer reaches the primary through the operator's
+# rw Service, which follows it at once. On kind a switchover through it gave no
+# read-only errors, only ~3-8 s of refused connections while the primary changed
+# (the same as connecting directly).
+#
+# SESSION mode, deliberately: VitalGraph relies on session state. The signal
+# listener holds LISTEN; SPARQL updates take pg_advisory_xact_lock; asyncpg caches
+# prepared statements per connection; the executor uses SET LOCAL / set_config(...,
+# true). Transaction pooling would break the first and silently mis-route the others.
+#
+# Pool size: in session mode each client connection holds a server connection, so
+# default_pool_size must cover every app task's two pools (DB_POOL_SIZE plus
+# DB_INTERNAL_POOL_SIZE) plus the maintenance job and operator scripts, under the
+# role's connection limit (per overlay).
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: vitalgraph-pg-pooler-rw
+spec:
+  cluster: {name: vitalgraph-pg}
+  instances: 2
+  type: rw
+  pgbouncer:
+    poolMode: session
+    parameters:
+      max_client_conn: "1000"
+      default_pool_size: "30"
+      # After one failed server login PgBouncer refuses new clients for this long.
+      # The 15 s default doubled the switchover's outage on kind (17.8 s against
+      # 7.8 s direct). 1 s: back to the primary as soon as there is one.
+      server_login_retry: "1"
+      # TLS only, end to end: without it PgBouncer's client side accepts a plain
+      # connection even though the database refuses one.
+      client_tls_sslmode: require
+  template:
+    metadata:
+      labels:
+        app: vitalgraph-pg-pooler
+    spec:
+      # One per zone, like the instances.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {cnpg.io/poolerName: vitalgraph-pg-pooler-rw}
+      containers: []

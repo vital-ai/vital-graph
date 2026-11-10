@@ -75,7 +75,7 @@ The loader (`VitalGraphConfig`) resolves each key in order:
 | Variable | Default | Description |
 |---|---|---|
 | `{P}_BACKEND_TYPE` | `sparql_sql` | The only backend; retired values are rejected (`issues/241`) |
-| `{P}_DB_HOST` | `localhost` | PostgreSQL hostname |
+| `{P}_DB_HOST` | `localhost` | PostgreSQL hostname. On RDS, the instance endpoint. On EKS (`deploy/eks-cnpg`), the PgBouncer pooler's internal NLB, never the primary: see "Clients connect through the pooler" in `deploy/eks-cnpg/README.md`, and set `PGSSLMODE=require` |
 | `{P}_DB_PORT` | `5432` | PostgreSQL port |
 | `{P}_DB_NAME` | `sparql_sql_graph` | Database name |
 | `{P}_DB_USERNAME` | `postgres` | Database user |

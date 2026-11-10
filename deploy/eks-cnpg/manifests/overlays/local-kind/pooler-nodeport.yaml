@@ -1,0 +1,17 @@
+# The pooler on the laptop's localhost:5443 (kind maps node port 30543 there;
+# local/kind-config.yaml), so a client connects as the app does to the NLB on EKS:
+# through PgBouncer, which follows the primary through a failover or switchover.
+apiVersion: v1
+kind: Service
+metadata:
+  name: vitalgraph-pg-pooler-local
+  namespace: vitalgraph-db
+spec:
+  type: NodePort
+  selector:
+    cnpg.io/poolerName: vitalgraph-pg-pooler-rw
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      nodePort: 30543

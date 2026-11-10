@@ -36,22 +36,8 @@ spec:
     metadata:
       annotations:
         eks.amazonaws.com/role-arn: arn:aws:iam::REPLACE_ME:role/vitalgraph-pg-backup
-  # The app (ECS, outside the cluster) reaches the PRIMARY through an internal NLB.
-  managed:
-    services:
-      additional:
-        - selectorType: rw
-          serviceTemplate:
-            metadata:
-              name: vitalgraph-pg-rw-nlb
-              annotations:
-                service.beta.kubernetes.io/aws-load-balancer-type: external
-                service.beta.kubernetes.io/aws-load-balancer-scheme: internal
-                service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
-                # private subnets in the SAME three AZs as the node pool, so the NLB
-                # reaches the primary in whichever zone it is after a failover
-                service.beta.kubernetes.io/aws-load-balancer-subnets: REPLACE_ME
-            spec:
-              type: LoadBalancer
+  # The app (ECS, outside the cluster) connects through the POOLER's internal NLB
+  # (pooler-eks.yaml), not to the primary: an NLB on the primary's rw Service kept
+  # sending new connections to a demoted primary for ~30 s after a switchover.
   # Huge pages as on RDS (huge_pages = on) need them reserved on the node; until
   # the node pool reserves them the canonical 'try' applies.

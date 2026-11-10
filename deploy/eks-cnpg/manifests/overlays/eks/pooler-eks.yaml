@@ -1,0 +1,47 @@
+# EKS: the internal NLB in front of the POOLER (base/pooler.yaml), which the app on
+# ECS connects through. It replaces an NLB on the primary's rw Service, which kept
+# sending new connections to a demoted primary for ~30 s after a switchover.
+#
+# The pooler's pods run on the database nodes (nodepool.yaml), one per zone. Set
+# default_pool_size from the real pools: tasks x (DB_POOL_SIZE + DB_INTERNAL_POOL_SIZE)
+# + the maintenance job + scripts, per pooler pod, under the role's connection limit.
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: vitalgraph-pg-pooler-rw
+spec:
+  pgbouncer:
+    parameters:
+      default_pool_size: "80"
+  serviceTemplate:
+    metadata:
+      annotations:
+        service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+        service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+        # private subnets in the node pool's zones
+        service.beta.kubernetes.io/aws-load-balancer-subnets: REPLACE_ME
+        # admits 5432 only from the app's security group (and the operators')
+        service.beta.kubernetes.io/aws-load-balancer-security-groups: REPLACE_ME
+        service.beta.kubernetes.io/aws-load-balancer-manage-backend-security-group-rules: "true"
+        service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval: "5"
+        service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout: "3"    # <= the interval
+        service.beta.kubernetes.io/aws-load-balancer-healthcheck-healthy-threshold: "2"
+        service.beta.kubernetes.io/aws-load-balancer-healthcheck-unhealthy-threshold: "2"
+        service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: deregistration_delay.timeout_seconds=10
+        # Either pooler pod serves a client in either zone; losing a zone's pod does
+        # not leave that zone's NLB address without a target.
+        service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+        # Pooled connections live long; the 350 s default would drop idle ones.
+        service.beta.kubernetes.io/aws-load-balancer-listener-attributes.TCP-5432: tcp.idle_timeout.seconds=3600
+    spec:
+      type: LoadBalancer
+      loadBalancerClass: eks.amazonaws.com/nlb
+  template:
+    spec:
+      nodeSelector:
+        vitalgraph.ai/role: database
+      tolerations:
+        - key: vitalgraph.ai/database
+          operator: Exists
+          effect: NoSchedule
+      containers: []

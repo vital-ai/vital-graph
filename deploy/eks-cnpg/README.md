@@ -14,10 +14,56 @@ was edited instead.
 | path | what |
 |---|---|
 | `images/vg-planner/` | the extension as a CloudNativePG **image volume**: built and regression-tested inside the 18.4 operand image, a `FROM scratch` image with `lib/`, `share/extension/` and `BUILD-INFO` |
-| `manifests/base/` | the `Cluster`: 2 instances, one per zone, synchronous commit to the standby (`dataDurability: preferred`, as RDS Multi-AZ keeps writing while it replaces a standby), switchover-first updates, `vg_planner` + pgvector + PostGIS image volumes, bootstrap SQL (role and database settings, extensions) |
-| `manifests/overlays/eks/` | production shape: EKS Auto Mode node pool (Graviton r7g/r8g.2xlarge, tainted), gp3 with 12,000 IOPS / 500 MiB/s, Barman Cloud backups to S3 with an IAM role, an internal NLB for the ECS app. **Every AWS value is a `REPLACE_ME` placeholder; nothing has been applied.** |
-| `manifests/overlays/local-kind/` | the same Cluster, small, for a local kind cluster |
-| `local/` | `kind-config.yaml` (two workers in two zones), `up.sh` (cluster, operator 1.30.1, images, overlay), `verify.sh` (extensions, parameters, standby, advice applied, a failover drill) |
+| `manifests/base/` | the `Cluster`: 2 instances, one per zone, synchronous commit to the standby (`dataDurability: preferred`, as RDS Multi-AZ keeps writing while it replaces a standby), switchover-first updates, `vg_planner` + pgvector + PostGIS image volumes, bootstrap SQL (role and database settings, extensions); the PgBouncer `Pooler` every client connects through (below) |
+| `manifests/overlays/eks/` | production shape: EKS Auto Mode node pool (Graviton r7g/r8g.2xlarge, tainted), gp3 with 12,000 IOPS / 500 MiB/s, Barman Cloud backups to S3 with an IAM role, the internal NLB for the ECS app **in front of the pooler** (`pooler-eks.yaml`). **Every AWS value is a `REPLACE_ME` placeholder; nothing has been applied.** |
+| `manifests/overlays/local-kind/` | the same Cluster and pooler, small, for a local kind cluster; the pooler on `localhost:5443` |
+| `local/` | `kind-config.yaml` (two workers in two zones, the pooler's port), `up.sh` (cluster, operator 1.30.1, images, overlay), `verify.sh` (extensions, parameters, standby, advice applied, a failover drill, the pooler, TLS only, a switchover drill through the pooler) |
+
+## Clients connect through the pooler
+
+The app on ECS, its maintenance job and operator scripts connect to a PgBouncer
+`Pooler` (`manifests/base/pooler.yaml`), never to the primary. The internal NLB
+points at the pooler.
+
+**Why.** On a switchover the old primary is demoted in place. An NLB pointed
+at the primary keeps sending new connections to it for ~30 s, and each one
+fails with `read-only transaction` (SQLSTATE 25006). That was measured on AWS,
+and reproduced on kind with a Service that follows the primary 30 s late: 27
+such errors in 30 s. The pooler's pods never change role, so the NLB's lag no
+longer matters, and PgBouncer reaches the primary through the operator's rw
+Service, which follows it at once.
+
+| probe: a fresh connection + INSERT every 0.5 s, switchover in the middle | read-only errors | refused connections |
+|---|---:|---:|
+| straight to the primary, behind an address that lags 30 s | 27 | the 30 s window |
+| through the pooler, default settings | 0 | 17.8 s |
+| through the pooler, `server_login_retry` 1 s | 0 | 3-8 s |
+
+**Settings that matter:**
+* `poolMode: session`. VitalGraph needs session state: the signal listener
+  holds LISTEN, SPARQL updates take `pg_advisory_xact_lock`, asyncpg caches
+  prepared statements per connection, and the executor uses `SET LOCAL`.
+  Transaction pooling would break these.
+* `server_login_retry: 1`. After one failed server login PgBouncer refuses new
+  clients for this long. The 15 s default doubled the switchover outage.
+* `client_tls_sslmode: require`. Without it PgBouncer accepts plain
+  connections even though the database refuses them. Set `PGSSLMODE=require`
+  on the app task as well: asyncpg's default `prefer` would otherwise allow a
+  fallback to plain text.
+* `default_pool_size` (per overlay). In session mode each client connection
+  holds a server connection. Size it from the real pools: tasks x
+  (`DB_POOL_SIZE` + `DB_INTERNAL_POOL_SIZE`), plus the maintenance job and
+  scripts, per pooler pod, under the role's connection limit.
+* Two pooler pods, one per zone, on the database nodes. On EKS the NLB is
+  cross-zone, health-checked every 5 s, with a 10 s deregistration delay and
+  a 3,600 s idle timeout, because pooled connections live long.
+
+On a switchover the signal listener's session is closed, as a direct
+connection's would be, and it reconnects.
+
+`local/verify.sh` drills it. It runs a switchover (by patching the Cluster's
+`status.targetPrimary`, no plugin needed) while a probe connects and writes
+every 0.5 s through the pooler, and it FAILS on any read-only error.
 
 ## Local
 
