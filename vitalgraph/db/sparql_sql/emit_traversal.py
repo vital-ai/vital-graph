@@ -209,7 +209,12 @@ def partition_hops(plan: PlanV2, chain: TraversalChain,
 
     # Label every non-link table by the hop it reaches, walking THROUGH other
     # non-link tables but never through a link (a link is where a hop ends).
-    for alias in known:
+    #
+    # In the PLAN's table order, not the set's: iterating `known` ordered each
+    # hop's tables by string hash, which Python randomises per process, so one
+    # query emitted different SQL from one process to the next (three texts in
+    # four runs, `issues/293`) — and under a pinned join order, different plans.
+    for alias in by_alias:
         if alias in hop_of:
             continue
         seen, frontier, reached = {alias}, [alias], set()
