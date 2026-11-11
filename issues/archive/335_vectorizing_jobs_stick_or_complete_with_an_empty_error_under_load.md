@@ -1,6 +1,6 @@
 # 335: Under load, segmentation jobs stick in 'vectorizing' or complete with an empty error
 
-## Status: FIXED 2026-11-10. Integration tests on the test database (7 new; 38 related tests also pass) and the unit suite pass. Not yet run under a real bulk load.
+## Status: FIXED 2026-11-10 in `41eab77c`, and verified under a bulk load on a local install rebuilt with it (below). CI green.
 
 Reported from a knowledge-base load into a local install (0.0.49, one worker,
 sparql_sql backend). The checks behind the report were read-only.
@@ -87,9 +87,27 @@ database:
 * `drop_graph` and SPARQL `DROP GRAPH` delete the graph's job rows and keep
   another graph's.
 
-**NOT run:** the reported bulk load itself. It should show no
-`acquire timed out` from segmentation, no stuck or empty-error jobs, and
-segmentation throughput at least as before.
+**Bulk load, 2026-11-10**, on the install that reported it, rebuilt with
+`41eab77c`:
+
+* **The sweep:** 11 s after the restart it completed all 13 stale
+  `vectorizing` jobs (4 in one space, 9 in another). Only the old
+  empty-error `completed` rows remain, as intended.
+* **A load of 731 items,** with documents segmented and the rest indexed.
+  From its start, the log shows:
+  * 0 segmentation `acquire timed out`;
+  * 0 `Vectorization task failed`;
+  * 0 `failed to update status`;
+  * no job left `vectorizing`.
+
+  | | before the fix | with the fix |
+  |---|---:|---:|
+  | load | 598 s | 247 s |
+  | searchable after the last write | 180 s | 3 s |
+  | event-loop stall warnings | 512 (a longer, busier window) | 28 |
+* **The graph drop:** dropping the run's graphs removed their job rows.
+* **Caveat:** the server was quieter than during the reported runs, with
+  fewer suites running at the same time.
 
 ## Existing rows
 
