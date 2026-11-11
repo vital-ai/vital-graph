@@ -42,6 +42,16 @@ WHICH VALUE IS KEPT
 
 Dry-run by default. `--apply` performs the delete in ONE transaction and then
 recomputes the stats tables, whose per-predicate counts the delete invalidates.
+
+A DRY RUN IS A READ-ONLY SESSION (`default_transaction_read_only`), so it
+cannot write whatever it reaches. `--subjects` lists each affected subject with
+its values. One space per run, so a deployment with two spaces is two runs.
+
+AGAINST A MANAGED DATABASE: `--ssl require` (or set PGSSLMODE) where the
+server refuses unencrypted connections, and the session's `statement_timeout`
+is raised to `--statement-timeout` (15 min, the maintenance fence). The
+search groups every value of each property per subject across the whole
+space; a role default of 60 s cancels it on a large space.
 """
 from __future__ import annotations
 
@@ -54,6 +64,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from vitalgraph.db.pool import set_sql  # noqa: E402
 from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables  # noqa: E402
 from vitalgraph.db.sparql_sql.space_names import space_prefix  # noqa: E402
 from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys  # noqa: E402
@@ -137,7 +148,24 @@ def _victims_sql(space_id: str, order_by: str) -> str:
     """
 
 
-async def repair(conn, space_id: str, graph_uri: str, apply: bool) -> int:
+async def _show_subjects(conn, space_id: str, p_uuid, g_uuid, subject_uuids) -> None:
+    """Each subject's URI and every value it holds for the predicate."""
+    p = space_prefix(space_id)
+    rows = await conn.fetch(
+        f"SELECT ts.term_text AS s, array_agg(t.term_text ORDER BY t.term_text) AS v "
+        f"  FROM {p}_rdf_quad q "
+        f"  JOIN {p}_term t ON t.term_uuid = q.object_uuid "
+        f"  JOIN {p}_term ts ON ts.term_uuid = q.subject_uuid "
+        f" WHERE q.predicate_uuid = $1 AND q.context_uuid = $2 "
+        f"   AND q.subject_uuid = ANY($3::uuid[]) "
+        f" GROUP BY ts.term_text ORDER BY min(t.term_text)",
+        p_uuid, g_uuid, list(subject_uuids))
+    for r in rows:
+        logger.info("      %s  %s", r["s"], " | ".join(r["v"]))
+
+
+async def repair(conn, space_id: str, graph_uri: str, apply: bool,
+                 show_subjects: bool = False) -> int:
     g_uuid = await _graph_uuid(conn, space_id, graph_uri)
     if g_uuid is None:
         logger.error("graph %s not found in %s_term", graph_uri, space_id)
@@ -151,9 +179,11 @@ async def repair(conn, space_id: str, graph_uri: str, apply: bool) -> int:
             continue
 
         rows = await conn.fetch(_victims_sql(space_id, order_by), p_uuid, g_uuid)
-        subjects = len({r["subject_uuid"] for r in rows})
+        subjects = {r["subject_uuid"] for r in rows}
         logger.info("  %-32s %5d redundant row(s) across %4d subject(s) — keeping %s",
-                    uri.rsplit('#', 1)[-1], len(rows), subjects, rule)
+                    uri.rsplit('#', 1)[-1], len(rows), len(subjects), rule)
+        if show_subjects and subjects:
+            await _show_subjects(conn, space_id, p_uuid, g_uuid, subjects)
         total += len(rows)
 
         if apply and rows:
@@ -173,6 +203,15 @@ async def main() -> int:
     ap.add_argument("--graph", required=True, help="graph URI")
     ap.add_argument("--apply", action="store_true",
                     help="perform the delete (default is a dry run)")
+    ap.add_argument("--subjects", action="store_true",
+                    help="list each affected subject and its values")
+    ap.add_argument("--ssl", default=os.environ.get("PGSSLMODE") or "prefer",
+                    choices=["disable", "allow", "prefer", "require",
+                             "verify-ca", "verify-full"],
+                    help="SSL mode (default: PGSSLMODE, else prefer)")
+    ap.add_argument("--statement-timeout", default="15min",
+                    help="the session's statement_timeout (default 15min; "
+                         "a role default of 60s cancels the search on a large space)")
     args = ap.parse_args()
     # ONE space: a repeated --space used to keep only the last, silently.
     if args.space and len(args.space) > 1:
@@ -184,16 +223,29 @@ async def main() -> int:
     import asyncpg
     conn = await asyncpg.connect(host=args.host, port=args.port,
                                  database=args.database, user=args.user,
-                                 password=args.password or None)
-    await load_storage_keys(conn)
+                                 password=args.password or None, ssl=args.ssl)
     try:
+        # SET after connecting rather than as startup parameters: a PgBouncer
+        # in front of the database refuses those.
+        await conn.execute(set_sql("statement_timeout", args.statement_timeout))
+        await conn.execute(set_sql("application_name", "repair_duplicate_single_valued"))
+        if not args.apply:
+            # A dry run cannot write, whatever it reached.
+            await conn.execute(set_sql("default_transaction_read_only", "on"))
+        await load_storage_keys(conn)
+        logger.info("connected: %s / %s as %s (ssl=%s, statement_timeout=%s, read only=%s)",
+                    await conn.fetchval("SELECT coalesce(inet_server_addr()::text, 'local socket')"),
+                    await conn.fetchval("SELECT current_database()"), args.user, args.ssl,
+                    await conn.fetchval("SHOW statement_timeout"),
+                    await conn.fetchval("SHOW default_transaction_read_only"))
         mode = "APPLY" if args.apply else "DRY RUN"
         logger.info("%s — space=%s graph=%s", mode, args.space, args.graph)
         if args.apply:
             # One transaction: a half-collapsed subject is still unreadable, so
             # there is no useful partial outcome to preserve.
             async with conn.transaction():
-                n = await repair(conn, args.space, args.graph, apply=True)
+                n = await repair(conn, args.space, args.graph, apply=True,
+                                 show_subjects=args.subjects)
                 # The delete changes per-predicate row counts, and the planner
                 # reads those. Recomputing inside the same transaction keeps the
                 # stats consistent with the quads for any reader.
@@ -201,7 +253,8 @@ async def main() -> int:
                     await recompute_stats_tables(conn, args.space)
             logger.info("removed %d row(s); stats tables recomputed", n)
         else:
-            n = await repair(conn, args.space, args.graph, apply=False)
+            n = await repair(conn, args.space, args.graph, apply=False,
+                                 show_subjects=args.subjects)
             logger.info("would remove %d row(s). Re-run with --apply.", n)
     finally:
         await conn.close()

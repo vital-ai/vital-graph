@@ -1904,6 +1904,91 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             self.logger.error("upsert_objects_atomic failed: %s", describe_exception(e))
             return False
 
+    async def create_objects_atomic(self, space_id: str, graph_id: str,
+                                    entity_uris: List[str], check_uris: List[str],
+                                    objects: List[GraphObject],
+                                    conn=None) -> Tuple[BackendOperationResult, List[str]]:
+        """Create entity graphs ONLY if none of `check_uris` exists, in ONE locked transaction.
+
+        Returns `(result, existing)`. A non-empty `existing` means nothing was
+        written: those URIs were already subjects in the graph.
+
+        Entity create was "does any of these exist?" and then `store_objects`,
+        two operations with nothing between them. Two clients that each read
+        not-found and created the same entity at once were BOTH accepted, and
+        since the timestamps are stamped per request the entity ended with two
+        values of each -- which the graph read cannot build, so the entity was
+        missing from every graph read from then on. Reported from production
+        with 27 entities in that state, each two creates 5 ms to 1.8 s apart.
+
+        Same shape as `upsert_objects_atomic`: the entity lock FIRST, then the
+        existence check, then the write, all in one transaction. The second of
+        two racing creates waits on the lock, then finds the first one's
+        committed subjects and is refused. The lock is the upsert's, so a create
+        and an upsert of one entity serialize too.
+        """
+        import time as _time
+        from rdflib import URIRef
+        from ..db.sparql_sql.entity_lock import lock_entities
+
+        try:
+            _t0 = _time.monotonic()
+            graph_uri = URIRef(graph_id)
+
+            def _build_quads():
+                out = []
+                for obj in objects:
+                    try:
+                        for s, p, o in obj.to_triples():
+                            out.append((s, p, o, graph_uri))
+                    except Exception:
+                        pass  # surfaces as a count mismatch, as in store_objects
+                return out
+
+            # Built before the lock is taken, so the lock is held for the check
+            # and the write only.
+            quads = await asyncio.to_thread(_build_quads)
+            existing: List[str] = []
+            inserted = 0
+            async with _write_conn(self.backend.db_impl.connection_pool, conn) as conn:
+                async with conn.transaction():
+                    _p0 = _time.monotonic()
+                    await lock_entities(conn, entity_uris)
+                    _p1 = _time.monotonic()
+                    existing = sorted(await _present(conn, space_id, graph_id,
+                                                     list(dict.fromkeys(check_uris))))
+                    if not existing and quads:
+                        inserted = await self.backend.add_rdf_quads_batch_bulk(
+                            space_id, quads, connection=conn)
+                        if inserted == 0:
+                            # Raised so the transaction rolls back rather than
+                            # committing a create that stored nothing.
+                            raise RuntimeError(
+                                f"0 quads inserted out of {len(quads)}")
+            if existing:
+                self.logger.info(
+                    "create_objects_atomic: refused, %d of %d URI(s) already exist "
+                    "(lock %.3fs)", len(existing), len(check_uris), _p1 - _p0)
+                return (BackendOperationResult(
+                    success=False, message=f"{len(existing)} URI(s) already exist"),
+                    existing)
+            self._schedule_analyze_aux_tables(space_id)
+            self.logger.info(
+                "⏱️  create_objects_atomic: %.3fs (%d objects, %d quads; lock %.3fs)",
+                _time.monotonic() - _t0, len(objects), inserted, _p1 - _p0)
+            return (BackendOperationResult(
+                success=True,
+                message=f"Successfully stored {len(objects)} objects ({inserted} quads)",
+                data={"stored_count": len(objects), "quad_count": inserted}), [])
+        except EntityLockTimeout as e:
+            self._lock_timeout_failed("create_objects_atomic", e, len(objects))
+            return (BackendOperationResult(
+                success=False, message=f"lock timeout on entity {e.uri}",
+                error="lock timeout"), [])
+        except Exception as e:
+            self.logger.error("create_objects_atomic failed: %s", describe_exception(e))
+            return (BackendOperationResult(success=False, message=str(e), error=str(e)), [])
+
     async def update_entity_graph(self, space_id: str, graph_id: str,
                                    entity_uri: str,
                                    insert_quads: List[tuple],

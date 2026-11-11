@@ -240,9 +240,36 @@ class KGEntityCreateProcessor:
                         created_uris=[]
                     )
             
-            # Store all objects
-            self.logger.debug(f"🔥 CALLING BACKEND.STORE_OBJECTS with {len(objects)} objects")
-            result = await self.backend.store_objects(space_id, graph_id, objects)
+            # The check above is the EARLY answer, on a plain read. It is not the
+            # guarantee: two concurrent creates of one entity both pass it. The
+            # atomic path re-checks under the entity lock in the transaction
+            # that writes, so the second create is refused. Both used to be
+            # accepted, leaving two values of each timestamp, which made the
+            # entity unreadable as a graph.
+            _atomic = getattr(self.backend, 'create_objects_atomic', None)
+            if _atomic is not None:
+                result, existing = await _atomic(
+                    space_id, graph_id, sorted(entity_uris_set), all_uris, objects)
+                if existing:
+                    clash = [u for u in existing if u in entity_uris_set]
+                    self.logger.warning(
+                        "❌ create refused under the entity lock: %s",
+                        f"entity {clash[0]} already exists" if clash
+                        else f"{len(existing)} sub-object URI(s) already exist")
+                    return EntityCreateResponse(
+                        status=OperationStatus.ALREADY_EXISTS,
+                        message=(f"Entity {clash[0]} already exists - cannot create in 'create' mode"
+                                 if clash else
+                                 f"Cannot create entity graph: {len(existing)} sub-object URIs already exist"),
+                        created_count=0,
+                        created_uris=[]
+                    )
+            else:
+                # A backend without the atomic path is NOT serialized, and says so.
+                self.logger.warning(
+                    "create: backend %s has no atomic create; two concurrent creates "
+                    "of one entity can both be accepted", type(self.backend).__name__)
+                result = await self.backend.store_objects(space_id, graph_id, objects)
             _t2 = _time.monotonic()
             self.logger.info(f"⏱️  CREATE_IMPL store_objects: {_t2 - _t1:.3f}s ({len(objects)} objects)")
             self.logger.info(f"⏱️  CREATE_IMPL total: {_t2 - _t0:.3f}s")
