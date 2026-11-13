@@ -938,12 +938,15 @@ def _infer_function_type(expr: ExprFunction, registry: TypeRegistry) -> TypedExp
             VG_TEXT_SEARCH, VG_HYBRID_SEARCH,
             VG_MULTI_VECTOR_SIMILARITY, VG_MULTI_VECTOR_NEARBY,
             VG_GEO_DISTANCE, VG_WITHIN_RADIUS,
-            VG_TRIGRAM_SIMILARITY,
+            VG_TRIGRAM_SIMILARITY, VG_FUZZY_MATCH,
         )
+        # Every score function must be here. One left out is typed as an
+        # untyped literal, so ORDER BY collates its numeric column and
+        # PostgreSQL refuses the statement (`issues/337`, vg:fuzzyMatch).
         if iri in (VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY,
                    VG_TEXT_SEARCH, VG_HYBRID_SEARCH,
                    VG_MULTI_VECTOR_SIMILARITY, VG_MULTI_VECTOR_NEARBY,
-                   VG_GEO_DISTANCE, VG_TRIGRAM_SIMILARITY):
+                   VG_GEO_DISTANCE, VG_TRIGRAM_SIMILARITY, VG_FUZZY_MATCH):
             return TypedExpr(
                 sql="", sparql_type="literal",
                 datatype=f"{XSD}double",

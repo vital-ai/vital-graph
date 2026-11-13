@@ -191,12 +191,14 @@ async def _resolve_single_fuzzy(
 
     Attempts MinHash LSH path first; falls back to pg_trgm if no mapping.
     """
-    from vitalgraph.vectorization.fuzzy_mapping_manager import resolve_any_fuzzy_mapping
+    from vitalgraph.vectorization.fuzzy_mapping_manager import resolve_space_fuzzy_index
 
-    rule = await resolve_any_fuzzy_mapping(conn, space_id)
+    # The space's whole index: every enabled mapping, as populate and auto-sync
+    # build it. Reading only the first mapping here ignored the rest (issues/339).
+    index = await resolve_space_fuzzy_index(conn, space_id)
 
-    if rule is not None:
-        scored = await _fuzzy_via_minhash(conn, space_id, fr, rule)
+    if index is not None:
+        scored = await _fuzzy_via_minhash(conn, space_id, fr, index)
         if scored:
             return scored
         # MinHash LSH found no candidates — fall back to pg_trgm
@@ -214,6 +216,9 @@ async def _fuzzy_via_minhash(
     rule,
 ) -> List[Tuple[str, float]]:
     """MinHash LSH band lookup + RapidFuzz scoring.
+
+    `rule` is the space's `SpaceFuzzyIndex`: its MinHash settings, and the
+    mappings that say which literals are a candidate's names.
 
     Uses the same 3-step candidate retrieval as the entity registry:
       Step 1: Primary LSH band lookup
@@ -299,16 +304,9 @@ async def _fuzzy_via_minhash(
     if not candidate_ids:
         return []
 
-    # Fetch candidate names from term table
-    all_property_uris = rule.primary_uris + rule.alias_uris + rule.include_uris
-    if not all_property_uris:
-        # Default: hasName
-        all_property_uris = ["http://vital.ai/ontology/vital-core#hasName"]
-
-    quad_table = f"{space_prefix(space_id)}_rdf_quad"
-    term_table = f"{space_prefix(space_id)}_term"
-
-    # Candidate UUIDs are strings; convert for query
+    # A candidate's names are read exactly as they were indexed, so a value of
+    # a mapped property on a subject its mapping does not cover is not scored.
+    from vitalgraph.vectorization.fuzzy_populator import fetch_scoped_names
     import uuid as _uuid
     candidate_uuid_objs = []
     for cid in candidate_ids:
@@ -320,23 +318,10 @@ async def _fuzzy_via_minhash(
     if not candidate_uuid_objs:
         return []
 
-    # Fetch names for candidates
-    rows = await conn.fetch(
-        f"SELECT q.subject_uuid, obj_t.term_text "
-        f"FROM {quad_table} q "
-        f"JOIN {term_table} pred_t ON pred_t.term_uuid = q.predicate_uuid "
-        f"JOIN {term_table} obj_t ON obj_t.term_uuid = q.object_uuid AND obj_t.term_type = 'L' "
-        f"WHERE q.subject_uuid = ANY($1) AND pred_t.term_text = ANY($2)",
-        candidate_uuid_objs, all_property_uris,
-    )
-
-    # Group names by subject
-    subject_names: Dict[str, List[str]] = {}
-    for row in rows:
-        uuid_str = str(row["subject_uuid"])
-        text = row["term_text"]
-        if text and text.strip():
-            subject_names.setdefault(uuid_str, []).append(text.strip())
+    subject_names: Dict[str, List[str]] = {
+        str(u): names for u, names in
+        (await fetch_scoped_names(conn, space_id, rule, candidate_uuid_objs)).items()
+    }
 
     # Score each candidate
     query_names = [fr.search_text]

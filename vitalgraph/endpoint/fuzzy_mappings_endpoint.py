@@ -68,6 +68,13 @@ class FuzzyMappingsEndpoint:
         except Exception:
             logger.exception("Error releasing connection")
 
+    @staticmethod
+    async def _settings_note(conn, space_id: str, dto):
+        from ..vectorization.fuzzy_mapping_manager import (
+            resolve_space_fuzzy_index, unused_settings_note,
+        )
+        return unused_settings_note(await resolve_space_fuzzy_index(conn, space_id), dto)
+
     # ------------------------------------------------------------------
     # Route handlers
     # ------------------------------------------------------------------
@@ -111,7 +118,9 @@ class FuzzyMappingsEndpoint:
                 phonetic_bonus=body.phonetic_bonus,
             )
             dto = await manager.get_mapping(mapping_id)
-            return FuzzyMappingOut(**dto.to_dict(), status=OperationStatus.CREATED)
+            note = await self._settings_note(conn, space_id, dto)
+            return FuzzyMappingOut(**dto.to_dict(), status=OperationStatus.CREATED,
+                                   **({"message": note} if note else {}))
         finally:
             await self._release(conn)
 
@@ -141,7 +150,9 @@ class FuzzyMappingsEndpoint:
                     mapping_id=mapping_id, mapping_type="", index_name="",
                     status=OperationStatus.NOT_FOUND, message="Fuzzy mapping not found",
                 )
-            return FuzzyMappingOut(**dto.to_dict(), status=OperationStatus.UPDATED)
+            note = await self._settings_note(conn, space_id, dto)
+            return FuzzyMappingOut(**dto.to_dict(), status=OperationStatus.UPDATED,
+                                   **({"message": note} if note else {}))
         finally:
             await self._release(conn)
 
@@ -224,30 +235,43 @@ class FuzzyMappingsEndpoint:
                     mapping_id=mapping_id, entities_indexed=0,
                     status=OperationStatus.NOT_FOUND, message="Fuzzy mapping not found",
                 )
-            index_name = dto.index_name
+            # The space has ONE fuzzy index, built from every enabled mapping,
+            # so populating any mapping rebuilds that index. Checked here, not
+            # in the background task: a caller must not get OK for a population
+            # that cannot index anything (issues/338).
+            from ..vectorization.fuzzy_mapping_manager import resolve_space_fuzzy_index
+            index = await resolve_space_fuzzy_index(conn, space_id)
         finally:
             await self._release(conn)
 
+        if index is None:
+            return PopulateResponse(
+                mapping_id=mapping_id, entities_indexed=0,
+                status=OperationStatus.NO_OP,
+                message="No enabled fuzzy mapping in this space has a property; nothing to index",
+            )
+        covered = [s.mapping_id for s in index.scopes]
+        note = ("" if dto.enabled and mapping_id in covered else
+                f" Mapping {mapping_id} is not part of it"
+                f" ({'disabled' if not dto.enabled else 'no properties'}).")
+
         # Spawn background task (acquires its own connection)
-        asyncio.ensure_future(self._run_populate(space_id, mapping_id, index_name))
+        asyncio.ensure_future(self._run_populate(space_id, mapping_id))
 
         return PopulateResponse(
             mapping_id=mapping_id, entities_indexed=0,
             status=OperationStatus.OK,
-            message=f"Fuzzy population started for mapping {mapping_id}",
+            message=(f"Fuzzy population started: rebuilding this space's fuzzy index "
+                     f"from enabled mappings {covered}.{note}"),
         )
 
-    async def _run_populate(
-        self, space_id: str, mapping_id: int, index_name: str,
-    ):
+    async def _run_populate(self, space_id: str, mapping_id: int):
         """Background worker: populate the fuzzy index."""
         db_impl = self.app_impl.db_impl
         conn = await db_impl.connection_pool.acquire()
         try:
             from ..vectorization.fuzzy_populator import populate_fuzzy_index
-            count = await populate_fuzzy_index(
-                conn, space_id, index_name=index_name,
-            )
+            count = await populate_fuzzy_index(conn, space_id)
             logger.info(
                 "Fuzzy populate complete: %s/mapping_%s — %d entities",
                 space_id, mapping_id, count,

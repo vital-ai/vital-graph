@@ -858,6 +858,22 @@ class TestXSDCasts:
         sql = expr_to_sql(expr, ctx)
         assert "TEXT" in sql
 
+    @pytest.mark.parametrize("target", ["double", "decimal", "integer", "float", "dateTime"])
+    def test_a_cast_of_a_computed_number_matches_text_not_the_number(self, target):
+        """A BIND on the numeric lane holds the number itself in its main column.
+        The lexical checks applied `~` to it, which PostgreSQL refuses ("numeric
+        ~ unknown") even on a branch that never runs (issues/337)."""
+        ctx = _make_ctx({"x": "numeric"})
+        sql = expr_to_sql(_func("", _var("x"), function_iri=f"{XSD}{target}"), ctx)
+        assert "(v0)::text ~" in sql
+        assert "v0 ~" not in sql.replace("(v0)::text ~", "")
+        _assert_valid_sql_fragment(sql)
+
+    def test_a_cast_of_a_stored_term_keeps_its_text_column(self):
+        ctx = _make_ctx({"x": "text"})
+        sql = expr_to_sql(_func("", _var("x"), function_iri=f"{XSD}double"), ctx)
+        assert "v0 ~" in sql and "::text" not in sql
+
     def test_xsd_decimal(self):
         ctx = _make_ctx({"x": "full"})
         expr = _func("", _var("x"), function_iri=f"{XSD}decimal")

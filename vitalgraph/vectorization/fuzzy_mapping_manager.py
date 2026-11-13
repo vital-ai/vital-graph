@@ -72,140 +72,122 @@ class FuzzyMappingDTO:
 
 
 # ---------------------------------------------------------------------------
-# Resolve helper (used by populator and SPARQL resolve)
+# The space's fuzzy index (used by the populator, auto-sync and SPARQL resolve)
 # ---------------------------------------------------------------------------
+#
+# A space has ONE pair of band tables, `{space}_fuzzy_band` and
+# `{space}_fuzzy_phonetic_band`, keyed by subject; nothing in them records which
+# mapping produced a row. So the space has one fuzzy index, and every enabled
+# mapping contributes to it: a mapping says which properties of which subjects
+# are names. Populate, auto-sync and `vg:fuzzyMatch` all read that same union.
+#
+# Before `issues/338`/`339` each read a different subset: the query and
+# auto-sync used only the FIRST enabled mapping, and populate looked one up as
+# `kgentity` whatever the mapping it was asked to populate, so a second mapping
+# was silently ignored and a non-kgentity mapping could never be populated.
 
-RESOLVE_FUZZY_MAPPING_SQL = """
-SELECT m.mapping_id, m.enabled, m.shingle_k, m.num_perm, m.lsh_threshold, m.phonetic_bonus
+RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+
+# Which subjects a mapping type covers, by their exact rdf:type. A type not
+# listed (kgframe, kgslot, ...) has no type filter: every subject with one of
+# its properties is indexed.
+MAPPING_TYPE_RDF_TYPES = {
+    "kgentity": "http://vital.ai/ontology/haley-ai-kg#KGEntity",
+    "kgdocument": "http://vital.ai/ontology/haley-ai-kg#KGDocument",
+    "kgdocument_segment": "http://vital.ai/ontology/haley-ai-kg#KGDocument",
+}
+
+ENABLED_FUZZY_MAPPINGS_SQL = """
+SELECT m.mapping_id, m.mapping_type, m.shingle_k, m.num_perm, m.lsh_threshold,
+       m.phonetic_bonus, p.property_uri
 FROM {fuzzy_mapping} m
-WHERE m.index_name = $1
-  AND (
-    (m.mapping_type = $2 AND m.type_uri = $3)
-    OR (m.mapping_type = $2 AND m.type_uri IS NULL)
-  )
-ORDER BY m.type_uri IS NULL, m.mapping_id
-LIMIT 1
-"""
-
-FUZZY_MAPPING_PROPERTIES_SQL = """
-SELECT property_uri, property_role, ordinal
-FROM {fuzzy_mapping_property}
-WHERE mapping_id = $1
-ORDER BY ordinal, property_id
-"""
-
-# Simpler: get the first enabled mapping for a space (any type)
-RESOLVE_ANY_FUZZY_MAPPING_SQL = """
-SELECT m.mapping_id, m.mapping_type, m.type_uri, m.enabled,
-       m.shingle_k, m.num_perm, m.lsh_threshold, m.phonetic_bonus
-FROM {fuzzy_mapping} m
+JOIN {fuzzy_mapping_property} p ON p.mapping_id = m.mapping_id
 WHERE m.enabled = TRUE
-ORDER BY m.mapping_id
-LIMIT 1
+ORDER BY m.mapping_id, p.ordinal, p.property_id
 """
 
 
 @dataclass
-class FuzzyMappingRule:
-    """Resolved fuzzy mapping with its properties."""
+class FuzzyScope:
+    """One enabled mapping's contribution: these properties of these subjects."""
     mapping_id: int
-    enabled: bool = True
-    shingle_k: int = 3
-    num_perm: int = 64
-    lsh_threshold: float = 0.3
-    phonetic_bonus: float = 10.0
-    mapping_type: Optional[str] = None
-    include_uris: List[str] = field(default_factory=list)
-    primary_uris: List[str] = field(default_factory=list)
-    alias_uris: List[str] = field(default_factory=list)
+    rdf_type_uri: Optional[str]          # None: any subject
+    property_uris: List[str]
 
 
-async def resolve_fuzzy_mapping(
-    conn,
-    space_id: str,
-    index_name: str,
-    mapping_type: str,
-    type_uri: Optional[str] = None,
-) -> Optional[FuzzyMappingRule]:
-    """Resolve the fuzzy mapping rule for a given index + KG type.
+@dataclass
+class SpaceFuzzyIndex:
+    """The space's one fuzzy index: the union of its enabled mappings.
 
-    Precedence:
-    1. Specific type_uri match
-    2. Class-level match (type_uri IS NULL)
-    3. None (no fuzzy mapping configured)
+    The band tables hold one set of MinHash parameters, so the index takes them
+    from the enabled mapping with the lowest id (`settings_mapping_id`). Another
+    mapping's own parameters are stored but not used; the endpoint says so when
+    they differ.
     """
-    sql = RESOLVE_FUZZY_MAPPING_SQL.format(
+    settings_mapping_id: int
+    shingle_k: int
+    num_perm: int
+    lsh_threshold: float
+    phonetic_bonus: float
+    scopes: List[FuzzyScope]
+
+    @property
+    def property_uris(self) -> List[str]:
+        seen: Dict[str, None] = {}
+        for s in self.scopes:
+            for u in s.property_uris:
+                seen.setdefault(u, None)
+        return list(seen)
+
+
+def settings_of(row) -> tuple:
+    return (row["shingle_k"] or 3, row["num_perm"] or 64,
+            row["lsh_threshold"] or 0.3, row["phonetic_bonus"] or 10.0)
+
+
+async def resolve_space_fuzzy_index(conn, space_id: str) -> Optional[SpaceFuzzyIndex]:
+    """The space's fuzzy index, or None when no enabled mapping has a property."""
+    rows = await conn.fetch(ENABLED_FUZZY_MAPPINGS_SQL.format(
         fuzzy_mapping=f"{space_prefix(space_id)}_fuzzy_mapping",
-    )
-    row = await conn.fetchrow(sql, index_name, mapping_type, type_uri)
-    if row is None:
-        return None
-
-    rule = FuzzyMappingRule(
-        mapping_id=row["mapping_id"],
-        enabled=row["enabled"] if row["enabled"] is not None else True,
-        shingle_k=row["shingle_k"] or 3,
-        num_perm=row["num_perm"] or 64,
-        lsh_threshold=row["lsh_threshold"] or 0.3,
-        phonetic_bonus=row["phonetic_bonus"] or 10.0,
-    )
-
-    # Fetch child property rows
-    prop_sql = FUZZY_MAPPING_PROPERTIES_SQL.format(
         fuzzy_mapping_property=f"{space_prefix(space_id)}_fuzzy_mapping_property",
-    )
-    prop_rows = await conn.fetch(prop_sql, row["mapping_id"])
-    for pr in prop_rows:
-        uri = pr["property_uri"]
-        role = pr["property_role"]
-        if role == "primary":
-            rule.primary_uris.append(uri)
-        elif role == "alias":
-            rule.alias_uris.append(uri)
-        else:
-            rule.include_uris.append(uri)
-
-    return rule
-
-
-async def resolve_any_fuzzy_mapping(conn, space_id: str) -> Optional[FuzzyMappingRule]:
-    """Resolve the first enabled fuzzy mapping for a space (any type).
-
-    Used by vg_resolve when we just need to know if fuzzy is configured.
-    """
-    sql = RESOLVE_ANY_FUZZY_MAPPING_SQL.format(
-        fuzzy_mapping=f"{space_prefix(space_id)}_fuzzy_mapping",
-    )
-    row = await conn.fetchrow(sql)
-    if row is None:
+    ))
+    if not rows:
         return None
-
-    rule = FuzzyMappingRule(
-        mapping_id=row["mapping_id"],
-        enabled=row["enabled"],
-        shingle_k=row["shingle_k"] or 3,
-        num_perm=row["num_perm"] or 64,
-        lsh_threshold=row["lsh_threshold"] or 0.3,
-        phonetic_bonus=row["phonetic_bonus"] or 10.0,
-        mapping_type=row.get("mapping_type"),
+    scopes: Dict[int, FuzzyScope] = {}
+    for r in rows:
+        scope = scopes.get(r["mapping_id"])
+        if scope is None:
+            scope = scopes[r["mapping_id"]] = FuzzyScope(
+                mapping_id=r["mapping_id"],
+                rdf_type_uri=MAPPING_TYPE_RDF_TYPES.get(r["mapping_type"]),
+                property_uris=[])
+        if r["property_uri"] not in scope.property_uris:
+            scope.property_uris.append(r["property_uri"])
+    first = rows[0]
+    shingle_k, num_perm, lsh_threshold, phonetic_bonus = settings_of(first)
+    return SpaceFuzzyIndex(
+        settings_mapping_id=first["mapping_id"],
+        shingle_k=shingle_k, num_perm=num_perm,
+        lsh_threshold=lsh_threshold, phonetic_bonus=phonetic_bonus,
+        scopes=list(scopes.values()),
     )
 
-    # Fetch properties
-    prop_sql = FUZZY_MAPPING_PROPERTIES_SQL.format(
-        fuzzy_mapping_property=f"{space_prefix(space_id)}_fuzzy_mapping_property",
-    )
-    prop_rows = await conn.fetch(prop_sql, row["mapping_id"])
-    for pr in prop_rows:
-        uri = pr["property_uri"]
-        role = pr["property_role"]
-        if role == "primary":
-            rule.primary_uris.append(uri)
-        elif role == "alias":
-            rule.alias_uris.append(uri)
-        else:
-            rule.include_uris.append(uri)
 
-    return rule
+def unused_settings_note(index: Optional[SpaceFuzzyIndex], dto) -> Optional[str]:
+    """A message when `dto` is enabled but its MinHash settings are not the ones
+    the space's index uses, or None. Its properties are indexed either way."""
+    if index is None or dto is None or not dto.enabled:
+        return None
+    if dto.mapping_id == index.settings_mapping_id:
+        return None
+    mine = (dto.shingle_k, dto.num_perm, dto.lsh_threshold, dto.phonetic_bonus)
+    used = (index.shingle_k, index.num_perm, index.lsh_threshold, index.phonetic_bonus)
+    if mine == used:
+        return None
+    return (f"This space's fuzzy index uses the settings of mapping "
+            f"{index.settings_mapping_id} (shingle_k={used[0]}, num_perm={used[1]}, "
+            f"lsh_threshold={used[2]}, phonetic_bonus={used[3]}). This mapping's "
+            f"properties are indexed with those settings; its own are stored but not used.")
 
 
 # ---------------------------------------------------------------------------

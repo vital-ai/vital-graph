@@ -377,6 +377,20 @@ def _is_text_operand(expr, ctx: EmitContext) -> bool:
     return False
 
 
+def _cast_operand_is_text(expr, ctx: EmitContext) -> bool:
+    """True when an XSD cast's operand already reaches SQL as TEXT.
+
+    A variable is text unless it sits on a typed lane: a BIND of a number,
+    boolean or datetime holds the value itself in its main column. Anything
+    else that is not a plain string literal is a computed SQL value of its own
+    type. False only costs a `::text`, which is a no-op on text.
+    """
+    if isinstance(expr, ExprVar):
+        info = ctx.types.get(expr.var)
+        return bool(info and not info.typed_lane)
+    return _is_text_operand(expr, ctx)
+
+
 def _dt_sql(expr, ctx: EmitContext) -> Optional[str]:
     """SQL yielding this operand's datatype IRI, or None if it has no lane.
 
@@ -1036,6 +1050,17 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
                         bool_col = f"{info.sql_name}__bool"
             if text_col is None:
                 text_col = expr_to_sql(args[0], ctx)
+            # The lexical branches below apply `~` and CAST to `text_col` as
+            # TEXT. A computed value is not text: a BIND on the numeric,
+            # boolean or datetime lane stores its value itself in the main
+            # column, and an expression argument (`xsd:double(?a * 3)`) is
+            # whatever SQL type it computes. PostgreSQL type-checks every
+            # branch, taken or not, so `integer ~ '...'` failed the whole
+            # statement: any cast of a numeric BIND, `vg:fuzzyMatch` scores
+            # included (issues/337). Rendering the value as text first is a
+            # no-op on a text column.
+            if text_col and not _cast_operand_is_text(args[0], ctx):
+                text_col = f"({text_col})::text"
             if text_col:
                 # XSD lexical form regexes per type
                 _INT_RE = "'^[-+]?[0-9]+$'"

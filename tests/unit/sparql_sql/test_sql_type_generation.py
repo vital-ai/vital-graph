@@ -920,3 +920,32 @@ class TestInferAggregatorTypeExtra:
         expr = ExprAggregator(name="CUSTOM_AGG", distinct=False, expr=None)
         result = infer_expr_type(expr, self._reg())
         assert result.sparql_type == "literal"
+
+
+# ---------------------------------------------------------------------------
+# vg: score functions bound with BIND carry a numeric type (issues/337)
+# ---------------------------------------------------------------------------
+
+from vitalgraph.db.sparql_sql import vg_functions as _vg
+
+# Every vg: function that returns a SCORE. `emit_expressions._is_numeric_expr`
+# treats each of these as numeric in a FILTER; BIND must agree, or the bound
+# variable is typed as text while its SQL column is numeric, and ORDER BY then
+# collates it: "collations are not supported by type numeric". vg:fuzzyMatch
+# was missing from the BIND list, and that is exactly how it failed.
+_VG_SCORE_FUNCTIONS = [
+    _vg.VG_VECTOR_SIMILARITY, _vg.VG_VECTOR_NEARBY,
+    _vg.VG_MULTI_VECTOR_SIMILARITY, _vg.VG_MULTI_VECTOR_NEARBY,
+    _vg.VG_TEXT_SEARCH, _vg.VG_HYBRID_SEARCH,
+    _vg.VG_GEO_DISTANCE, _vg.VG_TRIGRAM_SIMILARITY,
+    _vg.VG_FUZZY_MATCH,
+]
+
+
+@pytest.mark.parametrize("iri", _VG_SCORE_FUNCTIONS, ids=lambda i: i.rsplit("#", 1)[1])
+def test_a_vg_score_function_infers_a_numeric_lane(iri):
+    expr = ExprFunction(name=iri, function_iri=iri,
+                        args=[ExprVar(var="e"), ExprValue(node=LiteralNode(value="x"))])
+    result = infer_expr_type(expr, TypeRegistry(aliases=AliasGenerator()))
+    assert result.datatype == f"{XSD}double"
+    assert result.typed_lane == "num"
