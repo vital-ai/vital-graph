@@ -38,6 +38,55 @@ def _uuid_expr(ctx, term_text: str, term_type: str, lang: str = None,
     return f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}"
 
 
+def _literal_lane_columns(sn: str, val: LiteralNode) -> list:
+    """`__num`, `__bool` and `__dt` for a VALUES literal, as a stored term gets them.
+
+    These were always NULL, so a number from VALUES projected correctly but took
+    no part in arithmetic or comparison: `VALUES ?a { 1 2 } FILTER(?a > 1)`
+    dropped every row and `BIND(?a + 1 AS ?y)` left `?y` unbound
+    (`issues/340`). The guards are `TypeRegistry.term_table_columns`'s, applied
+    to the constant: a datatype on the lane and a lexical form that parses, so
+    `"xyz"^^xsd:integer` stays off the numeric lane as it does when stored.
+
+    The guards run HERE, not as a SQL `CASE`: PostgreSQL folds a constant CAST
+    while planning, even on a branch that is never taken, so
+    `CASE WHEN 'xyz' ~ … THEN CAST('xyz' AS NUMERIC) END` fails the statement.
+    A lexical form that passes the regex but still cannot be read stays NULL
+    rather than risk that.
+    """
+    import re
+    from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
+    from .sql_type_generation import NUM_RE
+    dt = val.datatype or ""
+    lex = val.value or ""
+    text = f"'{_esc(lex)}'"
+    num = bool_ = ts = None
+    if dt in _NUMERIC_DATATYPES and re.fullmatch(NUM_RE.strip("'^$"), lex):
+        num = f"CAST({text} AS NUMERIC)"
+    elif dt == _BOOLEAN_DT and lex in ("true", "false", "1", "0"):
+        bool_ = "TRUE" if lex == "true" else "FALSE"
+    elif dt in _DATETIME_DATATYPES and _readable_timestamp(lex):
+        ts = f"CAST({text} AS TIMESTAMP)"
+    return [f"{num or 'NULL'}::numeric AS {sn}__num",
+            f"{bool_ or 'NULL'}::boolean AS {sn}__bool",
+            f"{ts or 'NULL'}::timestamp AS {sn}__dt"]
+
+
+def _readable_timestamp(lex: str) -> bool:
+    """True when PostgreSQL's TIMESTAMP input will accept this xsd:date/dateTime.
+
+    Stricter than the stored-term guard (`^\\d{4}-`), which is evaluated per row
+    at run time; a constant is cast while planning, so a form PostgreSQL rejects
+    must never reach the CAST.
+    """
+    from datetime import datetime
+    try:
+        datetime.fromisoformat(lex.replace("Z", "+00:00"))
+        return True
+    except ValueError:
+        return False
+
+
 def _all_values_resolved(ctx, rows, var) -> bool:
     """True when every row binds `var` to a constant that resolved to a uuid.
 
@@ -125,9 +174,7 @@ def emit_table(plan: PlanV2, ctx: EmitContext) -> str:
                 cols.append(f"{_uuid_expr(ctx, val.value, 'L', val.lang, val.datatype)} AS {sn}__uuid")
                 cols.append(f"{lang_val} AS {sn}__lang")
                 cols.append(f"{dt_val} AS {sn}__datatype")
-                cols.append(f"NULL::numeric AS {sn}__num")
-                cols.append(f"NULL::boolean AS {sn}__bool")
-                cols.append(f"NULL::timestamp AS {sn}__dt")
+                cols.extend(_literal_lane_columns(sn, val))
             elif isinstance(val, BNodeNode):
                 # `.label`, not `.value` — BNodeNode has no `value` field, so
                 # this raised AttributeError for any VALUES clause containing a

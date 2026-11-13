@@ -1,6 +1,46 @@
 # 340: Numbers bound with VALUES do not compute: arithmetic is unbound and comparisons drop every row
 
-## Status: OPEN. Found 2026-11-12; not investigated beyond the reproduction.
+## Status: FIXED 2026-11-13 (uncommitted); verified on the rebuilt vg test stack: unit 6,356 passed; W3C/DAWG conformance 1,532 passed (unchanged); `tests/api/test_values_numbers_api.py` 17 and `test_fuzzy_match_api.py` 14.
+
+## Cause (confirmed)
+
+As guessed below: `emit_table` emitted `NULL::numeric AS v__num` (and NULL
+`__bool`, `__dt`) for every literal, so the typed lanes that arithmetic,
+comparison and `YEAR()` read were empty. Projection reads the text column,
+which is why `?a` itself came back right.
+
+## Fix
+
+`emit_table._literal_lane_columns` fills the three lanes as
+`TypeRegistry.term_table_columns` does for a stored term: a numeric datatype
+with a number's lexical form goes on `__num`, `true/false/1/0` on `__bool`, and
+a readable date/dateTime on `__dt`. `"xyz"^^xsd:integer` stays off the lane, as
+it does when stored.
+
+The guard runs in Python, not as a SQL `CASE`. The first version emitted
+`CASE WHEN 'xyz' ~ … THEN CAST('xyz' AS NUMERIC) END`, and the API test failed
+with `invalid input syntax for type numeric: "xyz"`: PostgreSQL coerces a
+quoted constant while PARSING, before any branch is chosen. Checked directly:
+`SELECT CASE WHEN 'xyz' ~ '^[0-9]+$' THEN CAST('xyz' AS NUMERIC) END` raises.
+The same trap was live in the cast emitter (`issues/341`).
+
+## Why DAWG did not catch it
+
+Its VALUES cases with numbers only join, project or concatenate them
+(`property-path/values_and_path`, `bindings/inline01`, the `agg-groupconcat`
+cases). None compares or computes with one.
+
+## Tests
+
+- `tests/unit/sparql_sql/test_emit_table.py::TestValuesLiteralLanes`:
+  numbers, booleans, datetimes on their lanes; strings on none; and a
+  malformed number or date emits no CAST at all.
+- `tests/api/test_values_numbers_api.py::test_a_values_number_computes` (each
+  row of the table below, plus decimals, doubles, a malformed integer beside a
+  good one, and numeric ORDER BY) and
+  `test_a_values_boolean_and_datetime_compute`.
+
+## Original report
 
 Found while writing the API tests for `issues/337`.
 

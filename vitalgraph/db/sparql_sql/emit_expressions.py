@@ -1059,7 +1059,15 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
             # statement: any cast of a numeric BIND, `vg:fuzzyMatch` scores
             # included (issues/337). Rendering the value as text first is a
             # no-op on a text column.
-            if text_col and not _cast_operand_is_text(args[0], ctx):
+            #
+            # A CONSTANT always gets it too. A bare quoted literal is coerced
+            # while PostgreSQL parses, before any CASE can guard it, so
+            # `xsd:integer("5.0")` failed the statement with "invalid input
+            # syntax for type integer" instead of leaving `?y` unbound.
+            # `('5.0')::text` is an expression, and the planner drops the
+            # untaken branch before evaluating it (issues/341).
+            if text_col and (isinstance(args[0], ExprValue)
+                             or not _cast_operand_is_text(args[0], ctx)):
                 text_col = f"({text_col})::text"
             if text_col:
                 # XSD lexical form regexes per type
@@ -1095,6 +1103,18 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
                     if num_col:
                         num_branch = (f"WHEN {num_col} IS NOT NULL "
                                       f"THEN CAST(TRUNC({num_col}) AS {sql_type}) ")
+                    # A number known at compile time — a decimal or double
+                    # literal, arithmetic, a numeric BIND — truncates toward
+                    # zero (XPath F&O 19.1.2.2). Only its text reaches here
+                    # (a literal has no `__num`, and a numeric BIND keeps its
+                    # value in the main column), and `5.0` failed the
+                    # integer regex below, leaving `xsd:integer(5.0)`
+                    # unbound (issues/341). A STRING still needs the integer
+                    # lexical form: `xsd:integer("5.0")` is an error.
+                    if _is_numeric_expr(args[0], ctx):
+                        num_branch += (f"WHEN {text_col} ~ {_FLOAT_RE} "
+                                       f"THEN CAST(TRUNC(CAST({text_col} AS NUMERIC)) "
+                                       f"AS {sql_type}) ")
                     return (f"CASE "
                             f"{bool_branch}"
                             f"{num_branch}"

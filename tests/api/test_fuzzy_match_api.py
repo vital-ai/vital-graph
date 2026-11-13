@@ -226,7 +226,7 @@ _X = "http://www.w3.org/2001/XMLSchema#"
     (f"SELECT ?y WHERE {{ BIND(2+3 AS ?x) BIND(<{_X}integer>(?x) AS ?y) }}", [5.0]),
     (f"SELECT ?y WHERE {{ BIND(1+1 AS ?x) BIND(<{_X}decimal>(?x) AS ?y) }}", [2.0]),
     (f"SELECT ?y WHERE {{ BIND(<{_X}double>(3 * 4) AS ?y) }}", [12.0]),
-    # Rows from a UNION of BINDs: VALUES numbers do not compute at all (issues/340).
+    # Rows from a UNION of BINDs; VALUES numbers are covered in test_values_numbers_api.
     (f"SELECT ?y WHERE {{ {{ BIND(1 AS ?a) }} UNION {{ BIND(2 AS ?a) }} BIND(?a * 3 AS ?y) }} "
      f"ORDER BY DESC(<{_X}double>(?y))", [6.0, 3.0]),
 ])

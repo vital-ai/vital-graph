@@ -869,6 +869,30 @@ class TestXSDCasts:
         assert "v0 ~" not in sql.replace("(v0)::text ~", "")
         _assert_valid_sql_fragment(sql)
 
+    @pytest.mark.parametrize("operand", [
+        _lit("5.0", f"{XSD}decimal"),
+        _lit("1e3", f"{XSD}double"),
+        _func("multiply", _lit("2.5", f"{XSD}decimal"), _lit("2", f"{XSD}integer")),
+    ], ids=["decimal", "double", "arithmetic"])
+    def test_an_integer_cast_of_a_number_truncates(self, operand):
+        """`xsd:integer(5.0)` is 5 (XPath F&O 19.1.2.2); it was unbound because
+        only the integer lexical form was accepted (issues/341)."""
+        sql = expr_to_sql(_func("", operand, function_iri=f"{XSD}integer"), _make_ctx({}))
+        assert "TRUNC(CAST(" in sql, sql
+        _assert_valid_sql_fragment(sql)
+
+    def test_an_integer_cast_of_a_string_needs_the_integer_form(self):
+        """`xsd:integer("5.0")` is an error, so a string gets no truncation."""
+        sql = expr_to_sql(_func("", _lit("5.0"), function_iri=f"{XSD}integer"), _make_ctx({}))
+        assert "TRUNC" not in sql, sql
+
+    @pytest.mark.parametrize("target", ["integer", "decimal", "double", "dateTime"])
+    def test_a_cast_of_a_constant_string_is_typed_text(self, target):
+        """PostgreSQL coerces a bare quoted literal while parsing, before the CASE
+        guard: `CAST('5.0' AS INTEGER)` failed the statement (issues/341)."""
+        sql = expr_to_sql(_func("", _lit("5.0"), function_iri=f"{XSD}{target}"), _make_ctx({}))
+        assert "CAST('5.0'" not in sql and "('5.0')::text" in sql, sql
+
     def test_a_cast_of_a_stored_term_keeps_its_text_column(self):
         ctx = _make_ctx({"x": "text"})
         sql = expr_to_sql(_func("", _var("x"), function_iri=f"{XSD}double"), ctx)
