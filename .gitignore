@@ -321,7 +321,11 @@ planning/planning_internal
 # Pyright config
 pyrightconfig.json
 
-internal_data
+# Dataset files stay local (archived to Google Drive); each dataset's
+# manifest.json is tracked, because the perf benches assert against it.
+internal_data/**
+!internal_data/*/
+!internal_data/*/manifest.json
 generated_instances
 
 # Retired backend's TDB database files (large binaries). The tree moved to

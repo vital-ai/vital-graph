@@ -1,0 +1,112 @@
+{
+  "n_entities": 5000,
+  "n_persons": 4875,
+  "n_companies": 125,
+  "n_triples": 279886,
+  "seed": 20260810,
+  "small_world": {
+    "k_neighbours": 6,
+    "rewire_p": 0.08
+  },
+  "frames": {
+    "assertion_explicit": 3656,
+    "assertion_unset": 1219,
+    "aspect": 9750,
+    "aspect_under_entity": 4875,
+    "aspect_under_assertion": 4875
+  },
+  "slots": {
+    "total": 9750,
+    "text_values": 4875,
+    "entity_values": 4875
+  },
+  "relations": {
+    "total": 27896,
+    "by_type": {
+      "friendOf": {
+        "out_degree": {
+          "total": 14625,
+          "avg": 3.0,
+          "p50": 3,
+          "p99": 3,
+          "max": 3,
+          "nonzero": 4875
+        },
+        "in_degree": {
+          "total": 14625,
+          "avg": 3.0,
+          "p50": 3,
+          "p99": 5,
+          "max": 6,
+          "nonzero": 4872
+        }
+      },
+      "mentions": {
+        "out_degree": {
+          "total": 3646,
+          "avg": 0.748,
+          "p50": 1,
+          "p99": 2,
+          "max": 2,
+          "nonzero": 2444
+        },
+        "in_degree": {
+          "total": 3646,
+          "avg": 0.748,
+          "p50": 1,
+          "p99": 3,
+          "max": 5,
+          "nonzero": 2579
+        }
+      },
+      "reportsTo": {
+        "out_degree": {
+          "total": 4750,
+          "avg": 0.974,
+          "p50": 1,
+          "p99": 1,
+          "max": 1,
+          "nonzero": 4750
+        },
+        "in_degree": {
+          "total": 4750,
+          "avg": 0.974,
+          "p50": 0,
+          "p99": 5,
+          "max": 5,
+          "nonzero": 996
+        }
+      },
+      "worksFor": {
+        "out_degree": {
+          "total": 4875,
+          "avg": 1.0,
+          "p50": 1,
+          "p99": 1,
+          "max": 1,
+          "nonzero": 4875
+        },
+        "in_degree": {
+          "total": 4875,
+          "avg": 39.0,
+          "p50": 15,
+          "p99": 302,
+          "max": 886,
+          "nonzero": 125
+        }
+      }
+    }
+  },
+  "entity_value_in_degree": {
+    "total": 4875,
+    "avg": 1.0,
+    "p50": 0,
+    "p99": 2,
+    "max": 440,
+    "nonzero": 1096
+  },
+  "form_types": {
+    "assertion": "http://vital.ai/ontology/haley-ai-kg#KGFormType_Assertion",
+    "aspect": "http://vital.ai/ontology/haley-ai-kg#KGFormType_Aspect"
+  }
+}
