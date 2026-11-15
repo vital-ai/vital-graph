@@ -1,0 +1,53 @@
+# VitalGraph's two images into ECR, in the repository `vitalgraph`: the server (Dockerfile) as vitalgraph:<tag> and its
+# SPARQL sidecar (vitalgraph-jena-sidecar/) as vitalgraph:jena-sidecar-<tag>. <tag> is a release tag (v0.0.50), or
+# git-<12-hex commit> for an unreleased build. Runs on a release tag, or by hand for any tag or commit; an image whose
+# tag is in ECR already is skipped. The GitHub environment `test` provides the AWS role (OIDC; no stored keys).
+name: image
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: a release tag (v0.0.50) or a commit
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: The image tag
+        id: tag
+        run: |
+          ref="${{ inputs.ref || github.ref_name }}"
+          if git rev-parse -q --verify "refs/tags/$ref" > /dev/null; then echo "tag=$ref" >> "$GITHUB_OUTPUT"
+          else echo "tag=git-$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"; fi
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and push (linux/amd64)
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          push() {   # image tag, build context, dockerfile
+            if aws ecr describe-images --repository-name vitalgraph --image-ids imageTag="$1" > /dev/null 2>&1; then
+              echo "vitalgraph:$1 is in ECR already"; return
+            fi
+            docker buildx build --platform linux/amd64 -f "$3" -t "$REGISTRY/vitalgraph:$1" --push "$2"
+          }
+          push "$TAG" . Dockerfile
+          push "jena-sidecar-$TAG" vitalgraph-jena-sidecar vitalgraph-jena-sidecar/Dockerfile
