@@ -22,17 +22,21 @@ Branch 2 is the expensive half and the whole product value of the flag.
 
 WHICH FIXTURE, and why this bench nearly measured nothing
 ---------------------------------------------------------
-`sp_lead_synth_100k` holds 50.5M quads and looks like the obvious fixture. It
-has ZERO `hasKGGraphURI` quads, so branch 2 matches nothing there and the flag
-returns 8 quads per entity — the entity's own triples and no graph at all. A
-bench written against it reports the fan-out at ~100ms with a plausible-looking
-latency attached to a query that did nothing, which is the exact failure the
-lead bench's `min_results` gate exists to prevent.
+The first `sp_lead_synth_100k` build (50.5M quads) had ZERO `hasKGGraphURI`
+quads, so branch 2 matched nothing there and the flag returned 8 quads per
+entity — the entity's own triples and no graph at all. A bench written against
+it reported the fan-out at ~100ms with a plausible-looking latency attached to
+a query that did nothing, which is the exact failure the lead bench's
+`min_results` gate exists to prevent.
 
-Only `lead_nurture_grouped` (74.5M quads, 10.65M `hasKGGraphURI`) carries the
-shape at scale, so this bench requires it and skips rather than quietly
-measuring a degenerate one. `quads_returned` is asserted for the same reason:
-the cheapest possible fan-out is one that collects nothing.
+The bench first ran on `lead_nurture_grouped` (74.5M quads, 10.65M
+`hasKGGraphURI`). That space is retired (2026-11-14); the current grouped
+`sp_lead_synth_100k` build (74.2M quads, `--trim`, seed 20260806) carries the
+same shape at the same scale — 10,654,000 `hasKGGraphURI` quads, counted on the
+vg test stack — so this bench now runs on it, and skips when it is absent rather
+than quietly measuring a degenerate one. `quads_returned` is asserted for the
+same reason: the cheapest possible fan-out is one that collects nothing. The
+millisecond figures below were measured on `lead_nurture_grouped`.
 
 COLD IS ONE-SHOT
 ----------------
@@ -98,8 +102,8 @@ from .conftest import skip_no_api, api_space_exists
 pytestmark = [pytest.mark.performance, skip_no_api,
               pytest.mark.asyncio(loop_scope="session")]
 
-SPACE = "lead_nurture_grouped"
-GRAPH = "urn:lead_nurture_grouped"
+SPACE = "sp_lead_synth_100k"
+GRAPH = "urn:sp_lead_synth_100k"
 KGENTITY = "http://vital.ai/ontology/haley-ai-kg#KGEntity"
 
 PAGE_SIZE = 25

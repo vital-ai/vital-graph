@@ -158,9 +158,18 @@ if $SEED_DATA; then COMPOSE_FILES+=(-f "$PROJECT_ROOT/docker-compose.test.data.y
 
 cleanup() {
   if $TEAR_DOWN; then
-    # Note: plain `down` (no -v) preserves the named volume under --persist.
-    echo "🧹 Tearing down test stack (data volume preserved if --persist)..."
-    docker compose "${COMPOSE_FILES[@]}" down --remove-orphans 2>/dev/null || true
+    if $PERSIST; then
+      # Plain `down` (no -v) preserves the named volume under --persist.
+      echo "🧹 Tearing down test stack (data volume preserved)..."
+      docker compose "${COMPOSE_FILES[@]}" down --remove-orphans 2>/dev/null || true
+    else
+      # Without the persist override the base compose has no named volume; the
+      # postgres image's VOLUME puts this run's DB in an anonymous volume, which
+      # plain `down` leaves behind (~75 MB each, ~40 had accumulated). -v removes
+      # only that anonymous volume.
+      echo "🧹 Tearing down test stack (and its throwaway DB volume)..."
+      docker compose "${COMPOSE_FILES[@]}" down -v --remove-orphans 2>/dev/null || true
+    fi
   else
     echo "ℹ️  Stack left running (--no-down): docker compose ${COMPOSE_FILES[*]} down"
   fi
@@ -168,11 +177,24 @@ cleanup() {
 trap cleanup EXIT
 
 if $RESET_DATA; then
+  # `down -v` with the persist override deletes whichever volume VGTEST_PGDATA
+  # names. Dataset volumes (vgtest_core, vgdata_*) are slow to rebuild, so only
+  # the default scratch volume may be reset here; use scripts/vg_volume.sh for
+  # the others.
+  _vol="${VGTEST_PGDATA:-$(grep -E '^VGTEST_PGDATA=' "$PROJECT_ROOT/.env" 2>/dev/null | tail -1 | cut -d= -f2-)}"
+  _vol="${_vol:-vgtest_pgdata}"
+  if [ "$_vol" != "vgtest_pgdata" ]; then
+    echo "❌ --reset-data refuses to delete volume '$_vol' (VGTEST_PGDATA)." >&2
+    echo "   Only the default 'vgtest_pgdata' can be reset by this script." >&2
+    trap - EXIT
+    exit 2
+  fi
   echo "🗑️  --reset-data: removing persisted PG volume for a clean slate..."
   docker compose "${COMPOSE_FILES[@]}" down -v --remove-orphans 2>/dev/null || true
 fi
 if $PERSIST; then
-  echo "💾 Persistence ON — PG data volume 'vgtest_pgdata' is reused across runs."
+  _vol="${VGTEST_PGDATA:-$(grep -E '^VGTEST_PGDATA=' "$PROJECT_ROOT/.env" 2>/dev/null | tail -1 | cut -d= -f2-)}"
+  echo "💾 Persistence ON — PG data volume '${_vol:-vgtest_pgdata}' is reused across runs."
 fi
 
 # Recorded in the run's env stamp: a clean container DB and a persisted volume

@@ -15,10 +15,12 @@
 #   # subsequent runs — data is still there, no reload
 #   docker compose -f docker-compose.test.yml -f docker-compose.test.persist.yml up -d
 #
-#   # wipe the persisted data when you want a clean slate
-#   docker compose -f docker-compose.test.yml -f docker-compose.test.persist.yml down -v
-#
-# The run scripts expose this via the --persist / --reset-data flags.
+# DATASET VOLUMES. Each dataset is its own named volume (vgtest_core = the small
+# correctness/API fixtures, vgdata_* = one large performance dataset each), kept as a
+# compressed snapshot when not mounted. Switch, snapshot and restore them with
+# scripts/vg_volume.sh -- never `down -v` with this file: it deletes whichever volume
+# VGTEST_PGDATA names. (run-perf-tests.sh --reset-data only resets the default
+# scratch volume `vgtest_pgdata`, and refuses any other.)
 #
 # Note: the postgres:18 image declares VOLUME /var/lib/postgresql (PGDATA is
 # the 18/docker subdir underneath). Mounting the named volume at that parent
