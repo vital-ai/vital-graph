@@ -25,8 +25,9 @@ matching, not to pin a count that moves with the fixture.
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 
-from .conftest import skip_no_pg
+from .conftest import skip_no_pg, space_exists
 from .harness import explain_json, total_shared_buffers
 from .test_generated_sql_plans import _generate_sql
 
@@ -35,6 +36,20 @@ pytestmark = [pytest.mark.performance, skip_no_pg,
 
 SPACE = "sp_lead_synth_10k"
 GRAPH = "urn:sp_lead_synth_10k"
+
+
+@pytest_asyncio.fixture(autouse=True, loop_scope="session")
+async def _needs_the_fixture(perf_conn):
+    """Skip when the space is not on the mounted volume.
+
+    Since the per-dataset volumes (issues/306) a run on `vgdata_lead100k` or
+    `vgdata_graph100k` has no `sp_lead_synth_10k`. Querying it anyway FAILED all
+    13 cells ("relation sp_lead_synth_10k_term does not exist"), because an
+    unknown space resolves to its bare id, so a coverage hole read as 13
+    defects.
+    """
+    if not await space_exists(perf_conn, SPACE):
+        pytest.skip(f"{SPACE} is not on this volume")
 
 KG = "http://vital.ai/ontology/haley-ai-kg#"
 CORE = "http://vital.ai/ontology/vital-core#"

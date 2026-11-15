@@ -193,6 +193,37 @@ STATS_FIXTURE_PREFIXES = ("sp_lead_synth_", "sp_graph_synth_", "sp_graph_skew_",
                           "lead_nurture_grouped")
 
 
+async def _table_owners(conn) -> Optional[List[tuple]]:
+    """(table prefix, space_id) for every space, longest prefix first.
+
+    A space's tables are named `vgs_<storage_key>_*` since the storage-key
+    migration (2026-10-22), not `<space_id>_*`. Matching on the space id found
+    NO tables from then on, so every run stamped 0 fixture bytes and tuples,
+    which made `reconcile_runner` read every persisted volume as clean and block
+    its promotion (issues/189's check, firing on a measurement defect). A space
+    without a key keeps the id prefix (`space_names.space_prefix`'s fallback).
+    """
+    from vitalgraph.db.sparql_sql.space_names import STORAGE_KEY_NAMESPACE
+    try:
+        rows = await conn.fetch("SELECT space_id, storage_key FROM space")
+    except Exception:
+        try:
+            rows = [{"space_id": r["space_id"], "storage_key": None}
+                    for r in await conn.fetch("SELECT space_id FROM space")]
+        except Exception:
+            return None
+    pairs = [((STORAGE_KEY_NAMESPACE + r["storage_key"]) if r["storage_key"]
+              else r["space_id"], r["space_id"]) for r in rows]
+    return sorted(pairs, key=lambda kv: -len(kv[0]))
+
+
+def _owner(relname: str, owners: List[tuple]) -> Optional[str]:
+    for prefix, sid in owners:          # longest first
+        if relname.startswith(prefix + "_"):
+            return sid
+    return None
+
+
 async def stats_stamp(conn) -> Dict[str, Any]:
     """When the benchmark fixtures were last ANALYZEd, and how big they are.
 
@@ -225,8 +256,10 @@ async def stats_stamp(conn) -> Dict[str, Any]:
             """)
     except Exception:
         return out
+    owners = await _table_owners(conn) or []
     picked = [r for r in rows
-              if any(r["relname"].startswith(p) for p in STATS_FIXTURE_PREFIXES)]
+              if any((_owner(r["relname"], owners) or "").startswith(p)
+                     for p in STATS_FIXTURE_PREFIXES)]
     if not picked:
         return out
     latest = max(r["analyzed"] for r in picked)
@@ -251,8 +284,9 @@ async def fixture_sizes(conn) -> Dict[str, Any]:
     """
     out: Dict[str, Any] = {}
     try:
-        spaces = [r["space_id"] for r in
-                  await conn.fetch("SELECT space_id FROM space")]
+        owners = await _table_owners(conn)
+        if owners is None:
+            return out
         rows = await conn.fetch(
             "SELECT relname, pg_total_relation_size(c.oid) AS bytes "
             "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
@@ -261,11 +295,8 @@ async def fixture_sizes(conn) -> Dict[str, Any]:
         return out
     per: Dict[str, int] = {}
     for r in rows:
-        name = r["relname"]
-        # Longest match wins: `sp_lead_synth_10k` is a prefix of nothing here,
-        # but a shorter space id could be a prefix of a longer one.
-        owner = max((sp for sp in spaces if name.startswith(sp + "_")),
-                    key=len, default=None)
+        # Longest prefix wins: one space's prefix can be a prefix of another's.
+        owner = _owner(r["relname"], owners)
         if owner:
             per[owner] = per.get(owner, 0) + int(r["bytes"] or 0)
     if not per:

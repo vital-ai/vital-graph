@@ -25,7 +25,7 @@ import uuid
 import pytest
 import pytest_asyncio
 
-from .conftest import skip_no_pg
+from .conftest import skip_no_pg, space_exists
 from vitalgraph.db.sparql_sql.space_names import space_prefix
 
 pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, skip_no_pg,
@@ -84,6 +84,9 @@ async def test_export_import_round_trip(restore_target, perf_conn, perf_record):
     from vitalgraph.db.sparql_sql.bulk_export import export_space, import_space
 
     dst, impl = restore_target
+    if not await space_exists(perf_conn, SOURCE_SPACE):
+        # Not on this dataset volume (issues/306): a hole, not a failure.
+        pytest.skip(f"{SOURCE_SPACE} is not on this volume")
     src_quads = await perf_conn.fetchval(
         f"SELECT count(*) FROM {space_prefix(SOURCE_SPACE)}_rdf_quad")
     if not src_quads:

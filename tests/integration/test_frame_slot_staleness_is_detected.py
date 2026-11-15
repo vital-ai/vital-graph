@@ -27,6 +27,8 @@ that CREATES the row instead.
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
+from rdflib import URIRef
 
 from vitalgraph.db.sparql_sql.sync_frame_slot_table import (
     frame_slot_drift,
@@ -47,22 +49,60 @@ pytestmark = [
 STALE = 0.5
 
 
-async def _populated_space(conn):
-    """A space on this stack whose frame_slot has rows, or skip."""
-    rows = await conn.fetch("SELECT space_id FROM space ORDER BY space_id")
-    for r in rows:
-        sid = r["space_id"]
-        if not await conn.fetchval(
-                "SELECT 1 FROM pg_tables WHERE tablename = $1", f"{space_prefix(sid)}_frame_slot"):
-            continue
-        if await conn.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_frame_slot"):
-            return sid
-    pytest.skip("no space on this stack has a populated frame_slot")
+RDF_TYPE = URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+KG_FRAME = URIRef("http://vital.ai/ontology/haley-ai-kg#KGFrame")
+HAS_EDGE_SOURCE = URIRef("http://vital.ai/ontology/vital-core#hasEdgeSource")
+HAS_EDGE_DEST = URIRef("http://vital.ai/ontology/vital-core#hasEdgeDestination")
+HAS_SLOT_TYPE = URIRef("http://vital.ai/ontology/haley-ai-kg#hasKGSlotType")
+HAS_ENTITY_SLOT_VALUE = URIRef("http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue")
+SOURCE_ENTITY = URIRef("urn:hasSourceEntity")
+DEST_ENTITY = URIRef("urn:hasDestinationEntity")
+GRAPH = URIRef("urn:test:frame_slot_staleness")
+N_FRAMES = 30
 
 
-async def test_a_healthy_table_reads_zero(pg_conn):
+def _connection_frame(i: int):
+    """One binary connection frame: frame -> {src,dst} slot -> entity."""
+    f, s, d = (URIRef(f"urn:test:st_{k}_{i}") for k in ("frame", "sslot", "dslot"))
+    se, de = URIRef(f"urn:test:st_sedge_{i}"), URIRef(f"urn:test:st_dedge_{i}")
+    return [
+        (f, RDF_TYPE, KG_FRAME, GRAPH),
+        (se, HAS_EDGE_SOURCE, f, GRAPH), (se, HAS_EDGE_DEST, s, GRAPH),
+        (de, HAS_EDGE_SOURCE, f, GRAPH), (de, HAS_EDGE_DEST, d, GRAPH),
+        (s, HAS_SLOT_TYPE, SOURCE_ENTITY, GRAPH),
+        (s, HAS_ENTITY_SLOT_VALUE, URIRef(f"urn:test:st_src_{i}"), GRAPH),
+        (d, HAS_SLOT_TYPE, DEST_ENTITY, GRAPH),
+        (d, HAS_ENTITY_SLOT_VALUE, URIRef(f"urn:test:st_dst_{i}"), GRAPH),
+    ]
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def populated_space(make_space, space_impl, pg_pool):
+    """A space of this module's OWN, with a small, healthy frame_slot.
+
+    It used to borrow "the first space on this stack whose frame_slot has
+    rows". That made the result depend on whatever else was there: during a
+    suite run it picked other tests' transient `inttest_*` spaces, one of
+    which held 60 frame_slot rows its quads no longer produce (drift
+    `0 == 60`, orphan rate 1.0), and on a dataset volume holding only
+    `sp_lead_synth_100k` it rewrote a 4M-row table and ran for over 15
+    minutes. Every case here is rolled back, but a real fixture is still the
+    wrong thing to corrupt.
+    """
+    sid = await make_space()
+    quads = [q for i in range(N_FRAMES) for q in _connection_frame(i)]
+    await space_impl.add_rdf_quads_batch(sid, quads)
+    async with pg_pool.acquire() as conn:
+        rows = await conn.fetchval(f"SELECT count(*) FROM {space_prefix(sid)}_frame_slot")
+    # Two rows per binary connection frame, one per slot. Without them, "a
+    # healthy table reads zero" would pass on an empty table.
+    assert rows == 2 * N_FRAMES, f"fixture produced {rows} frame_slot rows"
+    return sid
+
+
+async def test_a_healthy_table_reads_zero(pg_conn, populated_space):
     """Without this, a probe that always returns 1.0 would pass everything else."""
-    sid = await _populated_space(pg_conn)
+    sid = populated_space
     assert await frame_slot_orphan_rate(pg_conn, sid) == 0.0
 
 
@@ -70,11 +110,11 @@ async def test_a_healthy_table_reads_zero(pg_conn):
     ("frame_uuid", "reloaded with new node URIs"),
     ("context_uuid", "reloaded under a different graph URI"),
 ], ids=["identity", "context"])
-async def test_staleness_is_detected_where_drift_is_blind(pg_conn, column, mode):
-    sid = await _populated_space(pg_conn)
+async def test_staleness_is_detected_where_drift_is_blind(pg_conn, populated_space, column, mode):
+    sid = populated_space
     table = f"{space_prefix(sid)}_frame_slot"
 
-    # Rolled back: this deliberately corrupts a real fixture table.
+    # Rolled back: this deliberately corrupts the fixture table.
     tx = pg_conn.transaction()
     await tx.start()
     try:
@@ -92,11 +132,11 @@ async def test_staleness_is_detected_where_drift_is_blind(pg_conn, column, mode)
     assert await frame_slot_orphan_rate(pg_conn, sid) == 0.0, "rollback failed"
 
 
-async def test_resync_repairs_a_stale_table(pg_conn):
+async def test_resync_repairs_a_stale_table(pg_conn, populated_space):
     """The maintenance job's message points an operator at a repair. It has to
     work: the script only ever repaired an EMPTY table, so the one fault it could
     not fix was this one."""
-    sid = await _populated_space(pg_conn)
+    sid = populated_space
     table = f"{space_prefix(sid)}_frame_slot"
     before = await pg_conn.fetchval(f"SELECT count(*) FROM {table}")
 

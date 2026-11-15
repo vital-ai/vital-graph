@@ -195,7 +195,13 @@ cleanup() {
   if $TEAR_DOWN; then
     if $PERSIST; then
       # Plain `down` (no -v) preserves the named volume under --persist.
+      # STOP FIRST, with time for PostgreSQL's shutdown checkpoint: `down`'s
+      # default 10 s ends in SIGKILL, the next start runs crash recovery, and
+      # recovery DISCARDS the cumulative statistics (n_live_tup, last_analyze,
+      # pg_stat_statements) that the next run's stamp reads. A dataset volume
+      # also has to stop cleanly to be snapshotted.
       echo "🧹 Tearing down test stack (data volume preserved)..."
+      docker compose "${COMPOSE_FILES[@]}" stop -t 300 2>/dev/null || true
       docker compose "${COMPOSE_FILES[@]}" down --remove-orphans 2>/dev/null || true
     else
       # Without the persist override the base compose has no named volume; the
@@ -279,6 +285,13 @@ cd "$PROJECT_ROOT"
 # Realistic datasets (wordnet_frames). Idempotent — a space that already holds
 # quads is left alone, so this is a no-op on every run after the first. Implies
 # --persist: a multi-GB load must survive down/up or it is not worth doing.
+# The app is started for seeding AND for the API benches. On a dataset volume
+# (--dataset-volume) there is no seeding, but the API benches still need it, so
+# the two are separate conditions: nesting the benches inside "seed" made a
+# dataset-volume run silently skip every API bench.
+if $SEED_DATA || $API_BENCHES; then
+  docker compose "${COMPOSE_FILES[@]}" up -d $BUILD_FLAG vitalgraph
+fi
 if $SEED_DATA; then
   # The load runs entirely inside the stack: the datasets are bind-mounted into
   # the containers, the loader runs in the app container (which already has the
@@ -286,7 +299,6 @@ if $SEED_DATA; then
   # compose network (postgres:5432). Nothing streams from the host, and no host
   # Python environment is involved.
   echo "📚 Seeding benchmark datasets in the stack (idempotent)..."
-  docker compose "${COMPOSE_FILES[@]}" up -d $BUILD_FLAG vitalgraph
   SEED_CMD=(docker compose "${COMPOSE_FILES[@]}" exec -T
             -e VG_TEST_PG_HOST=postgres -e VG_TEST_PG_PORT=5432
             -e VG_TEST_PG_DATABASE="$VG_TEST_PG_DATABASE"
@@ -302,6 +314,8 @@ if $SEED_DATA; then
       [ "$rc" -eq 2 ] || { echo "❌ seeding '$ds' failed (exit $rc)"; exit "$rc"; }
     }
   done
+fi
+if $SEED_DATA || $API_BENCHES; then
 
   # STOP the app before measuring. Its background workers do not idle:
   # `backfill_server_properties_task` continuously patches every space it finds
