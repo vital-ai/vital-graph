@@ -1,6 +1,17 @@
 # 306 — The vg test stack keeps every space on one 133 GB volume
 
-## Status: OPEN (proposal), 2026-10-24
+## Status: DONE, 2026-11-14 (proposal 2026-10-24)
+
+Implemented as proposed, with one change: the large datasets are kept as SNAPSHOTS
+(tar + zstd of the stopped cluster) and restored on demand, not as permanently mounted
+volumes. Volumes: `vgtest_core` (default, 27 spaces, 43.7 GB), `vgdata_corpus1`,
+`vgdata_uw_prodshape2`; snapshot only: `vgdata_lead100k` (11.4 GB, restores in 9 min),
+`vgdata_graph100k`, and `vgtest_full_20261114` (the whole old volume, 34.1 GB).
+`scripts/vg_volume.sh` does show/switch/stop/snapshot/restore/verify for both stacks, and
+switching to an absent volume restores it from `~/vg-snapshots`. A planner-built volume runs
+on the vg test stack unchanged (checked with 7 lead100k benches). The 100k benches skip on
+`vgtest_core`, as point 4 of "Before doing it" anticipated. The record is in
+`planning/planning_test_data/` (local, untracked).
 
 **Related:** `docker-compose.test.persist.yml` (the volume, `VGTEST_PGDATA` in `.env`),
 the planner stack's `docker-compose.planner.persist.yml` (`VGPLANNER_PGDATA`), the memory
