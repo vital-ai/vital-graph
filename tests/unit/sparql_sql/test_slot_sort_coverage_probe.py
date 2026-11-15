@@ -22,21 +22,27 @@ downstream of the thing it is checking.
 
 from __future__ import annotations
 
+import ast
 import inspect
+import textwrap
 
 from vitalgraph.db.sparql_sql import sync_entity_slot_sort as E
 from vitalgraph.process import maintenance_job as M
 
 
 def _body(fn) -> str:
-    """Source with the docstring removed.
+    """The function's CODE: docstring and comments removed.
 
     The docstring NAMES `_select_rows` when explaining what this probe avoids,
     so a naive substring check on the whole source fails on its own prose.
+    Removed through the AST, not by `src.replace(fn.__doc__, "")`: from Python
+    3.13 the compiler dedents docstrings, so `__doc__` no longer matches the
+    source text, nothing was removed, and this test failed on 3.14 only.
     """
-    src = inspect.getsource(fn)
-    doc = fn.__doc__
-    return src.replace(doc, "") if doc else src
+    node = ast.parse(textwrap.dedent(inspect.getsource(fn))).body[0]
+    if ast.get_docstring(node) is not None:
+        node.body = node.body[1:]
+    return ast.unparse(node)
 
 
 def test_coverage_counts_from_the_quads_not_from_the_walk():

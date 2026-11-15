@@ -206,7 +206,15 @@ def _normalize_float(value: float) -> str:
     target = struct.unpack("f", struct.pack("f", value))[0]
     for precision in range(1, 10):
         candidate = f"{value:.{precision}g}"
-        if struct.unpack("f", struct.pack("f", float(candidate)))[0] == target:
+        try:
+            packed = struct.pack("f", float(candidate))
+        except OverflowError:
+            # A short candidate near FLT_MAX can round ABOVE it (3.4028235e+38
+            # tries `3.403e+38`). Python 3.12 packs that as inf, which simply
+            # fails the comparison; 3.14 raises instead. Either way it does not
+            # round-trip, so try the next precision.
+            continue
+        if struct.unpack("f", packed)[0] == target:
             plain = repr(float(candidate))
             return plain[:-2] if plain.endswith(".0") else plain
     return repr(value)
