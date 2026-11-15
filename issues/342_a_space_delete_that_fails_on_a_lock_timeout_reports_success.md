@@ -29,8 +29,12 @@ Tests: `tests/unit/test_a_failed_space_delete_is_not_reported_as_deleted.py` (13
 the 7 storage/manager cells and the client cells fail on the old code); `tests/api/test_spaces.py`
 17 passed; unit suite 6,377 passed, 0 failed.
 
-Note: the auto-sync and background tasks the manager cancels before the drop stay
-cancelled after a failed drop. They restart on the space's next write.
+Not fixed (smaller): the manager cancels the space's in-flight auto-sync tasks
+(`cancel_space_syncs`) and scheduled background tasks BEFORE the drop, and a failed drop
+does not reschedule them. Later writes schedule their own syncs, but the vectorization of
+writes whose sync was in flight at that moment is not redone; a resync of the space covers
+it. Making cancellation conditional on the drop would need the drop to run first, which is
+the order the cancellation exists to avoid.
 
 (Opened 2026-11-14.)
 
