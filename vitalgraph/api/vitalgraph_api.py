@@ -11,6 +11,18 @@ logger = logging.getLogger(__name__)
 from vitalgraph.space.space_manager import SpaceAlreadyExistsError
 
 
+class SpaceDeleteFailed(Exception):
+    """The space exists and its drop failed (rolled back, so it is intact).
+
+    A domain outcome, not "not found": the endpoint reports it as STORE_FAILED in
+    an HTTP 200 body (`issues/342`).
+    """
+
+    def __init__(self, space_id: str):
+        super().__init__(f"Deleting space '{space_id}' failed; the space is unchanged. Retry the delete.")
+        self.space_id = space_id
+
+
 class VitalGraphAPI:
     def __init__(self, auth_handler, db_impl=None, space_manager=None, signal_manager=None):
         self.auth = auth_handler
@@ -350,13 +362,21 @@ class VitalGraphAPI:
                 result = {"message": "space deleted successfully with tables", "id": space_id}
                 logger.info(f"Delete successful: {result}")
                 return result
-            else:
-                logger.error(f"Delete failed - space not found or deletion failed")
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Space not found or deletion failed"
-                )
-        except HTTPException:
+            # False means either "no such space" or "the drop failed and was
+            # rolled back". Telling them apart matters: both used to come back
+            # as "not found", so a delete that lost on a lock timeout read as
+            # done to every caller (`issues/342`).
+            backend = getattr(self.space_manager, "space_backend", None)
+            still_there = bool(backend) and await backend.space_exists(actual_space_id)
+            if still_there:
+                logger.error(f"Delete failed for '{actual_space_id}'; the space is intact")
+                raise SpaceDeleteFailed(actual_space_id)
+            logger.error(f"Delete failed - space not found: {actual_space_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Space not found"
+            )
+        except (HTTPException, SpaceDeleteFailed):
             raise
         except Exception as e:
             logger.error(f"Delete exception: {str(e)}")

@@ -1,6 +1,38 @@
 # 342 — A space delete that fails on a lock timeout reports success
 
-## Status: OPEN, 2026-11-14
+## Status: FIXED 2026-11-15, verified on the vg test stack
+
+Four layers, each of which hid the failure on its own:
+1. `delete_space_storage` runs the whole drop (every DROP plus the `graph`/`space` row
+   deletes) in ONE transaction. A failure rolls back to an intact space instead of leaving
+   a half-dropped one. Lock contention (`55P03`, `40P01`) is retried 3 times with 2 s / 4 s
+   backoff; anything else fails at once.
+2. `SpaceManager.delete_space_with_tables` reads False as the failure it now always is:
+   the space stays registered and no "deleted" notification goes out.
+3. `VitalGraphAPI.delete_space` tells "not found" apart from "present and the drop failed"
+   (`SpaceDeleteFailed`). The endpoint reports the second case as `STORE_FAILED` in an
+   HTTP 200 body; it used to become `NOT_FOUND`.
+4. The client's `spaces.delete_space` derives `error_code` from the body's `status`
+   (`build_response_from_server`). It hardcoded `error_code=0`, so even the server's
+   `NOT_FOUND` read as success. Behaviour change: deleting a missing space now gives
+   `error_code 1`. `is_success` was already False for it.
+
+**Verified live** (vg test stack, image built from HEAD + this fix; a second session held
+`ACCESS SHARE` on the space's quad table):
+- lock held 90 s: three attempts at 10 s `lock_timeout`, each rolled back. Client got
+  `error_code 1`, `status store_failed`, "failed; the space is unchanged. Retry". The row
+  and all 29 tables were present, and the space was still listed.
+- lock held 15 s: attempt 1 timed out, attempt 2 succeeded. Client got `deleted`; the row
+  and tables were gone, 0 orphans.
+
+Tests: `tests/unit/test_a_failed_space_delete_is_not_reported_as_deleted.py` (13; 6 of
+the 7 storage/manager cells and the client cells fail on the old code); `tests/api/test_spaces.py`
+17 passed; unit suite 6,377 passed, 0 failed.
+
+Note: the auto-sync and background tasks the manager cancels before the drop stay
+cancelled after a failed drop. They restart on the space's next write.
+
+(Opened 2026-11-14.)
 
 ## Found
 

@@ -409,8 +409,18 @@ class SpaceManager:
             # Delete space storage (backend handles all cleanup)
             storage_deleted = await space_impl.destroy()
             if not storage_deleted:
-                self.logger.warning(f"Failed to delete space storage for '{space_id}' (may not exist)")
-            
+                # A real failure, never "nothing to delete": the backend drop is
+                # atomic and a space with no tables left still drops cleanly.
+                # This used to log "may not exist" and carry on: unregister,
+                # notify "deleted", return success. A lock timeout then left
+                # the row and 21 GB of tables in place, invisible to
+                # list_spaces (`issues/342`). The space stays registered and
+                # whole; the caller sees the failure and can retry.
+                self.logger.error(
+                    f"❌ Failed to delete space storage for '{space_id}'; "
+                    f"the space is unchanged and still registered")
+                return False
+
             # Remove space from manager registry
             if space_id in self._spaces:
                 # Close the space before removing from registry

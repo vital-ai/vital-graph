@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional
 
 from .base_endpoint import BaseEndpoint, http_status_of
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
+from ..response.response_builder import build_response_from_server
 from ...model.spaces_model import Space, SpaceAnalyticsResponse
 from ..response.client_response import (
     SpaceResponse,
@@ -327,13 +328,16 @@ class SpacesEndpoint(BaseEndpoint):
             
             response = await self._make_authenticated_request('DELETE', url, params=params)
             response_data = response.json()
-            
-            return SpaceDeleteResponse(
-                deleted_count=response_data.get('deleted_count', 1),
+
+            # Every outcome arrives as HTTP 200 with the verdict in the body
+            # (DELETED, NOT_FOUND, STORE_FAILED, INVALID_REQUEST for a system
+            # space). This used to hardcode error_code=0, so a delete that
+            # failed and left the space in place read as success (`issues/342`).
+            return build_response_from_server(
+                SpaceDeleteResponse, response_data,
+                status_code=response.status_code,
+                deleted_count=response_data.get('deleted_count', 0),
                 space_id=space_id,
-                error_code=0,
-                status_code=200,
-                message=response_data.get('message', 'Space deleted successfully')
             )
         except Exception as e:
             return SpaceDeleteResponse(

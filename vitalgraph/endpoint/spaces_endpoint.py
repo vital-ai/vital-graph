@@ -443,8 +443,19 @@ class SpacesEndpoint:
                 deleted_count=0,
                 deleted_uris=[],
             )
+        from vitalgraph.api.vitalgraph_api import SpaceDeleteFailed
         try:
             result = await self.api.delete_space(space_id, current_user)
+        except SpaceDeleteFailed as e:
+            # The space is there and its drop was rolled back (`issues/342`):
+            # a failed write, reported in the body like every domain fault.
+            self.logger.error(str(e))
+            return SpaceDeleteResponse(
+                status=OperationStatus.STORE_FAILED,
+                message=str(e),
+                deleted_count=0,
+                deleted_uris=[],
+            )
         except HTTPException as e:
             # A missing space is a domain outcome, not a fault — the branch
             # directly above already returns HTTP 200 for the protected-space

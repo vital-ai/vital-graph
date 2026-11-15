@@ -874,24 +874,60 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             logger.error("create_space_storage(%s) failed: %s", space_id, e)
             return False
 
+    # Attempts for a space drop that loses on lock contention (issues/342).
+    DROP_ATTEMPTS = 3
+    DROP_RETRY_BASE_SECONDS = 2.0
+
     async def delete_space_storage(self, space_id: str) -> bool:
-        try:
-            async with self._db._pool.acquire() as conn:
-                await SparqlSQLSchema.drop_space(conn, space_id)
-                # Remove graph records
-                await conn.execute(
-                    "DELETE FROM graph WHERE space_id = $1", space_id
-                )
-                # Remove space metadata
-                await conn.execute(
-                    "DELETE FROM space WHERE space_id = $1", space_id
-                )
-            from .space_names import forget_storage_key
-            forget_storage_key(space_id)
-            return True
-        except Exception as e:
-            logger.error("delete_space_storage(%s) failed: %s", space_id, e)
-            return False
+        """Drop every table of a space and its `graph` / `space` rows, ATOMICALLY.
+
+        It is one transaction because the drop is dozens of statements. Run
+        without one, a lock timeout partway (startup work held locks on the
+        space) left a half-dropped space behind: the `space` row and 14 tables,
+        21 GB, which the manager then reported as deleted (`issues/342`).
+        Rolled back now, a failure leaves the space whole.
+
+        Lock contention (`55P03` lock_timeout, `40P01` deadlock) is retried: the
+        usual holder is startup, maintenance or a query on the same space, and it
+        finishes. Everything else fails at once.
+
+        Returns False only on a real failure. A space whose tables are already
+        gone still drops cleanly (every DROP is IF EXISTS), so False never means
+        "nothing to delete".
+        """
+        import asyncpg
+        for attempt in range(1, self.DROP_ATTEMPTS + 1):
+            try:
+                async with self._db._pool.acquire() as conn:
+                    async with conn.transaction():
+                        await SparqlSQLSchema.drop_space(conn, space_id)
+                        await conn.execute(
+                            "DELETE FROM graph WHERE space_id = $1", space_id)
+                        await conn.execute(
+                            "DELETE FROM space WHERE space_id = $1", space_id)
+                from .space_names import forget_storage_key
+                forget_storage_key(space_id)
+                return True
+            except (asyncpg.LockNotAvailableError,
+                    asyncpg.DeadlockDetectedError) as e:
+                if attempt == self.DROP_ATTEMPTS:
+                    logger.error(
+                        "delete_space_storage(%s) failed: lock contention on "
+                        "%d attempts, last: %s. Rolled back; the space is intact.",
+                        space_id, attempt, e)
+                    return False
+                delay = self.DROP_RETRY_BASE_SECONDS * attempt
+                logger.warning(
+                    "delete_space_storage(%s): %s (attempt %d/%d); rolled back, "
+                    "retrying in %.0fs", space_id, e, attempt,
+                    self.DROP_ATTEMPTS, delay)
+                await asyncio.sleep(delay)
+            except Exception as e:
+                logger.error(
+                    "delete_space_storage(%s) failed: %s. Rolled back; the space "
+                    "is intact.", space_id, e)
+                return False
+        return False
 
     async def space_exists(self, space_id: str) -> bool:
         try:
