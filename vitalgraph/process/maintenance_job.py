@@ -2893,10 +2893,39 @@ class MaintenanceJob:
         # `slot_gaps.get(space_id, 0)` and are ready for an EXACT number, rather
         # than being rewired when one exists.
         slot_gaps: dict = {}
+        _shortfall_probe = "entity_slot_sort_row_shortfall"
         for space_id in space_ids:
+            if probe_backed_off(_shortfall_probe, space_id):
+                continue
             try:
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
+                        # GATED ON WRITES (`issues/343`). The gate below, "run
+                        # the exact split only when the cheap count is nonzero",
+                        # can never close: value-less, entity and orphaned slots
+                        # are CORRECTLY absent from the table, so the cheap count
+                        # is permanently > 0 on any real space (927 on the main
+                        # production space). The exact split and the slot-seeded
+                        # repair therefore ran every ~15-minute cycle on every KG
+                        # space, changed or not: 15-85 s each, 51 % of
+                        # production's DB time in a quiet hour (2026-11-15).
+                        #
+                        # `continue` is safe here, unlike at the coverage probe
+                        # below: this block maintains nothing the read path
+                        # consults (`slot_gaps` is never populated), so a skipped
+                        # cycle only skips an answer that cannot have changed.
+                        if not await probe_data_changed(
+                                conn, space_id, _shortfall_probe):
+                            continue
+                        # Outstanding until this pass completes: a pass that
+                        # fails or times out part-way must run again, and the
+                        # quad watermark it was gated on has already moved.
+                        mark_probe_converged(space_id, _shortfall_probe, False)
+                        # The repair writes `entity_slot_sort`, not the quads, so
+                        # the watermark cannot see it. A repair that added rows
+                        # stays unconverged, and the next cycle re-checks it
+                        # (and repairs more if the repair is bounded).
+                        converged = True
                         sf = await entity_slot_sort_row_shortfall(
                             conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
                         if sf["shortfall"]:
@@ -2960,6 +2989,7 @@ class MaintenanceJob:
                                     conn, space_id,
                                     timeout=PROBE_CLIENT_TIMEOUT_S)
                                 if fix["rows"]:
+                                    converged = False
                                     logger.info(
                                         "entity_slot_sort: repaired %s — %d "
                                         "absent slots via %d entities, %d rows.",
@@ -2996,11 +3026,14 @@ class MaintenanceJob:
                                     "entity_slot_sort: %s short by %d, all "
                                     "value-less and correctly absent.",
                                     space_id, sf["shortfall"])
+                        mark_probe_converged(space_id, _shortfall_probe,
+                                             converged)
             except asyncpg.UndefinedTableError:
                 continue
             except Exception as exc:
-                log_probe_failure("entity_slot_sort_row_shortfall",
-                                  space_id, exc)
+                log_probe_failure(_shortfall_probe, space_id, exc)
+                continue
+            clear_probe_backoff(_shortfall_probe, space_id)
 
         worst = None          # (shortfall, space_id, gap)
         for space_id in space_ids:

@@ -124,10 +124,20 @@ def test_the_remaining_o_graph_probes_are_gated():
 #:   entity_slot_sort_coverage    30,833 calls  2,852 ms  24.4 h
 #:   edge_table_drift              5,737 calls 18,161 ms  28.9 h
 #: all three largely on `testspace`, whose quad write watermark is ZERO.
+#:
+#: The slot-sort shortfall trio joined in `issues/343`. Its own gate, "run the
+#: exact split only when the cheap count is nonzero", can never close: valueless,
+#: entity and orphaned slots are correctly absent from the table, so the cheap
+#: count is permanently > 0. Production, one hour on 2026-11-15:
+#:   entity_slot_sort_gap         4 calls/space/hour  15-85 s   51 % of DB time
+#: on every KG space, every ~15-minute cycle, changed or not.
 _EXPENSIVE_PROBES = (
     "edge_table_drift",
     "frame_slot_drift",
     "entity_slot_sort_coverage",
+    "entity_slot_sort_row_shortfall",
+    "entity_slot_sort_gap",
+    "backfill_entity_slot_sort_missing_slots",
 )
 
 
