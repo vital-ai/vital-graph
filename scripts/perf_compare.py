@@ -55,6 +55,9 @@ ENV_GATES = [
     ("runner", "class"),
     ("runner", "persist"),
     ("runner", "seeded"),
+    # Which dataset volume (issues/306): a run on vgdata_lead100k and one on
+    # vgtest_core measure different databases.
+    ("runner", "pg_volume"),
     ("machine", "host"),
     ("pg", "server_version"),
     ("pg", "shared_buffers"),

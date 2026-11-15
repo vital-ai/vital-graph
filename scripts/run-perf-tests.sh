@@ -24,6 +24,13 @@
 #                                                     # (query | slow — there is no 'main')
 #   ./scripts/run-perf-tests.sh --promote query       # promote that tier
 #   ./scripts/run-perf-tests.sh --api-benches         # + REST latency benches (app up first)
+#
+# Per-dataset volumes (issues/306, scripts/vg_volume.sh): each volume has its own
+# baseline, named <tier> for vgtest_core and <tier>_<dataset> for the others.
+#   ./scripts/run-perf-tests.sh --dataset-volume vgtest_core --skip-build --baseline query
+#   ./scripts/run-perf-tests.sh --dataset-volume vgdata_lead100k --baseline query_lead100k
+# --dataset-volume implies --persist, stamps the run as seeded (the volume IS the
+# loaded data) and skips seeding, so nothing is ever loaded into a dataset volume.
 # A regression vs the baseline fails the run even when every assertion passed —
 # the inline bounds are absolute floors, the baseline is the drift detector.
 #
@@ -64,6 +71,8 @@ TIER="query"           # --tier query|ingest|all: which benchmark tier to run.
                        # whole point of keeping them apart. Separate baselines.
 BASELINE=""            # --baseline NAME: compare the recorded run against it
 PROMOTE=""             # --promote NAME: make the recorded run the new baseline
+DATASET_VOLUME=""      # --dataset-volume NAME: run on that dataset volume
+API_SEED=false         # --api-benches seeds, except on a dataset volume
 PYTEST_ARGS=()
 PASSTHROUGH=false
 NEXT=""
@@ -74,6 +83,7 @@ for arg in "$@"; do
       baseline) BASELINE="$arg" ;;
       promote)  PROMOTE="$arg" ;;
       record)   RECORD_PATH="$arg" ;;
+      volume)   DATASET_VOLUME="$arg" ;;
     esac
     NEXT=""; continue
   fi
@@ -83,7 +93,7 @@ for arg in "$@"; do
     --persist)    PERSIST=true ;;
     --reset-data) PERSIST=true; RESET_DATA=true ;;
     --seed-data)   SEED_DATA=true; PERSIST=true ;;
-    --api-benches) API_BENCHES=true; SEED_DATA=true; PERSIST=true ;;
+    --api-benches) API_BENCHES=true; API_SEED=true; PERSIST=true ;;
     --tier=*)     TIER="${arg#*=}" ;;
     --ingest)     TIER="ingest" ;;
     --record)     RECORD=true ;;
@@ -92,6 +102,8 @@ for arg in "$@"; do
     --baseline=*) RECORD=true; BASELINE="${arg#*=}" ;;
     --promote)    RECORD=true; NEXT=promote ;;
     --promote=*)  RECORD=true; PROMOTE="${arg#*=}" ;;
+    --dataset-volume)   NEXT=volume ;;
+    --dataset-volume=*) DATASET_VOLUME="${arg#*=}" ;;
     --)           PASSTHROUGH=true ;;
     *)            PYTEST_ARGS+=("$arg") ;;
   esac
@@ -120,9 +132,32 @@ case "$TIER" in
   *)      echo "❌ --tier must be query, ingest, coverage or all (got '$TIER')"; exit 2 ;;
 esac
 
+# --api-benches seeds the default volume; a dataset volume already is the data.
+if $API_SEED && [ -z "$DATASET_VOLUME" ]; then SEED_DATA=true; fi
+
+if [ -n "$DATASET_VOLUME" ]; then
+  if $SEED_DATA; then
+    echo "❌ --dataset-volume and --seed-data together would load data INTO"
+    echo "   a dataset volume. A dataset volume is already seeded; drop --seed-data."
+    exit 2
+  fi
+  if ! docker volume inspect "$DATASET_VOLUME" >/dev/null 2>&1; then
+    echo "❌ no volume '$DATASET_VOLUME'. Restore it first: scripts/vg_volume.sh switch test $DATASET_VOLUME"
+    exit 2
+  fi
+  if [ -n "$(docker ps -q --filter name=^vitalgraph-planner-)" ]; then
+    echo "❌ the vg planner stack is running; stop it first (one stack at a time)."
+    exit 2
+  fi
+  PERSIST=true
+  export VGTEST_PGDATA="$DATASET_VOLUME"
+fi
+
 # A run of one tier must not be promoted over the other tier's baseline: it would
 # bury that tier's benches as absent and silently shrink it. `all` matches neither.
-if [ -n "$PROMOTE" ] && [ "$TIER" != "all" ] && [ "$PROMOTE" != "$TIER" ]; then
+# `<tier>_<dataset>` is the same tier on another dataset volume.
+if [ -n "$PROMOTE" ] && [ "$TIER" != "all" ] && [ "$PROMOTE" != "$TIER" ] \
+   && [ "${PROMOTE#"${TIER}"_}" = "$PROMOTE" ]; then
   echo "❌ refusing to promote a '$TIER' run over the '$PROMOTE' baseline."
   echo "   Run --tier=$PROMOTE, or promote to '$TIER'."
   exit 2
@@ -201,7 +236,11 @@ fi
 # full of loaded spaces are different measurement environments (see
 # perf_record.runner_stamp), and must not be compared to each other.
 export VG_PERF_PERSIST="$PERSIST"
-export VG_PERF_SEEDED="$SEED_DATA"
+if [ -n "$DATASET_VOLUME" ]; then export VG_PERF_SEEDED=true; else export VG_PERF_SEEDED="$SEED_DATA"; fi
+if $PERSIST; then
+  _vol="${VGTEST_PGDATA:-$(grep -E '^VGTEST_PGDATA=' "$PROJECT_ROOT/.env" 2>/dev/null | tail -1 | cut -d= -f2-)}"
+  export VG_PERF_PG_VOLUME="${_vol:-vgtest_pgdata}"
+fi
 
 echo "🐳 Starting vg-test stack (PostgreSQL 18, sidecar)..."
 docker compose "${COMPOSE_FILES[@]}" up -d $BUILD_FLAG postgres sparql-compiler

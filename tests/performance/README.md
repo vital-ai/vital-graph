@@ -140,6 +140,32 @@ reads, stays in the query tier, because those are the most demanding QUERY cases
 in the suite — the deep-paging bench is where issues/112's bistable plan lives,
 and a query baseline without it has exactly the hole this file argues against.
 
+### One baseline per dataset volume
+
+Since 2026-11-14 the vg test stack keeps each large dataset in its own volume
+(`scripts/vg_volume.sh`, `issues/306`): `vgtest_core` holds the fixtures and medium
+spaces, while `vgdata_lead100k` (`sp_lead_synth_100k`) and `vgdata_graph100k`
+(`sp_graph_synth_100k`) are restored from snapshots when needed. A run on one volume
+skips the benches whose space lives on another, so each volume has its OWN baseline
+and is compared only with runs on that volume. The run stamp records
+`runner.pg_volume`, and `perf_compare` refuses to compare across volumes.
+
+| volume | query-tier baseline |
+|---|---|
+| `vgtest_core` | `query` |
+| `vgdata_lead100k` | `query_lead100k` |
+| `vgdata_graph100k` | `query_graph100k` |
+
+```bash
+./scripts/run-perf-tests.sh --dataset-volume vgtest_core --api-benches --baseline query
+scripts/vg_volume.sh switch test vgdata_lead100k     # restores the snapshot if needed
+./scripts/run-perf-tests.sh --dataset-volume vgdata_lead100k --api-benches --baseline query_lead100k
+```
+
+`--dataset-volume` implies `--persist`, stamps the run as seeded (the volume IS the
+loaded data), and never seeds. Adding `--seed-data` is refused, since it would load data
+into a dataset volume.
+
 - **The baselines** (`tests/performance/baselines/{query,ingest}.json` + `thresholds.toml`)
   is the *drift detector*: it compares against what was actually measured, so a
   40% degradation that still clears the floor is caught.

@@ -134,7 +134,30 @@ def runner_stamp() -> Dict[str, Any]:
         "pg_host": host,
         "pg_port": port,
         "pg_database": os.environ.get("VG_TEST_PG_DATABASE", "sparql_sql_graph"),
+        "pg_volume": _pg_volume() if is_vgtest else None,
     }
+
+
+def _pg_volume() -> Optional[str]:
+    """The data volume the vg-test PostgreSQL is running on.
+
+    Each dataset is its own volume (`scripts/vg_volume.sh`, issues/306), and a
+    run on one measures a different database from a run on another: different
+    spaces, sizes and buffer contention. A baseline is only comparable to runs
+    on the volume it was taken on, so the volume is part of the stamp.
+    `VG_PERF_PG_VOLUME` (set by run-perf-tests.sh) wins; otherwise ask Docker.
+    """
+    v = os.environ.get("VG_PERF_PG_VOLUME")
+    if v:
+        return v
+    try:
+        out = subprocess.run(
+            ["docker", "inspect", "vitalgraph-test-pg", "--format",
+             '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql"}}{{.Name}}{{end}}{{end}}'],
+            capture_output=True, text=True, timeout=15)
+        return out.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 # Spaces that exist ONLY on the seeded, persisted stack. Their presence WITH
@@ -142,8 +165,14 @@ def runner_stamp() -> Dict[str, Any]:
 # creates its own fixtures as it goes, so the existence of fixture tables proves
 # nothing on its own. `issues/189` records twelve baseline cells reading
 # `wordnet_frames` and `space_lead_dataset_test` under a stamp claiming clean.
+#
+# The 100k datasets belong here too since the per-dataset volumes (issues/306):
+# no clean run creates them, the benches only read them, and on their own
+# volume they are the ONLY data, so leaving them out classified a persisted
+# dataset volume as a clean run and blocked its promotion.
 SEED_ONLY_SPACES = ("wordnet_frames", "space_lead_dataset_test",
-                    "lead_nurture_grouped")
+                    "lead_nurture_grouped", "sp_lead_synth_100k",
+                    "sp_graph_synth_100k")
 
 # The tables whose STATISTICS decide the plans this suite measures. Prefix
 # match, so every per-space table of a benchmark fixture is covered.
