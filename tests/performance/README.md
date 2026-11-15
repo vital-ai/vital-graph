@@ -154,7 +154,7 @@ and is compared only with runs on that volume. The run stamp records
 |---|---|
 | `vgtest_core` | `query` |
 | `vgdata_lead100k` | `query_lead100k` |
-| `vgdata_graph100k` | `query_graph100k` |
+| `vgdata_graph100k` | none: no bench reads `sp_graph_synth_100k` (only the registration and stats checks do; the traversal benches read the 10k / skew fixtures on core), so a baseline there records only self-building benches already covered elsewhere |
 
 ```bash
 ./scripts/run-perf-tests.sh --dataset-volume vgtest_core --api-benches --baseline query

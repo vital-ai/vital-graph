@@ -1,17 +1,17 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-09-18T19:10:28.002098+00:00",
+    "started_at": "2026-11-15T19:28:01.149388+00:00",
     "git": {
-      "commit": "56d06339ecf1ee165f76eb98461db10c51818fd6",
-      "short": "56d06339",
+      "commit": "63a4f8acd79eb0f0dfa2ff320cc92ca19b620939",
+      "short": "63a4f8ac",
       "branch": "main",
       "dirty": true,
-      "untracked_files": 45
+      "untracked_files": 76
     },
     "machine": {
-      "host": "ip-192-168-1-153.ec2.internal",
-      "platform": "macOS-14.6.1-arm64-arm-64bit",
+      "host": "Marcs-MacBook-Pro.local",
+      "platform": "macOS-27.2-arm64-arm-64bit",
       "machine": "arm64",
       "cpu_count": 10,
       "python": "3.12.11"
@@ -23,27 +23,26 @@
       "pg_host": "localhost",
       "pg_port": "5433",
       "pg_database": "sparql_sql_graph",
+      "pg_volume": "vgtest_core",
       "observed": {
         "persist": true,
         "seeded": true,
-        "fixture_tables": 296,
+        "fixture_tables": 232,
         "fixture_live_tuples": 193110,
-        "seed_space_bytes": 55745757184
+        "seed_space_bytes": 8288641024
       },
       "flags": {
         "persist": true,
-        "seeded": false
+        "seeded": true
       },
-      "flags_disagree": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=True seeded=False, but the seed-only spaces hold 55,745,757,184 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
-      "promotion_blocked": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=True seeded=False, but the seed-only spaces hold 55,745,757,184 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
-      "largest_gated_fixture": "lead_nurture_grouped",
-      "largest_gated_fixture_bytes": 49077829632,
-      "shared_buffers_bytes": 17179869184,
-      "exceeds_shared_buffers": true
+      "largest_gated_fixture": "wordnet_frames",
+      "largest_gated_fixture_bytes": 8151744512,
+      "shared_buffers_bytes": 8589934592,
+      "exceeds_shared_buffers": false
     },
     "pg": {
-      "server_version": "18.4 (Debian 18.4-1.pgdg13+1)",
-      "shared_buffers": "16GB",
+      "server_version": "18.7 (Debian 18.7-1.pgdg13+2)",
+      "shared_buffers": "8GB",
       "work_mem": "32MB",
       "maintenance_work_mem": "64MB",
       "effective_cache_size": "23GB",
@@ -59,35 +58,11 @@
       "synchronous_commit": "on"
     },
     "stats": {
-      "fixture_tables": 296,
+      "fixture_tables": 232,
       "fixture_live_tuples": 193110,
-      "fixture_last_analyze": "2026-09-18T18:59:22.552889+00:00"
+      "fixture_last_analyze": "2026-11-15T18:48:22.855134+00:00"
     },
-    "sizes": {
-      "space_bytes": {
-        "lead_nurture_grouped": 49077829632,
-        "sp_lead_synth_100k": 48583606272,
-        "sp_graph_synth_100k": 10681884672,
-        "wordnet_frames": 6538264576,
-        "sp_lead_synth_10k": 4888559616,
-        "sp_graph_forms_20k": 2878218240,
-        "sp_graph_rel_10k": 1824104448,
-        "sp_graph_synth_10k": 1411350528,
-        "sp_lead_types": 921337856,
-        "sp_graph_skew_2k": 348930048,
-        "kg_load_test": 271441920,
-        "sp_lead_dup": 209682432,
-        "sp_kg_rel": 190668800,
-        "sp_sql_lead_dataset": 152502272,
-        "space_lead_dataset_test": 129662976,
-        "e2e_test_space": 16089088,
-        "proportional": 12058624,
-        "sp_kg_types": 3006464
-      },
-      "largest_gated_fixture": "lead_nurture_grouped",
-      "largest_gated_fixture_bytes": 49077829632
-    },
-    "finished_at": "2026-09-18T19:22:39.700868+00:00"
+    "finished_at": "2026-11-15T19:36:31.344693+00:00"
   },
   "benches": [
     {
@@ -95,9 +70,9 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "first_page_ms": 29.9,
-        "deep_page_ms": 50.3,
-        "deep_offset_ratio": 1.68,
+        "first_page_ms": 63.1,
+        "deep_page_ms": 103.2,
+        "deep_offset_ratio": 1.63,
         "offset": 375,
         "rows": 25
       },
@@ -109,57 +84,51 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 195.5,
-        "sorted_ms": 44.7,
+        "unsorted_ms": 40.1,
+        "sorted_ms": 34.9,
         "rows": 25
       },
       "dataset": "synthetic:400frames",
       "notes": "page 1 of 400 frames, page_size=25"
     },
     {
-      "bench_id": "query.aggregate.by_datatype[100k-Currency]",
-      "kind": "sql",
+      "bench_id": "geo.populate_and_search",
+      "kind": "query",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 493.1,
-        "agg_currency_avg_ms": 354.4,
-        "agg_currency_ratio": 1.39
+        "seed_quads_per_sec": 832,
+        "populate_geo_s": 3.142,
+        "points_upserted": 2000,
+        "points_per_sec": 637,
+        "geo_search_ms": 20.5,
+        "rows_returned": 25
       },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
+      "dataset": "synthetic:2000points",
+      "notes": "issues/192 \u2014 geo populate + vg:geoDistance search, radius 200000m top_k 25"
+    },
+    {
+      "bench_id": "query.aggregate.by_datatype[100k-Currency]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.aggregate.by_datatype[100k-Double]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "agg_double_min_ms": 993.2,
-        "agg_double_avg_ms": 414.9,
-        "agg_double_ratio": 2.39
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.aggregate.by_datatype[100k-Integer]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "agg_integer_min_ms": 822.3,
-        "agg_integer_avg_ms": 411.5,
-        "agg_integer_ratio": 2.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.aggregate.by_datatype[10k-Currency]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 63.4,
-        "agg_currency_avg_ms": 64.2,
-        "agg_currency_ratio": 0.99
+        "agg_currency_min_ms": 92.4,
+        "agg_currency_avg_ms": 53.8,
+        "agg_currency_ratio": 1.72
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -169,9 +138,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 100.7,
-        "agg_double_avg_ms": 56.0,
-        "agg_double_ratio": 1.8
+        "agg_double_min_ms": 108.0,
+        "agg_double_avg_ms": 63.5,
+        "agg_double_ratio": 1.7
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -181,54 +150,34 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 93.9,
-        "agg_integer_avg_ms": 59.2,
-        "agg_integer_ratio": 1.59
+        "agg_integer_min_ms": 83.8,
+        "agg_integer_avg_ms": 46.0,
+        "agg_integer_ratio": 1.82
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
     },
     {
       "bench_id": "query.aggregate.sort_per_group[100k-by_type]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "agg_min_ms": 2888.4,
-        "agg_max_ms": 5514.9,
-        "agg_avg_ms": 2361.7,
-        "agg_sum_ms": 3858.5,
-        "agg_count_ms": 1359.3,
-        "min_over_avg": 1.22
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.aggregate.sort_per_group[100k-one_group]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "agg_min_ms": 1282.7,
-        "agg_max_ms": 898.6,
-        "agg_avg_ms": 396.3,
-        "agg_sum_ms": 403.9,
-        "agg_count_ms": 56.4,
-        "min_over_avg": 3.24
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.aggregate.sort_per_group[10k-by_type]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 314.1,
-        "agg_max_ms": 225.8,
-        "agg_avg_ms": 120.4,
-        "agg_sum_ms": 168.4,
-        "agg_count_ms": 90.1,
-        "min_over_avg": 2.61
+        "agg_min_ms": 191.5,
+        "agg_max_ms": 204.6,
+        "agg_avg_ms": 143.0,
+        "agg_sum_ms": 133.7,
+        "agg_count_ms": 46.4,
+        "min_over_avg": 1.34
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -238,39 +187,37 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 153.8,
-        "agg_max_ms": 164.3,
-        "agg_avg_ms": 117.7,
-        "agg_sum_ms": 107.6,
+        "agg_min_ms": 85.0,
+        "agg_max_ms": 97.7,
+        "agg_avg_ms": 46.4,
+        "agg_sum_ms": 43.2,
         "agg_count_ms": 4.3,
-        "min_over_avg": 1.31
+        "min_over_avg": 1.83
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
     },
     {
       "bench_id": "query.aggregate.spill[100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "min_in_memory_ms": 1217.7,
-        "min_spilled_ms": 1042.6,
-        "spill_ratio": 0.86
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "MIN with and without a work_mem spill at 4MB \u2014 issues/029"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.aggregate.spill[10k]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "min_in_memory_ms": 116.4,
-        "min_spilled_ms": 89.8,
+        "min_in_memory_ms": 123.8,
+        "min_spilled_ms": 95.3,
         "spill_ratio": 0.77
       },
       "dataset": "sp_lead_synth_10k",
-      "notes": "MIN with and without a work_mem spill at 256kB \u2014 issues/029"
+      "notes": "MIN with and without a work_mem spill at 1MB \u2014 issues/029"
+    },
+    {
+      "bench_id": "query.covering.advantage_growth",
+      "status": "failed",
+      "reason": "assertion/error during call"
     },
     {
       "bench_id": "query.covering.graph_scoped_scan_index_only",
@@ -281,7 +228,7 @@
           "Index Only Scan"
         ],
         "indexes": [
-          "idx_space_lead_dataset_test_quad_ctx_pred"
+          "idx_vgs_77enz2kq_quad_ctx_pred"
         ],
         "seq_scans": [],
         "tree": [
@@ -291,35 +238,22 @@
       },
       "metrics": {
         "shared_buffers": 5,
-        "shared_read": 0,
+        "shared_read": 4,
         "temp_written": 0,
         "actual_rows": 100,
         "max_actual_rows": 100,
         "estimated_rows": 100,
         "heap_fetches": 0,
-        "planning_ms": 0.295,
-        "execution_ms": 0.066,
+        "planning_ms": 0.248,
+        "execution_ms": 0.979,
         "matched_rows": 100
       },
       "dataset": "space_lead_dataset_test"
     },
     {
       "bench_id": "query.entity_graph.fanout",
-      "kind": "api",
-      "status": "ok",
-      "metrics": {
-        "page_no_graph_ms": 69.3,
-        "page_cold_ms": 1857.7,
-        "page_warm_ms": 244.9,
-        "fanout_cold_ms": 1788.4,
-        "cold_min_ms": 1579.4,
-        "cold_max_ms": 2756.6,
-        "quads_returned": 18653,
-        "page_size": 25,
-        "samples": 5
-      },
-      "dataset": "lead_nurture_grouped",
-      "notes": "25-wide entity-graph fan-out on lead_nurture_grouped: cold vs cached. Each offset gives ONE cold sample; cold cannot be repeated."
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API \u2014 this bench needs the only fixture carrying hasKGGraphURI at scale"
     },
     {
       "bench_id": "query.fastpath.deep_offset",
@@ -334,8 +268,8 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_wordnet_frames_quad_ps",
-          "wordnet_frames_term_pkey"
+          "idx_vgs_qhzu2av5_quad_ps",
+          "vgs_qhzu2av5_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -364,14 +298,14 @@
       },
       "metrics": {
         "shared_buffers": 14860,
-        "shared_read": 0,
+        "shared_read": 13627,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1025,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.138,
-        "execution_ms": 373.912
+        "planning_ms": 0.148,
+        "execution_ms": 4498.864
       },
       "dataset": "wordnet_frames"
     },
@@ -388,8 +322,8 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_wordnet_frames_quad_ps",
-          "wordnet_frames_term_pkey"
+          "idx_vgs_qhzu2av5_quad_ps",
+          "vgs_qhzu2av5_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -418,14 +352,14 @@
       },
       "metrics": {
         "shared_buffers": 481,
-        "shared_read": 0,
+        "shared_read": 408,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 6.242,
-        "execution_ms": 19.47
+        "planning_ms": 1.065,
+        "execution_ms": 116.99
       },
       "dataset": "wordnet_frames"
     },
@@ -442,8 +376,8 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_wordnet_frames_quad_ps",
-          "wordnet_frames_term_pkey"
+          "idx_vgs_qhzu2av5_quad_ps",
+          "vgs_qhzu2av5_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -472,16 +406,21 @@
       },
       "metrics": {
         "shared_buffers": 235,
-        "shared_read": 0,
+        "shared_read": 24,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.166,
-        "execution_ms": 0.393
+        "planning_ms": 0.154,
+        "execution_ms": 7.135
       },
       "dataset": "wordnet_frames"
+    },
+    {
+      "bench_id": "query.frame_nesting.edge_hops_index_only",
+      "status": "skipped",
+      "reason": "Skipped: the visibility map could not be set \u2014 another session holds an older snapshot, so an Index Only Scan is unavailable and this test would be measuring that rather than the index"
     },
     {
       "bench_id": "query.generated_sql.plan[lead_entity_type]",
@@ -497,8 +436,8 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_sql_lead_dataset_quad_ctx_pred",
-          "sp_sql_lead_dataset_term_pkey"
+          "idx_vgs_r4rsfydi_quad_ctx_pred",
+          "vgs_r4rsfydi_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -531,15 +470,15 @@
       },
       "metrics": {
         "shared_buffers": 154,
-        "shared_read": 0,
+        "shared_read": 49,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.626,
-        "execution_ms": 2.32,
-        "sql_chars": 6702,
+        "planning_ms": 2.839,
+        "execution_ms": 19.777,
+        "sql_chars": 6681,
         "joins": 0
       },
       "dataset": "sp_sql_lead_dataset",
@@ -559,8 +498,8 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_sql_lead_dataset_quad_ctx_pred",
-          "sp_sql_lead_dataset_term_pkey"
+          "idx_vgs_r4rsfydi_quad_ctx_pred",
+          "vgs_r4rsfydi_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -594,15 +533,15 @@
       },
       "metrics": {
         "shared_buffers": 96,
-        "shared_read": 0,
+        "shared_read": 50,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1649,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.9,
-        "execution_ms": 1.476,
-        "sql_chars": 3811,
+        "planning_ms": 1.78,
+        "execution_ms": 10.819,
+        "sql_chars": 3797,
         "joins": 0
       },
       "dataset": "sp_sql_lead_dataset",
@@ -623,8 +562,8 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_wordnet_frames_quad_ctx_pred",
-          "wordnet_frames_term_pkey"
+          "idx_vgs_qhzu2av5_quad_ctx_pred",
+          "vgs_qhzu2av5_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -662,15 +601,15 @@
       },
       "metrics": {
         "shared_buffers": 205,
-        "shared_read": 0,
+        "shared_read": 96,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.222,
-        "execution_ms": 29.342,
-        "sql_chars": 6687,
+        "planning_ms": 2.745,
+        "execution_ms": 45.3,
+        "sql_chars": 6681,
         "joins": 0
       },
       "dataset": "wordnet_frames",
@@ -693,9 +632,9 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_wordnet_frames_quad_ctx_pred",
-          "wordnet_frames_rdf_quad_pkey",
-          "wordnet_frames_term_pkey"
+          "idx_vgs_qhzu2av5_quad_ctx_pred",
+          "vgs_qhzu2av5_rdf_quad_pkey",
+          "vgs_qhzu2av5_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -742,15 +681,15 @@
       },
       "metrics": {
         "shared_buffers": 306,
-        "shared_read": 0,
+        "shared_read": 52,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.235,
-        "execution_ms": 5.045,
-        "sql_chars": 6961,
+        "planning_ms": 1.355,
+        "execution_ms": 21.145,
+        "sql_chars": 6953,
         "joins": 0
       },
       "dataset": "wordnet_frames",
@@ -764,14 +703,15 @@
         "node_types": [
           "Nested Loop",
           "Limit",
+          "Gather Merge",
           "Sort",
           "Index Only Scan",
           "Memoize",
           "Index Scan"
         ],
         "indexes": [
-          "idx_wordnet_frames_quad_ctx_pred",
-          "wordnet_frames_term_pkey"
+          "idx_vgs_qhzu2av5_quad_ctx_pred",
+          "vgs_qhzu2av5_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -781,11 +721,16 @@
               "Limit",
               [
                 [
-                  "Sort",
+                  "Gather Merge",
                   [
                     [
-                      "Index Only Scan",
-                      []
+                      "Sort",
+                      [
+                        [
+                          "Index Only Scan",
+                          []
+                        ]
+                      ]
                     ]
                   ]
                 ]
@@ -804,246 +749,55 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 1248,
-        "shared_read": 0,
+        "shared_buffers": 1266,
+        "shared_read": 1150,
         "temp_written": 0,
         "actual_rows": 25,
-        "max_actual_rows": 109745,
+        "max_actual_rows": 36581,
         "estimated_rows": 25,
-        "heap_fetches": 0,
-        "planning_ms": 0.415,
-        "execution_ms": 54.176,
-        "sql_chars": 3801,
+        "heap_fetches": 2,
+        "planning_ms": 0.607,
+        "execution_ms": 56.78,
+        "sql_chars": 3797,
         "joins": 0
       },
       "dataset": "wordnet_frames",
       "notes": "typed subject page (the KGEntity listing shape)"
     },
     {
-      "bench_id": "query.kgquery.deep_paging.curve[100k]",
-      "kind": "sql",
+      "bench_id": "query.growth.entity_page_buffers",
+      "kind": "query",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 69.8,
-        "page_ms_offset_250": 273.6,
-        "page_ms_offset_1000": 304.8,
-        "deep_ratio": 4.4
+        "growth_class": "flat",
+        "buffers_at_50000": 128,
+        "buffers_at_150000": 128,
+        "buffers_at_450000": 128
       },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "cost across offsets \u2014 issues/078; flat means fixed"
+      "dataset": "synthetic:[50000, 150000, 450000]"
+    },
+    {
+      "bench_id": "query.kgquery.deep_paging.curve[100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.deep_paging.curve[10k]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 18.0,
-        "page_ms_offset_250": 28.2,
-        "page_ms_offset_1000": 26.1,
-        "deep_ratio": 1.6
+        "page_ms_offset_0": 21.1,
+        "page_ms_offset_250": 37.3,
+        "page_ms_offset_1000": 37.4,
+        "deep_ratio": 1.8
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
     },
     {
       "bench_id": "query.kgquery.deep_paging.monotonic[100k]",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Nested Loop",
-          "Limit",
-          "Unique",
-          "Subquery Scan",
-          "Unique",
-          "Sort",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Gather",
-          "Nested Loop",
-          "Nested Loop",
-          "Hash Join",
-          "Index Only Scan",
-          "Hash",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan"
-        ],
-        "indexes": [
-          "idx_sp_lead_synth_100k_edge_dst_src",
-          "idx_sp_lead_synth_100k_quad_ctx_pred",
-          "sp_lead_synth_100k_rdf_quad_pkey",
-          "sp_lead_synth_100k_term_pkey"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Nested Loop",
-          [
-            [
-              "Index Scan",
-              []
-            ],
-            [
-              "Limit",
-              [
-                [
-                  "Unique",
-                  [
-                    [
-                      "Subquery Scan",
-                      [
-                        [
-                          "Unique",
-                          [
-                            [
-                              "Sort",
-                              [
-                                [
-                                  "Nested Loop",
-                                  [
-                                    [
-                                      "Index Only Scan",
-                                      []
-                                    ],
-                                    [
-                                      "Nested Loop",
-                                      [
-                                        [
-                                          "Index Only Scan",
-                                          []
-                                        ],
-                                        [
-                                          "Nested Loop",
-                                          [
-                                            [
-                                              "Index Only Scan",
-                                              []
-                                            ],
-                                            [
-                                              "Nested Loop",
-                                              [
-                                                [
-                                                  "Index Scan",
-                                                  []
-                                                ],
-                                                [
-                                                  "Nested Loop",
-                                                  [
-                                                    [
-                                                      "Index Only Scan",
-                                                      []
-                                                    ],
-                                                    [
-                                                      "Nested Loop",
-                                                      [
-                                                        [
-                                                          "Index Scan",
-                                                          []
-                                                        ],
-                                                        [
-                                                          "Nested Loop",
-                                                          [
-                                                            [
-                                                              "Gather",
-                                                              [
-                                                                [
-                                                                  "Nested Loop",
-                                                                  [
-                                                                    [
-                                                                      "Index Only Scan",
-                                                                      []
-                                                                    ],
-                                                                    [
-                                                                      "Nested Loop",
-                                                                      [
-                                                                        [
-                                                                          "Hash Join",
-                                                                          [
-                                                                            [
-                                                                              "Hash",
-                                                                              [
-                                                                                [
-                                                                                  "Index Only Scan",
-                                                                                  []
-                                                                                ]
-                                                                              ]
-                                                                            ],
-                                                                            [
-                                                                              "Index Only Scan",
-                                                                              []
-                                                                            ]
-                                                                          ]
-                                                                        ],
-                                                                        [
-                                                                          "Index Scan",
-                                                                          []
-                                                                        ]
-                                                                      ]
-                                                                    ]
-                                                                  ]
-                                                                ]
-                                                              ]
-                                                            ],
-                                                            [
-                                                              "Index Only Scan",
-                                                              []
-                                                            ]
-                                                          ]
-                                                        ]
-                                                      ]
-                                                    ]
-                                                  ]
-                                                ]
-                                              ]
-                                            ]
-                                          ]
-                                        ]
-                                      ]
-                                    ]
-                                  ]
-                                ]
-                              ]
-                            ]
-                          ]
-                        ]
-                      ]
-                    ]
-                  ]
-                ]
-              ]
-            ]
-          ]
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 333757,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 25,
-        "max_actual_rows": 33333,
-        "estimated_rows": 1,
-        "heap_fetches": 1,
-        "planning_ms": 40.768,
-        "execution_ms": 272.382,
-        "min_ratio": 1.054,
-        "offsets_measured": 3,
-        "deepest_offset": 1000
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "cost must not drop with depth (issues/080)"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.deep_paging.monotonic[10k]",
@@ -1082,10 +836,10 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_lead_synth_10k_edge_dst_src",
-          "idx_sp_lead_synth_10k_quad_ctx_pred",
-          "sp_lead_synth_10k_rdf_quad_pkey",
-          "sp_lead_synth_10k_term_pkey"
+          "idx_vgs_j7dxh2rr_edge_dst_src",
+          "idx_vgs_j7dxh2rr_quad_ctx_pred",
+          "vgs_j7dxh2rr_rdf_quad_pkey",
+          "vgs_j7dxh2rr_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -1230,9 +984,9 @@
         "max_actual_rows": 10000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 86.506,
-        "execution_ms": 27.445,
-        "min_ratio": 1.642,
+        "planning_ms": 32.346,
+        "execution_ms": 34.324,
+        "min_ratio": 0.988,
         "offsets_measured": 2,
         "deepest_offset": 250
       },
@@ -1275,12 +1029,11 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_lead_dup_edge_dst_src",
-          "idx_sp_lead_dup_quad_obj",
-          "idx_sp_lead_dup_quad_po",
-          "idx_sp_lead_dup_quad_pred",
-          "idx_sp_lead_dup_quad_sp",
-          "sp_lead_dup_term_pkey"
+          "idx_vgs_gl4coaoc_edge_dst_src",
+          "idx_vgs_gl4coaoc_quad_obj",
+          "idx_vgs_gl4coaoc_quad_po",
+          "idx_vgs_gl4coaoc_quad_ps",
+          "vgs_gl4coaoc_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -1412,15 +1165,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 719801,
+        "shared_buffers": 720077,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 53469,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 41.927,
-        "execution_ms": 326.139,
+        "planning_ms": 33.55,
+        "execution_ms": 414.199,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -1464,12 +1217,11 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_lead_dup_edge_dst_src",
-          "idx_sp_lead_dup_quad_obj",
-          "idx_sp_lead_dup_quad_po",
-          "idx_sp_lead_dup_quad_pred",
-          "idx_sp_lead_dup_quad_sp",
-          "sp_lead_dup_term_pkey"
+          "idx_vgs_gl4coaoc_edge_dst_src",
+          "idx_vgs_gl4coaoc_quad_obj",
+          "idx_vgs_gl4coaoc_quad_po",
+          "idx_vgs_gl4coaoc_quad_ps",
+          "vgs_gl4coaoc_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -1601,15 +1353,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 719751,
+        "shared_buffers": 719754,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 699,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 38.418,
-        "execution_ms": 314.87,
+        "planning_ms": 36.086,
+        "execution_ms": 367.769,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -1619,15 +1371,8 @@
     },
     {
       "bench_id": "query.kgquery.entity_type_axis[100k]",
-      "kind": "query",
-      "status": "ok",
-      "metrics": {
-        "generic_buffers": 36058,
-        "specific_buffers": 36058,
-        "ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] specific vs generic entity type, 25-row page"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.entity_type_axis[10k]",
@@ -1680,12 +1425,12 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_sql_lead_dataset_edge_dst_src",
-          "idx_sp_sql_lead_dataset_quad_ctx_pred",
-          "idx_sp_sql_lead_dataset_quad_obj",
-          "idx_sp_sql_lead_dataset_quad_pred",
-          "sp_sql_lead_dataset_rdf_quad_pkey",
-          "sp_sql_lead_dataset_term_pkey"
+          "idx_vgs_r4rsfydi_edge_dst_src",
+          "idx_vgs_r4rsfydi_quad_ctx_pred",
+          "idx_vgs_r4rsfydi_quad_obj",
+          "idx_vgs_r4rsfydi_quad_ps",
+          "vgs_r4rsfydi_rdf_quad_pkey",
+          "vgs_r4rsfydi_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -1831,17 +1576,17 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 104030,
-        "shared_read": 0,
+        "shared_buffers": 104229,
+        "shared_read": 244,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 45.74,
-        "execution_ms": 63.426,
-        "sparql_chars": 1872,
-        "sql_chars": 6585,
+        "planning_ms": 42.829,
+        "execution_ms": 111.249,
+        "sparql_chars": 1809,
+        "sql_chars": 6510,
         "joins": 0
       },
       "dataset": "sp_sql_lead_dataset",
@@ -1884,12 +1629,12 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_sql_lead_dataset_edge_src_dst",
-          "idx_sp_sql_lead_dataset_quad_ctx_pred",
-          "idx_sp_sql_lead_dataset_quad_obj",
-          "idx_sp_sql_lead_dataset_quad_pred",
-          "sp_sql_lead_dataset_rdf_quad_pkey",
-          "sp_sql_lead_dataset_term_pkey"
+          "idx_vgs_r4rsfydi_edge_src_dst",
+          "idx_vgs_r4rsfydi_quad_ctx_pred",
+          "idx_vgs_r4rsfydi_quad_obj",
+          "idx_vgs_r4rsfydi_quad_ps",
+          "vgs_r4rsfydi_rdf_quad_pkey",
+          "vgs_r4rsfydi_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -2026,17 +1771,17 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 13301,
-        "shared_read": 0,
+        "shared_buffers": 13500,
+        "shared_read": 1651,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 39.992,
-        "execution_ms": 47.133,
-        "sparql_chars": 1836,
-        "sql_chars": 6558,
+        "planning_ms": 41.25,
+        "execution_ms": 217.644,
+        "sparql_chars": 1773,
+        "sql_chars": 6490,
         "joins": 0
       },
       "dataset": "sp_sql_lead_dataset",
@@ -2079,12 +1824,12 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_sql_lead_dataset_edge_dst_src",
-          "idx_sp_sql_lead_dataset_quad_ctx_pred",
-          "idx_sp_sql_lead_dataset_quad_obj",
-          "idx_sp_sql_lead_dataset_quad_pred",
-          "sp_sql_lead_dataset_rdf_quad_pkey",
-          "sp_sql_lead_dataset_term_pkey"
+          "idx_vgs_r4rsfydi_edge_dst_src",
+          "idx_vgs_r4rsfydi_quad_ctx_pred",
+          "idx_vgs_r4rsfydi_quad_obj",
+          "idx_vgs_r4rsfydi_quad_ps",
+          "vgs_r4rsfydi_rdf_quad_pkey",
+          "vgs_r4rsfydi_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -2221,17 +1966,17 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 21444,
-        "shared_read": 0,
+        "shared_buffers": 21643,
+        "shared_read": 90,
         "temp_written": 0,
         "actual_rows": 13,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 35.775,
-        "execution_ms": 14.839,
-        "sparql_chars": 1844,
-        "sql_chars": 6558,
+        "planning_ms": 38.562,
+        "execution_ms": 27.163,
+        "sparql_chars": 1781,
+        "sql_chars": 6490,
         "joins": 0
       },
       "dataset": "sp_sql_lead_dataset",
@@ -2239,167 +1984,8 @@
     },
     {
       "bench_id": "query.kgquery.growth_curve.eq[CA-100k]",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Nested Loop",
-          "Limit",
-          "Unique",
-          "Index Only Scan",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Index Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan"
-        ],
-        "indexes": [
-          "idx_sp_lead_synth_100k_edge_src_dst",
-          "sp_lead_synth_100k_rdf_quad_pkey",
-          "sp_lead_synth_100k_term_pkey"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Nested Loop",
-          [
-            [
-              "Index Scan",
-              []
-            ],
-            [
-              "Limit",
-              [
-                [
-                  "Unique",
-                  [
-                    [
-                      "Index Only Scan",
-                      [
-                        [
-                          "Nested Loop",
-                          [
-                            [
-                              "Index Only Scan",
-                              []
-                            ],
-                            [
-                              "Nested Loop",
-                              [
-                                [
-                                  "Index Only Scan",
-                                  []
-                                ],
-                                [
-                                  "Nested Loop",
-                                  [
-                                    [
-                                      "Index Only Scan",
-                                      []
-                                    ],
-                                    [
-                                      "Nested Loop",
-                                      [
-                                        [
-                                          "Index Only Scan",
-                                          []
-                                        ],
-                                        [
-                                          "Nested Loop",
-                                          [
-                                            [
-                                              "Index Only Scan",
-                                              []
-                                            ],
-                                            [
-                                              "Nested Loop",
-                                              [
-                                                [
-                                                  "Index Only Scan",
-                                                  []
-                                                ],
-                                                [
-                                                  "Nested Loop",
-                                                  [
-                                                    [
-                                                      "Index Scan",
-                                                      []
-                                                    ],
-                                                    [
-                                                      "Nested Loop",
-                                                      [
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ],
-                                                        [
-                                                          "Nested Loop",
-                                                          [
-                                                            [
-                                                              "Index Scan",
-                                                              []
-                                                            ],
-                                                            [
-                                                              "Index Scan",
-                                                              []
-                                                            ]
-                                                          ]
-                                                        ]
-                                                      ]
-                                                    ]
-                                                  ]
-                                                ]
-                                              ]
-                                            ]
-                                          ]
-                                        ]
-                                      ]
-                                    ]
-                                  ]
-                                ]
-                              ]
-                            ]
-                          ]
-                        ]
-                      ]
-                    ]
-                  ]
-                ]
-              ]
-            ]
-          ]
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 35490,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 25,
-        "max_actual_rows": 25,
-        "estimated_rows": 25,
-        "heap_fetches": 0,
-        "planning_ms": 39.436,
-        "execution_ms": 62.709,
-        "total_matches": 9227,
-        "page_size": 25,
-        "buffers_per_match": 3.846
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] CompanyStateCode = CA \u2014 9,227 matches, 25-row page"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.growth_curve.eq[CA-10k]",
@@ -2433,9 +2019,9 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_lead_synth_10k_edge_src_dst",
-          "sp_lead_synth_10k_rdf_quad_pkey",
-          "sp_lead_synth_10k_term_pkey"
+          "idx_vgs_j7dxh2rr_edge_src_dst",
+          "vgs_j7dxh2rr_rdf_quad_pkey",
+          "vgs_j7dxh2rr_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -2556,8 +2142,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 55.266,
-        "execution_ms": 65.109,
+        "planning_ms": 51.196,
+        "execution_ms": 21.169,
         "total_matches": 911,
         "page_size": 25,
         "buffers_per_match": 22.954
@@ -2567,179 +2153,8 @@
     },
     {
       "bench_id": "query.kgquery.growth_curve.eq[IL-100k]",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Nested Loop",
-          "Limit",
-          "Unique",
-          "Sort",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan"
-        ],
-        "indexes": [
-          "idx_sp_lead_synth_100k_edge_dst_src",
-          "idx_sp_lead_synth_100k_quad_ctx_pred",
-          "sp_lead_synth_100k_rdf_quad_pkey",
-          "sp_lead_synth_100k_term_pkey"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Nested Loop",
-          [
-            [
-              "Index Scan",
-              []
-            ],
-            [
-              "Limit",
-              [
-                [
-                  "Unique",
-                  [
-                    [
-                      "Sort",
-                      [
-                        [
-                          "Nested Loop",
-                          [
-                            [
-                              "Index Only Scan",
-                              []
-                            ],
-                            [
-                              "Nested Loop",
-                              [
-                                [
-                                  "Index Only Scan",
-                                  []
-                                ],
-                                [
-                                  "Nested Loop",
-                                  [
-                                    [
-                                      "Index Only Scan",
-                                      []
-                                    ],
-                                    [
-                                      "Nested Loop",
-                                      [
-                                        [
-                                          "Index Scan",
-                                          []
-                                        ],
-                                        [
-                                          "Nested Loop",
-                                          [
-                                            [
-                                              "Index Only Scan",
-                                              []
-                                            ],
-                                            [
-                                              "Nested Loop",
-                                              [
-                                                [
-                                                  "Index Only Scan",
-                                                  []
-                                                ],
-                                                [
-                                                  "Nested Loop",
-                                                  [
-                                                    [
-                                                      "Index Scan",
-                                                      []
-                                                    ],
-                                                    [
-                                                      "Nested Loop",
-                                                      [
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ],
-                                                        [
-                                                          "Nested Loop",
-                                                          [
-                                                            [
-                                                              "Index Scan",
-                                                              []
-                                                            ],
-                                                            [
-                                                              "Nested Loop",
-                                                              [
-                                                                [
-                                                                  "Index Only Scan",
-                                                                  []
-                                                                ],
-                                                                [
-                                                                  "Index Only Scan",
-                                                                  []
-                                                                ]
-                                                              ]
-                                                            ]
-                                                          ]
-                                                        ]
-                                                      ]
-                                                    ]
-                                                  ]
-                                                ]
-                                              ]
-                                            ]
-                                          ]
-                                        ]
-                                      ]
-                                    ]
-                                  ]
-                                ]
-                              ]
-                            ]
-                          ]
-                        ]
-                      ]
-                    ]
-                  ]
-                ]
-              ]
-            ]
-          ]
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 147887,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 25,
-        "max_actual_rows": 3687,
-        "estimated_rows": 1,
-        "heap_fetches": 0,
-        "planning_ms": 38.482,
-        "execution_ms": 2601.926,
-        "total_matches": 3687,
-        "page_size": 25,
-        "buffers_per_match": 40.11
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] CompanyStateCode = IL \u2014 3,687 matches, 25-row page"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.growth_curve.eq[IL-10k]",
@@ -2775,10 +2190,10 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_lead_synth_10k_edge_dst_src",
-          "idx_sp_lead_synth_10k_quad_po",
-          "sp_lead_synth_10k_rdf_quad_pkey",
-          "sp_lead_synth_10k_term_pkey"
+          "idx_vgs_j7dxh2rr_edge_dst_src",
+          "idx_vgs_j7dxh2rr_quad_po",
+          "vgs_j7dxh2rr_rdf_quad_pkey",
+          "vgs_j7dxh2rr_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -2902,14 +2317,14 @@
       },
       "metrics": {
         "shared_buffers": 14277,
-        "shared_read": 0,
+        "shared_read": 2961,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 345,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 38.851,
-        "execution_ms": 306.328,
+        "planning_ms": 31.879,
+        "execution_ms": 642.778,
         "total_matches": 345,
         "page_size": 25,
         "buffers_per_match": 41.383
@@ -2919,167 +2334,8 @@
     },
     {
       "bench_id": "query.kgquery.growth_curve.eq[NY-100k]",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Nested Loop",
-          "Limit",
-          "Unique",
-          "Index Only Scan",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Index Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan"
-        ],
-        "indexes": [
-          "idx_sp_lead_synth_100k_edge_src_dst",
-          "sp_lead_synth_100k_rdf_quad_pkey",
-          "sp_lead_synth_100k_term_pkey"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Nested Loop",
-          [
-            [
-              "Index Scan",
-              []
-            ],
-            [
-              "Limit",
-              [
-                [
-                  "Unique",
-                  [
-                    [
-                      "Index Only Scan",
-                      [
-                        [
-                          "Nested Loop",
-                          [
-                            [
-                              "Index Only Scan",
-                              []
-                            ],
-                            [
-                              "Nested Loop",
-                              [
-                                [
-                                  "Index Only Scan",
-                                  []
-                                ],
-                                [
-                                  "Nested Loop",
-                                  [
-                                    [
-                                      "Index Only Scan",
-                                      []
-                                    ],
-                                    [
-                                      "Nested Loop",
-                                      [
-                                        [
-                                          "Index Only Scan",
-                                          []
-                                        ],
-                                        [
-                                          "Nested Loop",
-                                          [
-                                            [
-                                              "Index Only Scan",
-                                              []
-                                            ],
-                                            [
-                                              "Nested Loop",
-                                              [
-                                                [
-                                                  "Index Only Scan",
-                                                  []
-                                                ],
-                                                [
-                                                  "Nested Loop",
-                                                  [
-                                                    [
-                                                      "Index Scan",
-                                                      []
-                                                    ],
-                                                    [
-                                                      "Nested Loop",
-                                                      [
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ],
-                                                        [
-                                                          "Nested Loop",
-                                                          [
-                                                            [
-                                                              "Index Scan",
-                                                              []
-                                                            ],
-                                                            [
-                                                              "Index Scan",
-                                                              []
-                                                            ]
-                                                          ]
-                                                        ]
-                                                      ]
-                                                    ]
-                                                  ]
-                                                ]
-                                              ]
-                                            ]
-                                          ]
-                                        ]
-                                      ]
-                                    ]
-                                  ]
-                                ]
-                              ]
-                            ]
-                          ]
-                        ]
-                      ]
-                    ]
-                  ]
-                ]
-              ]
-            ]
-          ]
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 78381,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 25,
-        "max_actual_rows": 25,
-        "estimated_rows": 25,
-        "heap_fetches": 0,
-        "planning_ms": 68.8,
-        "execution_ms": 745.241,
-        "total_matches": 5438,
-        "page_size": 25,
-        "buffers_per_match": 14.414
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] CompanyStateCode = NY \u2014 5,438 matches, 25-row page"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.growth_curve.eq[NY-10k]",
@@ -3113,11 +2369,11 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_lead_synth_10k_edge_dst_src",
-          "idx_sp_lead_synth_10k_edge_src_dst",
-          "idx_sp_lead_synth_10k_quad_ctx_pred",
-          "sp_lead_synth_10k_rdf_quad_pkey",
-          "sp_lead_synth_10k_term_pkey"
+          "idx_vgs_j7dxh2rr_edge_dst_src",
+          "idx_vgs_j7dxh2rr_edge_src_dst",
+          "idx_vgs_j7dxh2rr_quad_ctx_pred",
+          "vgs_j7dxh2rr_rdf_quad_pkey",
+          "vgs_j7dxh2rr_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -3232,14 +2488,14 @@
       },
       "metrics": {
         "shared_buffers": 8012911,
-        "shared_read": 0,
+        "shared_read": 4931,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 513,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 65.136,
-        "execution_ms": 5821.595,
+        "planning_ms": 48.799,
+        "execution_ms": 9097.465,
         "total_matches": 523,
         "page_size": 25,
         "buffers_per_match": 15321.054
@@ -3249,167 +2505,8 @@
     },
     {
       "bench_id": "query.kgquery.growth_curve.eq[TX-100k]",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Nested Loop",
-          "Limit",
-          "Unique",
-          "Index Only Scan",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Index Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan"
-        ],
-        "indexes": [
-          "idx_sp_lead_synth_100k_edge_src_dst",
-          "sp_lead_synth_100k_rdf_quad_pkey",
-          "sp_lead_synth_100k_term_pkey"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Nested Loop",
-          [
-            [
-              "Index Scan",
-              []
-            ],
-            [
-              "Limit",
-              [
-                [
-                  "Unique",
-                  [
-                    [
-                      "Index Only Scan",
-                      [
-                        [
-                          "Nested Loop",
-                          [
-                            [
-                              "Index Only Scan",
-                              []
-                            ],
-                            [
-                              "Nested Loop",
-                              [
-                                [
-                                  "Index Only Scan",
-                                  []
-                                ],
-                                [
-                                  "Nested Loop",
-                                  [
-                                    [
-                                      "Index Only Scan",
-                                      []
-                                    ],
-                                    [
-                                      "Nested Loop",
-                                      [
-                                        [
-                                          "Index Only Scan",
-                                          []
-                                        ],
-                                        [
-                                          "Nested Loop",
-                                          [
-                                            [
-                                              "Index Only Scan",
-                                              []
-                                            ],
-                                            [
-                                              "Nested Loop",
-                                              [
-                                                [
-                                                  "Index Only Scan",
-                                                  []
-                                                ],
-                                                [
-                                                  "Nested Loop",
-                                                  [
-                                                    [
-                                                      "Index Scan",
-                                                      []
-                                                    ],
-                                                    [
-                                                      "Nested Loop",
-                                                      [
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ],
-                                                        [
-                                                          "Nested Loop",
-                                                          [
-                                                            [
-                                                              "Index Scan",
-                                                              []
-                                                            ],
-                                                            [
-                                                              "Index Scan",
-                                                              []
-                                                            ]
-                                                          ]
-                                                        ]
-                                                      ]
-                                                    ]
-                                                  ]
-                                                ]
-                                              ]
-                                            ]
-                                          ]
-                                        ]
-                                      ]
-                                    ]
-                                  ]
-                                ]
-                              ]
-                            ]
-                          ]
-                        ]
-                      ]
-                    ]
-                  ]
-                ]
-              ]
-            ]
-          ]
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 52332,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 25,
-        "max_actual_rows": 25,
-        "estimated_rows": 25,
-        "heap_fetches": 0,
-        "planning_ms": 49.001,
-        "execution_ms": 360.67,
-        "total_matches": 7259,
-        "page_size": 25,
-        "buffers_per_match": 7.209
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] CompanyStateCode = TX \u2014 7,259 matches, 25-row page"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.growth_curve.eq[TX-10k]",
@@ -3443,9 +2540,9 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_lead_synth_10k_edge_src_dst",
-          "sp_lead_synth_10k_rdf_quad_pkey",
-          "sp_lead_synth_10k_term_pkey"
+          "idx_vgs_j7dxh2rr_edge_src_dst",
+          "vgs_j7dxh2rr_rdf_quad_pkey",
+          "vgs_j7dxh2rr_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -3560,14 +2657,14 @@
       },
       "metrics": {
         "shared_buffers": 39851,
-        "shared_read": 0,
+        "shared_read": 5716,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 59.822,
-        "execution_ms": 265.993,
+        "planning_ms": 50.478,
+        "execution_ms": 929.466,
         "total_matches": 738,
         "page_size": 25,
         "buffers_per_match": 53.999
@@ -3577,179 +2674,8 @@
     },
     {
       "bench_id": "query.kgquery.growth_curve.eq[VT-100k]",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Nested Loop",
-          "Limit",
-          "Unique",
-          "Sort",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan"
-        ],
-        "indexes": [
-          "idx_sp_lead_synth_100k_edge_dst_src",
-          "idx_sp_lead_synth_100k_quad_ctx_pred",
-          "sp_lead_synth_100k_rdf_quad_pkey",
-          "sp_lead_synth_100k_term_pkey"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Nested Loop",
-          [
-            [
-              "Index Scan",
-              []
-            ],
-            [
-              "Limit",
-              [
-                [
-                  "Unique",
-                  [
-                    [
-                      "Sort",
-                      [
-                        [
-                          "Nested Loop",
-                          [
-                            [
-                              "Index Only Scan",
-                              []
-                            ],
-                            [
-                              "Nested Loop",
-                              [
-                                [
-                                  "Index Only Scan",
-                                  []
-                                ],
-                                [
-                                  "Nested Loop",
-                                  [
-                                    [
-                                      "Index Only Scan",
-                                      []
-                                    ],
-                                    [
-                                      "Nested Loop",
-                                      [
-                                        [
-                                          "Index Scan",
-                                          []
-                                        ],
-                                        [
-                                          "Nested Loop",
-                                          [
-                                            [
-                                              "Index Only Scan",
-                                              []
-                                            ],
-                                            [
-                                              "Nested Loop",
-                                              [
-                                                [
-                                                  "Index Only Scan",
-                                                  []
-                                                ],
-                                                [
-                                                  "Nested Loop",
-                                                  [
-                                                    [
-                                                      "Index Scan",
-                                                      []
-                                                    ],
-                                                    [
-                                                      "Nested Loop",
-                                                      [
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ],
-                                                        [
-                                                          "Nested Loop",
-                                                          [
-                                                            [
-                                                              "Index Scan",
-                                                              []
-                                                            ],
-                                                            [
-                                                              "Nested Loop",
-                                                              [
-                                                                [
-                                                                  "Index Only Scan",
-                                                                  []
-                                                                ],
-                                                                [
-                                                                  "Index Only Scan",
-                                                                  []
-                                                                ]
-                                                              ]
-                                                            ]
-                                                          ]
-                                                        ]
-                                                      ]
-                                                    ]
-                                                  ]
-                                                ]
-                                              ]
-                                            ]
-                                          ]
-                                        ]
-                                      ]
-                                    ]
-                                  ]
-                                ]
-                              ]
-                            ]
-                          ]
-                        ]
-                      ]
-                    ]
-                  ]
-                ]
-              ]
-            ]
-          ]
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 36058,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 25,
-        "max_actual_rows": 892,
-        "estimated_rows": 1,
-        "heap_fetches": 0,
-        "planning_ms": 40.451,
-        "execution_ms": 388.326,
-        "total_matches": 892,
-        "page_size": 25,
-        "buffers_per_match": 40.424
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] CompanyStateCode = VT \u2014 892 matches, 25-row page"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.growth_curve.eq[VT-10k]",
@@ -3785,10 +2711,10 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_lead_synth_10k_edge_dst_src",
-          "idx_sp_lead_synth_10k_quad_po",
-          "sp_lead_synth_10k_rdf_quad_pkey",
-          "sp_lead_synth_10k_term_pkey"
+          "idx_vgs_j7dxh2rr_edge_dst_src",
+          "idx_vgs_j7dxh2rr_quad_po",
+          "vgs_j7dxh2rr_rdf_quad_pkey",
+          "vgs_j7dxh2rr_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -3912,14 +2838,14 @@
       },
       "metrics": {
         "shared_buffers": 3740,
-        "shared_read": 0,
+        "shared_read": 710,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 88,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 35.32,
-        "execution_ms": 58.566,
+        "planning_ms": 28.68,
+        "execution_ms": 131.32,
         "total_matches": 88,
         "page_size": 25,
         "buffers_per_match": 42.5
@@ -3929,206 +2855,27 @@
     },
     {
       "bench_id": "query.kgquery.growth_ratio[100k]",
-      "kind": "query",
-      "status": "ok",
-      "metrics": {
-        "growth_ratio": 1.93,
-        "match_spread": 4.13,
-        "growth_vs_matches": 0.298,
-        "buffers_smallest": 66072,
-        "buffers_largest": 127667
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] 25-row page, matches 892\u21923,687. O(page) predicts ~1.0; O(matches) predicts ~4.1"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.growth_ratio[10k]",
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "growth_ratio": 0.51,
+        "growth_ratio": 0.47,
         "match_spread": 3.92,
-        "growth_vs_matches": -0.169,
+        "growth_vs_matches": -0.181,
         "buffers_smallest": 535084,
-        "buffers_largest": 271685
+        "buffers_largest": 252193
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "[10k] 25-row page, matches 88\u2192345. O(page) predicts ~1.0; O(matches) predicts ~3.9"
     },
     {
       "bench_id": "query.kgquery.no_duplicate_rows[generic-100k]",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Nested Loop",
-          "Limit",
-          "Unique",
-          "Sort",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan"
-        ],
-        "indexes": [
-          "idx_sp_lead_synth_100k_edge_dst_src",
-          "idx_sp_lead_synth_100k_quad_ctx_pred",
-          "sp_lead_synth_100k_rdf_quad_pkey",
-          "sp_lead_synth_100k_term_pkey"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Nested Loop",
-          [
-            [
-              "Index Scan",
-              []
-            ],
-            [
-              "Limit",
-              [
-                [
-                  "Unique",
-                  [
-                    [
-                      "Sort",
-                      [
-                        [
-                          "Nested Loop",
-                          [
-                            [
-                              "Index Only Scan",
-                              []
-                            ],
-                            [
-                              "Nested Loop",
-                              [
-                                [
-                                  "Index Only Scan",
-                                  []
-                                ],
-                                [
-                                  "Nested Loop",
-                                  [
-                                    [
-                                      "Index Only Scan",
-                                      []
-                                    ],
-                                    [
-                                      "Nested Loop",
-                                      [
-                                        [
-                                          "Index Scan",
-                                          []
-                                        ],
-                                        [
-                                          "Nested Loop",
-                                          [
-                                            [
-                                              "Index Only Scan",
-                                              []
-                                            ],
-                                            [
-                                              "Nested Loop",
-                                              [
-                                                [
-                                                  "Index Only Scan",
-                                                  []
-                                                ],
-                                                [
-                                                  "Nested Loop",
-                                                  [
-                                                    [
-                                                      "Index Scan",
-                                                      []
-                                                    ],
-                                                    [
-                                                      "Nested Loop",
-                                                      [
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ],
-                                                        [
-                                                          "Nested Loop",
-                                                          [
-                                                            [
-                                                              "Index Scan",
-                                                              []
-                                                            ],
-                                                            [
-                                                              "Nested Loop",
-                                                              [
-                                                                [
-                                                                  "Index Only Scan",
-                                                                  []
-                                                                ],
-                                                                [
-                                                                  "Index Only Scan",
-                                                                  []
-                                                                ]
-                                                              ]
-                                                            ]
-                                                          ]
-                                                        ]
-                                                      ]
-                                                    ]
-                                                  ]
-                                                ]
-                                              ]
-                                            ]
-                                          ]
-                                        ]
-                                      ]
-                                    ]
-                                  ]
-                                ]
-                              ]
-                            ]
-                          ]
-                        ]
-                      ]
-                    ]
-                  ]
-                ]
-              ]
-            ]
-          ]
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 36058,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 25,
-        "max_actual_rows": 892,
-        "estimated_rows": 1,
-        "heap_fetches": 0,
-        "planning_ms": 34.775,
-        "execution_ms": 38.285,
-        "rows": 25,
-        "distinct": 25
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "KGEntity: multiplicity, not just membership (issues/046)"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.no_duplicate_rows[generic-10k]",
@@ -4164,10 +2911,10 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_lead_synth_10k_edge_dst_src",
-          "idx_sp_lead_synth_10k_quad_po",
-          "sp_lead_synth_10k_rdf_quad_pkey",
-          "sp_lead_synth_10k_term_pkey"
+          "idx_vgs_j7dxh2rr_edge_dst_src",
+          "idx_vgs_j7dxh2rr_quad_po",
+          "vgs_j7dxh2rr_rdf_quad_pkey",
+          "vgs_j7dxh2rr_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -4297,8 +3044,8 @@
         "max_actual_rows": 88,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 28.325,
-        "execution_ms": 4.373,
+        "planning_ms": 28.379,
+        "execution_ms": 4.879,
         "rows": 25,
         "distinct": 25
       },
@@ -4307,178 +3054,8 @@
     },
     {
       "bench_id": "query.kgquery.no_duplicate_rows[specific-100k]",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Nested Loop",
-          "Limit",
-          "Unique",
-          "Sort",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Only Scan",
-          "Index Scan"
-        ],
-        "indexes": [
-          "idx_sp_lead_synth_100k_edge_dst_src",
-          "idx_sp_lead_synth_100k_quad_ctx_pred",
-          "sp_lead_synth_100k_rdf_quad_pkey",
-          "sp_lead_synth_100k_term_pkey"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Nested Loop",
-          [
-            [
-              "Index Scan",
-              []
-            ],
-            [
-              "Limit",
-              [
-                [
-                  "Unique",
-                  [
-                    [
-                      "Sort",
-                      [
-                        [
-                          "Nested Loop",
-                          [
-                            [
-                              "Index Only Scan",
-                              []
-                            ],
-                            [
-                              "Nested Loop",
-                              [
-                                [
-                                  "Index Only Scan",
-                                  []
-                                ],
-                                [
-                                  "Nested Loop",
-                                  [
-                                    [
-                                      "Index Only Scan",
-                                      []
-                                    ],
-                                    [
-                                      "Nested Loop",
-                                      [
-                                        [
-                                          "Index Scan",
-                                          []
-                                        ],
-                                        [
-                                          "Nested Loop",
-                                          [
-                                            [
-                                              "Index Only Scan",
-                                              []
-                                            ],
-                                            [
-                                              "Nested Loop",
-                                              [
-                                                [
-                                                  "Index Only Scan",
-                                                  []
-                                                ],
-                                                [
-                                                  "Nested Loop",
-                                                  [
-                                                    [
-                                                      "Index Scan",
-                                                      []
-                                                    ],
-                                                    [
-                                                      "Nested Loop",
-                                                      [
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ],
-                                                        [
-                                                          "Nested Loop",
-                                                          [
-                                                            [
-                                                              "Index Scan",
-                                                              []
-                                                            ],
-                                                            [
-                                                              "Nested Loop",
-                                                              [
-                                                                [
-                                                                  "Index Only Scan",
-                                                                  []
-                                                                ],
-                                                                [
-                                                                  "Index Only Scan",
-                                                                  []
-                                                                ]
-                                                              ]
-                                                            ]
-                                                          ]
-                                                        ]
-                                                      ]
-                                                    ]
-                                                  ]
-                                                ]
-                                              ]
-                                            ]
-                                          ]
-                                        ]
-                                      ]
-                                    ]
-                                  ]
-                                ]
-                              ]
-                            ]
-                          ]
-                        ]
-                      ]
-                    ]
-                  ]
-                ]
-              ]
-            ]
-          ]
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 36058,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 25,
-        "max_actual_rows": 892,
-        "estimated_rows": 1,
-        "heap_fetches": 0,
-        "planning_ms": 31.119,
-        "execution_ms": 37.15,
-        "rows": 25,
-        "distinct": 25
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "urn:acme:kg:entity:Lead: multiplicity, not just membership (issues/046)"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.no_duplicate_rows[specific-10k]",
@@ -4514,10 +3091,10 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_lead_synth_10k_edge_dst_src",
-          "idx_sp_lead_synth_10k_quad_po",
-          "sp_lead_synth_10k_rdf_quad_pkey",
-          "sp_lead_synth_10k_term_pkey"
+          "idx_vgs_j7dxh2rr_edge_dst_src",
+          "idx_vgs_j7dxh2rr_quad_po",
+          "vgs_j7dxh2rr_rdf_quad_pkey",
+          "vgs_j7dxh2rr_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -4647,8 +3224,8 @@
         "max_actual_rows": 88,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 28.249,
-        "execution_ms": 4.075,
+        "planning_ms": 29.039,
+        "execution_ms": 5.134,
         "rows": 25,
         "distinct": 25
       },
@@ -4657,14 +3234,8 @@
     },
     {
       "bench_id": "query.kgquery.page_size_cliff[generic-100k]",
-      "kind": "query",
-      "status": "ok",
-      "metrics": {
-        "max_page_size_before_flip": 2000,
-        "flips_within_range": false
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] largest page still served by an ordered, early-terminating scan (entity_type=http://vital.ai/ontology/haley-ai-kg#KGEntity)"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.page_size_cliff[generic-10k]",
@@ -4679,14 +3250,8 @@
     },
     {
       "bench_id": "query.kgquery.page_size_cliff[specific-100k]",
-      "kind": "query",
-      "status": "ok",
-      "metrics": {
-        "max_page_size_before_flip": 2000,
-        "flips_within_range": false
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] largest page still served by an ordered, early-terminating scan (entity_type=urn:acme:kg:entity:Lead)"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.page_size_cliff[specific-10k]",
@@ -4700,23 +3265,465 @@
       "notes": "[10k] largest page still served by an ordered, early-terminating scan (entity_type=urn:acme:kg:entity:Lead)"
     },
     {
-      "bench_id": "query.kgquery.range_penalty[100k]",
-      "kind": "query",
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-10k]",
+      "kind": "sql",
       "status": "ok",
       "metrics": {
-        "buffers_per_match_tightest": 4.0,
-        "buffers_extreme": 6099,
-        "extreme_matches": 149,
-        "buffers_per_match_extreme": 40.9,
-        "extreme_vs_equality": 10.64,
-        "equality_buffers_per_match": 3.8,
-        "range_vs_equality": 1.04,
-        "flatness": 13.6,
-        "tightest_matches": 10086,
-        "buffers_tightest": 40418
+        "fenced_buffers": 29842,
+        "unfenced_buffers": 29842,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 1.0
       },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] MQLRating >= 90 returns 10,086 rows and still reads 40,418 buffers \u2014 the candidate set, not the match set (issues/040)"
+      "dataset": "sp_lead_synth_10k",
+      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 27139,
+        "unfenced_buffers": 997915,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 0.027
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "contains / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 118738,
+        "unfenced_buffers": 118738,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 109411,
+        "unfenced_buffers": 1152967,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 0.095
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-common / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 537352,
+        "unfenced_buffers": 3992,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 134.607
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 13749,
+        "unfenced_buffers": 3992,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 3.444
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-rare / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 37429,
+        "unfenced_buffers": 37429,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 34644,
+        "unfenced_buffers": 1266172,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 0.027
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-loose / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 545851,
+        "unfenced_buffers": 13774,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 39.629
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 1587391,
+        "unfenced_buffers": 2059107,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 0.771
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-mid / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 534602,
+        "unfenced_buffers": 2299,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 232.537
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 1586812,
+        "unfenced_buffers": 2058528,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 0.771
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-tight / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 7514,
+        "unfenced_buffers": 7514,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 6814,
+        "unfenced_buffers": 997615,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 0.007
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "contains / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 20911,
+        "unfenced_buffers": 20911,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 19182,
+        "unfenced_buffers": 1152667,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 0.017
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-common / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 535084,
+        "unfenced_buffers": 3740,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 143.071
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 6001,
+        "unfenced_buffers": 3740,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 1.605
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-rare / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 8437,
+        "unfenced_buffers": 8437,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 7764,
+        "unfenced_buffers": 1265872,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 0.006
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-loose / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 536700,
+        "unfenced_buffers": 13546,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 39.621
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 497657,
+        "unfenced_buffers": 655153,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 0.76
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-mid / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 534602,
+        "unfenced_buffers": 2299,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 232.537
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 1586812,
+        "unfenced_buffers": 2058528,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 0.771
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-tight / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.range_penalty[100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.range_penalty[10k]",
@@ -4724,10 +3731,10 @@
       "status": "ok",
       "metrics": {
         "buffers_per_match_tightest": 35.0,
-        "buffers_extreme": 2154,
+        "buffers_extreme": 2299,
         "extreme_matches": 13,
-        "buffers_per_match_extreme": 165.7,
-        "extreme_vs_equality": 7.22,
+        "buffers_per_match_extreme": 176.8,
+        "extreme_vs_equality": 7.7,
         "equality_buffers_per_match": 23.0,
         "range_vs_equality": 1.52,
         "flatness": 12.49,
@@ -4739,50 +3746,35 @@
     },
     {
       "bench_id": "query.kgquery.sorted_paging.depth[100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "sorted_ms_offset_0": 404.0,
-        "sorted_ms_offset_250": 472.7,
-        "sorted_ms_offset_1000": 373.7,
-        "sorted_depth_ratio": 0.9
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "sorted page cost across offsets \u2014 issues/080"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.sorted_paging.depth[10k]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 40.2,
-        "sorted_ms_offset_250": 41.9,
-        "sorted_ms_offset_1000": 29.8,
-        "sorted_depth_ratio": 1.0
+        "sorted_ms_offset_0": 42.9,
+        "sorted_ms_offset_250": 47.9,
+        "sorted_ms_offset_1000": 43.4,
+        "sorted_depth_ratio": 1.1
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
     },
     {
       "bench_id": "query.kgquery.sorted_paging.entity_property[100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "unsorted_ms": 33.4,
-        "sorted_ms": 482.0,
-        "sort_ratio": 14.4
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "entity_property sort vs the same query unsorted (issues/080)"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.sorted_paging.entity_property[10k]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 16.8,
-        "sorted_ms": 33.1,
-        "sort_ratio": 2.0
+        "unsorted_ms": 21.0,
+        "sorted_ms": 46.6,
+        "sort_ratio": 2.2
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -4790,7 +3782,7 @@
     {
       "bench_id": "query.kgquery.sorted_paging.page_shape[100k]",
       "status": "skipped",
-      "reason": "Skipped: could not identify the sort column in the projection"
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.kgquery.sorted_paging.page_shape[10k]",
@@ -4798,25 +3790,31 @@
       "reason": "Skipped: could not identify the sort column in the projection"
     },
     {
-      "bench_id": "query.lead.kgquery[hierarchical-p100-100k]",
-      "kind": "api",
+      "bench_id": "query.kgquery.text_needle_regimes",
+      "kind": "sql",
       "status": "ok",
       "metrics": {
-        "wall_ms": 84.4,
-        "min_ms": 39.6,
-        "page_size": 100,
-        "results": 100
+        "empty_buffers": 0,
+        "matching_buffers": 7514,
+        "unservable_buffers": 543861,
+        "matching_rows": 25.0,
+        "empty_rows": 0.0
       },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k p100] Hierarchical frame query"
+      "dataset": "sp_lead_synth_10k",
+      "notes": "text needle regimes: empty < matching < unservable (issues/202 \u2014 empty is provably empty and costs 0)"
+    },
+    {
+      "bench_id": "query.lead.kgquery[hierarchical-p100-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
     },
     {
       "bench_id": "query.lead.kgquery[hierarchical-p100-10k]",
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 30.1,
-        "min_ms": 28.7,
+        "wall_ms": 34.0,
+        "min_ms": 32.3,
         "page_size": 100,
         "results": 100
       },
@@ -4828,8 +3826,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 20.6,
-        "min_ms": 19.8,
+        "wall_ms": 29.6,
+        "min_ms": 27.4,
         "page_size": 100,
         "results": 100
       },
@@ -4838,24 +3836,16 @@
     },
     {
       "bench_id": "query.lead.kgquery[hierarchical-p25-100k]",
-      "kind": "api",
-      "status": "ok",
-      "metrics": {
-        "wall_ms": 24.4,
-        "min_ms": 23.4,
-        "page_size": 25,
-        "results": 25
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k p25] Hierarchical frame query"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
     },
     {
       "bench_id": "query.lead.kgquery[hierarchical-p25-10k]",
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 26.1,
-        "min_ms": 22.8,
+        "wall_ms": 28.6,
+        "min_ms": 26.3,
         "page_size": 25,
         "results": 25
       },
@@ -4867,8 +3857,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 15.4,
-        "min_ms": 15.3,
+        "wall_ms": 23.4,
+        "min_ms": 18.4,
         "page_size": 25,
         "results": 25
       },
@@ -4877,24 +3867,16 @@
     },
     {
       "bench_id": "query.lead.kgquery[high_rated-p100-100k]",
-      "kind": "api",
-      "status": "ok",
-      "metrics": {
-        "wall_ms": 85.8,
-        "min_ms": 69.0,
-        "page_size": 100,
-        "results": 100
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k p100] Find high-rated leads (MQLRating >= 65)"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
     },
     {
       "bench_id": "query.lead.kgquery[high_rated-p100-10k]",
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 59.0,
-        "min_ms": 58.9,
+        "wall_ms": 109.8,
+        "min_ms": 71.2,
         "page_size": 100,
         "results": 100
       },
@@ -4906,8 +3888,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 69.3,
-        "min_ms": 68.0,
+        "wall_ms": 85.0,
+        "min_ms": 81.8,
         "page_size": 100,
         "results": 73
       },
@@ -4916,24 +3898,16 @@
     },
     {
       "bench_id": "query.lead.kgquery[high_rated-p25-100k]",
-      "kind": "api",
-      "status": "ok",
-      "metrics": {
-        "wall_ms": 34.9,
-        "min_ms": 33.9,
-        "page_size": 25,
-        "results": 25
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k p25] Find high-rated leads (MQLRating >= 65)"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
     },
     {
       "bench_id": "query.lead.kgquery[high_rated-p25-10k]",
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 35.8,
-        "min_ms": 34.7,
+        "wall_ms": 38.5,
+        "min_ms": 38.1,
         "page_size": 25,
         "results": 25
       },
@@ -4945,8 +3919,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 37.5,
-        "min_ms": 34.3,
+        "wall_ms": 47.5,
+        "min_ms": 45.5,
         "page_size": 25,
         "results": 25
       },
@@ -4955,24 +3929,16 @@
     },
     {
       "bench_id": "query.lead.kgquery[mql-p100-100k]",
-      "kind": "api",
-      "status": "ok",
-      "metrics": {
-        "wall_ms": 61.6,
-        "min_ms": 58.9,
-        "page_size": 100,
-        "results": 100
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k p100] Find MQL leads"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
     },
     {
       "bench_id": "query.lead.kgquery[mql-p100-10k]",
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 57.7,
-        "min_ms": 55.6,
+        "wall_ms": 68.6,
+        "min_ms": 64.8,
         "page_size": 100,
         "results": 100
       },
@@ -4984,8 +3950,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 30.8,
-        "min_ms": 29.4,
+        "wall_ms": 35.8,
+        "min_ms": 33.7,
         "page_size": 100,
         "results": 99
       },
@@ -4994,24 +3960,16 @@
     },
     {
       "bench_id": "query.lead.kgquery[mql-p25-100k]",
-      "kind": "api",
-      "status": "ok",
-      "metrics": {
-        "wall_ms": 37.2,
-        "min_ms": 34.2,
-        "page_size": 25,
-        "results": 25
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k p25] Find MQL leads"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
     },
     {
       "bench_id": "query.lead.kgquery[mql-p25-10k]",
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 33.8,
-        "min_ms": 33.3,
+        "wall_ms": 37.4,
+        "min_ms": 36.7,
         "page_size": 25,
         "results": 25
       },
@@ -5023,8 +3981,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 31.7,
-        "min_ms": 21.0,
+        "wall_ms": 25.6,
+        "min_ms": 22.7,
         "page_size": 25,
         "results": 25
       },
@@ -5033,24 +3991,16 @@
     },
     {
       "bench_id": "query.lead.kgquery[state_ca-p100-100k]",
-      "kind": "api",
-      "status": "ok",
-      "metrics": {
-        "wall_ms": 179.4,
-        "min_ms": 145.8,
-        "page_size": 100,
-        "results": 100
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k p100] Find leads in California"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
     },
     {
       "bench_id": "query.lead.kgquery[state_ca-p100-10k]",
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 146.2,
-        "min_ms": 126.1,
+        "wall_ms": 164.6,
+        "min_ms": 160.8,
         "page_size": 100,
         "results": 100
       },
@@ -5062,8 +4012,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 31.6,
-        "min_ms": 30.9,
+        "wall_ms": 36.6,
+        "min_ms": 35.3,
         "page_size": 100,
         "results": 13
       },
@@ -5072,24 +4022,16 @@
     },
     {
       "bench_id": "query.lead.kgquery[state_ca-p25-100k]",
-      "kind": "api",
-      "status": "ok",
-      "metrics": {
-        "wall_ms": 61.9,
-        "min_ms": 55.8,
-        "page_size": 25,
-        "results": 25
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "[100k p25] Find leads in California"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
     },
     {
       "bench_id": "query.lead.kgquery[state_ca-p25-10k]",
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 156.0,
-        "min_ms": 53.5,
+        "wall_ms": 51.8,
+        "min_ms": 50.7,
         "page_size": 25,
         "results": 25
       },
@@ -5101,8 +4043,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 36.9,
-        "min_ms": 32.2,
+        "wall_ms": 37.4,
+        "min_ms": 36.5,
         "page_size": 25,
         "results": 13
       },
@@ -5110,11 +4052,22 @@
       "notes": "[real100 p25] Find leads in California"
     },
     {
+      "bench_id": "query.partition.graph_scoped_pruning",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "partitions_scanned": 1,
+        "partitions_total": 4,
+        "node_types": "Seq Scan"
+      },
+      "dataset": "synthetic:4part"
+    },
+    {
       "bench_id": "query.relation.convergent_fan_in",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "convergent_ms": 5304.9,
+        "convergent_ms": 6293.8,
         "convergent_rows": 1313755
       },
       "dataset": "sp_kg_rel",
@@ -5136,7 +4089,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_friendof_ms": 62.6,
+        "rel_friendof_ms": 59.8,
         "rel_friendof_rows": 14625
       },
       "dataset": "sp_kg_rel",
@@ -5147,7 +4100,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_reportsto_ms": 21.3,
+        "rel_reportsto_ms": 36.5,
         "rel_reportsto_rows": 4750
       },
       "dataset": "sp_kg_rel",
@@ -5158,7 +4111,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_worksfor_ms": 23.9,
+        "rel_worksfor_ms": 35.2,
         "rel_worksfor_rows": 4875
       },
       "dataset": "sp_kg_rel",
@@ -5171,7 +4124,7 @@
       "metrics": {
         "buffers": 9,
         "rows": 1.0,
-        "sql_chars": 3367
+        "sql_chars": 3357
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "ask \u2014 issues/193 shape coverage"
@@ -5183,7 +4136,7 @@
       "metrics": {
         "buffers": 127,
         "rows": 25.0,
-        "sql_chars": 6553
+        "sql_chars": 6538
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "bind \u2014 issues/193 shape coverage"
@@ -5195,7 +4148,7 @@
       "metrics": {
         "buffers": 127,
         "rows": 25.0,
-        "sql_chars": 9551
+        "sql_chars": 9526
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "construct_frame_graph \u2014 issues/193 shape coverage"
@@ -5207,7 +4160,7 @@
       "metrics": {
         "buffers": 655,
         "rows": 25.0,
-        "sql_chars": 15788
+        "sql_chars": 15748
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "construct_frame_with_slots \u2014 issues/193 shape coverage"
@@ -5217,12 +4170,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "buffers": 2836,
-        "where_buffers": 1381,
+        "buffers": 2813,
+        "where_buffers": 1358,
         "fetch_buffers": 1455,
         "targets": 25,
         "rows": 173.0,
-        "sql_chars": 14768
+        "sql_chars": 14738
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "describe \u2014 issues/193 shape coverage; BOTH phases (WHERE + VALUES fetch), which is what a caller pays"
@@ -5234,7 +4187,7 @@
       "metrics": {
         "buffers": 127,
         "rows": 25.0,
-        "sql_chars": 6466
+        "sql_chars": 6451
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "lcase_contains \u2014 issues/193 shape coverage"
@@ -5246,7 +4199,7 @@
       "metrics": {
         "buffers": 205,
         "rows": 25.0,
-        "sql_chars": 9922
+        "sql_chars": 9897
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "minus \u2014 issues/193 shape coverage"
@@ -5258,7 +4211,7 @@
       "metrics": {
         "buffers": 406,
         "rows": 25.0,
-        "sql_chars": 10234
+        "sql_chars": 10209
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "optional \u2014 issues/193 shape coverage"
@@ -5270,7 +4223,7 @@
       "metrics": {
         "buffers": 215,
         "rows": 25.0,
-        "sql_chars": 6938
+        "sql_chars": 6898
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "property_path_alt \u2014 issues/193 shape coverage"
@@ -5280,9 +4233,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "buffers": 364,
+        "buffers": 368,
         "rows": 25.0,
-        "sql_chars": 6431
+        "sql_chars": 6411
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "regex_anchored \u2014 issues/193 shape coverage"
@@ -5292,9 +4245,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "buffers": 1575,
+        "buffers": 1553,
         "rows": 25.0,
-        "sql_chars": 7942
+        "sql_chars": 7922
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "subselect \u2014 issues/193 shape coverage"
@@ -5306,7 +4259,7 @@
       "metrics": {
         "buffers": 127,
         "rows": 25.0,
-        "sql_chars": 13827
+        "sql_chars": 13797
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "union_bound_var \u2014 issues/193 shape coverage"
@@ -5325,36 +4278,22 @@
     },
     {
       "bench_id": "query.values.list_growth[100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "values_1_ms": 0.65,
-        "values_20_ms": 4.18,
-        "values_growth": 6.5
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "VALUES cost against list length \u2014 issues/087"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.values.vs_literal_subject[100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "values_ms": 0.51,
-        "literal_subject_ms": 0.46,
-        "values_ratio": 1.1
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k does not exist"
     },
     {
       "bench_id": "query.values.vs_literal_subject[10k]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.42,
-        "literal_subject_ms": 0.48,
-        "values_ratio": 0.9
+        "values_ms": 0.4,
+        "literal_subject_ms": 0.65,
+        "values_ratio": 0.6
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -5364,7 +4303,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 2136.5,
+        "wall_ms": 389.3,
         "rows": 4
       },
       "dataset": "wordnet_frames",
@@ -5375,7 +4314,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 229.3,
+        "wall_ms": 827.3,
         "rows": 1
       },
       "dataset": "wordnet_frames",
@@ -5386,7 +4325,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 283.5,
+        "wall_ms": 478.8,
         "rows": 425
       },
       "dataset": "wordnet_frames",
@@ -5397,7 +4336,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 428.6,
+        "wall_ms": 262.7,
         "rows": 45
       },
       "dataset": "wordnet_frames",
@@ -5409,7 +4348,6 @@
       "status": "ok",
       "shape": {
         "node_types": [
-          "Sort",
           "Subquery Scan",
           "Sort",
           "Nested Loop",
@@ -5425,20 +4363,20 @@
           "Nested Loop",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Nested Loop",
           "Index Scan",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Memoize",
           "Index Scan",
           "Memoize",
@@ -5447,22 +4385,31 @@
           "Index Only Scan"
         ],
         "indexes": [
-          "idx_sp_graph_skew_2k_fs_cover",
-          "idx_sp_graph_skew_2k_fs_role_entity",
-          "idx_sp_graph_skew_2k_quad_ctx_pred",
-          "sp_graph_skew_2k_rdf_quad_pkey",
-          "sp_graph_skew_2k_term_pkey"
+          "idx_vgs_oyyg7wnl_fs_cover",
+          "idx_vgs_oyyg7wnl_fs_role_entity",
+          "idx_vgs_oyyg7wnl_quad_ctx_pred",
+          "vgs_oyyg7wnl_rdf_quad_pkey",
+          "vgs_oyyg7wnl_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
-          "Sort",
+          "Subquery Scan",
           [
             [
-              "Subquery Scan",
+              "Sort",
               [
                 [
-                  "Sort",
+                  "Nested Loop",
                   [
+                    [
+                      "Memoize",
+                      [
+                        [
+                          "Index Only Scan",
+                          []
+                        ]
+                      ]
+                    ],
                     [
                       "Nested Loop",
                       [
@@ -5482,7 +4429,7 @@
                               "Memoize",
                               [
                                 [
-                                  "Index Only Scan",
+                                  "Index Scan",
                                   []
                                 ]
                               ]
@@ -5491,8 +4438,26 @@
                               "Nested Loop",
                               [
                                 [
-                                  "Memoize",
+                                  "Nested Loop",
                                   [
+                                    [
+                                      "Hash Join",
+                                      [
+                                        [
+                                          "Hash",
+                                          [
+                                            [
+                                              "Index Only Scan",
+                                              []
+                                            ]
+                                          ]
+                                        ],
+                                        [
+                                          "Index Only Scan",
+                                          []
+                                        ]
+                                      ]
+                                    ],
                                     [
                                       "Index Scan",
                                       []
@@ -5506,32 +4471,9 @@
                                       "Nested Loop",
                                       [
                                         [
-                                          "Hash Join",
-                                          [
-                                            [
-                                              "Hash",
-                                              [
-                                                [
-                                                  "Index Only Scan",
-                                                  []
-                                                ]
-                                              ]
-                                            ],
-                                            [
-                                              "Index Only Scan",
-                                              []
-                                            ]
-                                          ]
-                                        ],
-                                        [
                                           "Index Scan",
                                           []
-                                        ]
-                                      ]
-                                    ],
-                                    [
-                                      "Nested Loop",
-                                      [
+                                        ],
                                         [
                                           "Nested Loop",
                                           [
@@ -5543,25 +4485,25 @@
                                               "Nested Loop",
                                               [
                                                 [
-                                                  "Index Scan",
+                                                  "Index Only Scan",
                                                   []
                                                 ],
                                                 [
-                                                  "Nested Loop",
-                                                  [
-                                                    [
-                                                      "Index Only Scan",
-                                                      []
-                                                    ],
-                                                    [
-                                                      "Index Only Scan",
-                                                      []
-                                                    ]
-                                                  ]
+                                                  "Index Only Scan",
+                                                  []
                                                 ]
                                               ]
                                             ]
                                           ]
+                                        ]
+                                      ]
+                                    ],
+                                    [
+                                      "Nested Loop",
+                                      [
+                                        [
+                                          "Index Scan",
+                                          []
                                         ],
                                         [
                                           "Nested Loop",
@@ -5581,21 +4523,12 @@
                                                   "Nested Loop",
                                                   [
                                                     [
-                                                      "Index Scan",
+                                                      "Index Only Scan",
                                                       []
                                                     ],
                                                     [
-                                                      "Nested Loop",
-                                                      [
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ],
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ]
-                                                      ]
+                                                      "Index Only Scan",
+                                                      []
                                                     ]
                                                   ]
                                                 ]
@@ -5621,15 +4554,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 37227,
+        "shared_buffers": 44718,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 70,
         "max_actual_rows": 9266,
         "estimated_rows": 54,
         "heap_fetches": 0,
-        "planning_ms": 2.455,
-        "execution_ms": 24.107,
+        "planning_ms": 3.296,
+        "execution_ms": 36.585,
         "rows": 70
       },
       "dataset": "sp_graph_skew_2k",
@@ -5641,7 +4574,6 @@
       "status": "ok",
       "shape": {
         "node_types": [
-          "Sort",
           "Subquery Scan",
           "Sort",
           "Nested Loop",
@@ -5656,20 +4588,20 @@
           "Nested Loop",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Nested Loop",
           "Index Scan",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Memoize",
           "Index Scan",
           "Memoize",
@@ -5678,22 +4610,31 @@
           "Index Only Scan"
         ],
         "indexes": [
-          "idx_sp_graph_skew_2k_fs_cover",
-          "idx_sp_graph_skew_2k_fs_role_entity",
-          "idx_sp_graph_skew_2k_quad_ctx_pred",
-          "sp_graph_skew_2k_rdf_quad_pkey",
-          "sp_graph_skew_2k_term_pkey"
+          "idx_vgs_oyyg7wnl_fs_cover",
+          "idx_vgs_oyyg7wnl_fs_role_entity",
+          "idx_vgs_oyyg7wnl_quad_ctx_pred",
+          "vgs_oyyg7wnl_rdf_quad_pkey",
+          "vgs_oyyg7wnl_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
-          "Sort",
+          "Subquery Scan",
           [
             [
-              "Subquery Scan",
+              "Sort",
               [
                 [
-                  "Sort",
+                  "Nested Loop",
                   [
+                    [
+                      "Memoize",
+                      [
+                        [
+                          "Index Only Scan",
+                          []
+                        ]
+                      ]
+                    ],
                     [
                       "Nested Loop",
                       [
@@ -5713,7 +4654,7 @@
                               "Memoize",
                               [
                                 [
-                                  "Index Only Scan",
+                                  "Index Scan",
                                   []
                                 ]
                               ]
@@ -5722,11 +4663,24 @@
                               "Nested Loop",
                               [
                                 [
-                                  "Memoize",
+                                  "Nested Loop",
                                   [
                                     [
                                       "Index Scan",
                                       []
+                                    ],
+                                    [
+                                      "Nested Loop",
+                                      [
+                                        [
+                                          "Index Only Scan",
+                                          []
+                                        ],
+                                        [
+                                          "Index Scan",
+                                          []
+                                        ]
+                                      ]
                                     ]
                                   ]
                                 ],
@@ -5748,8 +4702,17 @@
                                               []
                                             ],
                                             [
-                                              "Index Scan",
-                                              []
+                                              "Nested Loop",
+                                              [
+                                                [
+                                                  "Index Only Scan",
+                                                  []
+                                                ],
+                                                [
+                                                  "Index Only Scan",
+                                                  []
+                                                ]
+                                              ]
                                             ]
                                           ]
                                         ]
@@ -5759,35 +4722,8 @@
                                       "Nested Loop",
                                       [
                                         [
-                                          "Nested Loop",
-                                          [
-                                            [
-                                              "Index Only Scan",
-                                              []
-                                            ],
-                                            [
-                                              "Nested Loop",
-                                              [
-                                                [
-                                                  "Index Scan",
-                                                  []
-                                                ],
-                                                [
-                                                  "Nested Loop",
-                                                  [
-                                                    [
-                                                      "Index Only Scan",
-                                                      []
-                                                    ],
-                                                    [
-                                                      "Index Only Scan",
-                                                      []
-                                                    ]
-                                                  ]
-                                                ]
-                                              ]
-                                            ]
-                                          ]
+                                          "Index Scan",
+                                          []
                                         ],
                                         [
                                           "Nested Loop",
@@ -5807,21 +4743,12 @@
                                                   "Nested Loop",
                                                   [
                                                     [
-                                                      "Index Scan",
+                                                      "Index Only Scan",
                                                       []
                                                     ],
                                                     [
-                                                      "Nested Loop",
-                                                      [
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ],
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ]
-                                                      ]
+                                                      "Index Only Scan",
+                                                      []
                                                     ]
                                                   ]
                                                 ]
@@ -5847,15 +4774,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 4003,
+        "shared_buffers": 4822,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 21,
         "max_actual_rows": 191,
         "estimated_rows": 6,
         "heap_fetches": 0,
-        "planning_ms": 5.324,
-        "execution_ms": 5.028,
+        "planning_ms": 2.453,
+        "execution_ms": 4.99,
         "rows": 21
       },
       "dataset": "sp_graph_skew_2k",
@@ -5867,7 +4794,6 @@
       "status": "ok",
       "shape": {
         "node_types": [
-          "Sort",
           "Subquery Scan",
           "Sort",
           "Nested Loop",
@@ -5882,20 +4808,20 @@
           "Nested Loop",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Nested Loop",
           "Index Scan",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Memoize",
           "Index Scan",
           "Memoize",
@@ -5904,22 +4830,31 @@
           "Index Only Scan"
         ],
         "indexes": [
-          "idx_sp_graph_skew_2k_fs_cover",
-          "idx_sp_graph_skew_2k_fs_role_entity",
-          "idx_sp_graph_skew_2k_quad_ctx_pred",
-          "sp_graph_skew_2k_rdf_quad_pkey",
-          "sp_graph_skew_2k_term_pkey"
+          "idx_vgs_oyyg7wnl_fs_cover",
+          "idx_vgs_oyyg7wnl_fs_role_entity",
+          "idx_vgs_oyyg7wnl_quad_ctx_pred",
+          "vgs_oyyg7wnl_rdf_quad_pkey",
+          "vgs_oyyg7wnl_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
-          "Sort",
+          "Subquery Scan",
           [
             [
-              "Subquery Scan",
+              "Sort",
               [
                 [
-                  "Sort",
+                  "Nested Loop",
                   [
+                    [
+                      "Memoize",
+                      [
+                        [
+                          "Index Only Scan",
+                          []
+                        ]
+                      ]
+                    ],
                     [
                       "Nested Loop",
                       [
@@ -5939,7 +4874,7 @@
                               "Memoize",
                               [
                                 [
-                                  "Index Only Scan",
+                                  "Index Scan",
                                   []
                                 ]
                               ]
@@ -5948,11 +4883,24 @@
                               "Nested Loop",
                               [
                                 [
-                                  "Memoize",
+                                  "Nested Loop",
                                   [
                                     [
                                       "Index Scan",
                                       []
+                                    ],
+                                    [
+                                      "Nested Loop",
+                                      [
+                                        [
+                                          "Index Only Scan",
+                                          []
+                                        ],
+                                        [
+                                          "Index Scan",
+                                          []
+                                        ]
+                                      ]
                                     ]
                                   ]
                                 ],
@@ -5974,8 +4922,17 @@
                                               []
                                             ],
                                             [
-                                              "Index Scan",
-                                              []
+                                              "Nested Loop",
+                                              [
+                                                [
+                                                  "Index Only Scan",
+                                                  []
+                                                ],
+                                                [
+                                                  "Index Only Scan",
+                                                  []
+                                                ]
+                                              ]
                                             ]
                                           ]
                                         ]
@@ -5985,35 +4942,8 @@
                                       "Nested Loop",
                                       [
                                         [
-                                          "Nested Loop",
-                                          [
-                                            [
-                                              "Index Only Scan",
-                                              []
-                                            ],
-                                            [
-                                              "Nested Loop",
-                                              [
-                                                [
-                                                  "Index Scan",
-                                                  []
-                                                ],
-                                                [
-                                                  "Nested Loop",
-                                                  [
-                                                    [
-                                                      "Index Only Scan",
-                                                      []
-                                                    ],
-                                                    [
-                                                      "Index Only Scan",
-                                                      []
-                                                    ]
-                                                  ]
-                                                ]
-                                              ]
-                                            ]
-                                          ]
+                                          "Index Scan",
+                                          []
                                         ],
                                         [
                                           "Nested Loop",
@@ -6033,21 +4963,12 @@
                                                   "Nested Loop",
                                                   [
                                                     [
-                                                      "Index Scan",
+                                                      "Index Only Scan",
                                                       []
                                                     ],
                                                     [
-                                                      "Nested Loop",
-                                                      [
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ],
-                                                        [
-                                                          "Index Only Scan",
-                                                          []
-                                                        ]
-                                                      ]
+                                                      "Index Only Scan",
+                                                      []
                                                     ]
                                                   ]
                                                 ]
@@ -6073,15 +4994,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 2503,
+        "shared_buffers": 3013,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 7,
         "max_actual_rows": 144,
         "estimated_rows": 6,
         "heap_fetches": 0,
-        "planning_ms": 2.972,
-        "execution_ms": 4.674,
+        "planning_ms": 2.602,
+        "execution_ms": 3.6,
         "rows": 7
       },
       "dataset": "sp_graph_skew_2k",
@@ -6121,8 +5042,8 @@
           "Index Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Scan",
           "Index Only Scan",
+          "Index Scan",
           "Unique",
           "Sort",
           "Nested Loop",
@@ -6140,12 +5061,12 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_graph_skew_2k_fs_frame_role",
-          "idx_sp_graph_skew_2k_fs_role_entity",
-          "idx_sp_graph_skew_2k_quad_ctx_pred",
-          "idx_sp_graph_skew_2k_term_num",
-          "sp_graph_skew_2k_rdf_quad_pkey",
-          "sp_graph_skew_2k_term_pkey"
+          "idx_vgs_oyyg7wnl_fs_frame_role",
+          "idx_vgs_oyyg7wnl_fs_role_entity",
+          "idx_vgs_oyyg7wnl_quad_ctx_pred",
+          "idx_vgs_oyyg7wnl_term_num",
+          "vgs_oyyg7wnl_rdf_quad_pkey",
+          "vgs_oyyg7wnl_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -6232,14 +5153,14 @@
                                       "Nested Loop",
                                       [
                                         [
-                                          "Index Only Scan",
+                                          "Index Scan",
                                           []
                                         ],
                                         [
                                           "Nested Loop",
                                           [
                                             [
-                                              "Index Scan",
+                                              "Index Only Scan",
                                               []
                                             ],
                                             [
@@ -6356,15 +5277,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 12539,
+        "shared_buffers": 12767,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 17,
         "max_actual_rows": 2022,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 14.831,
-        "execution_ms": 10.547,
+        "planning_ms": 12.188,
+        "execution_ms": 10.42,
         "rows": 17
       },
       "dataset": "sp_graph_skew_2k",
@@ -6386,20 +5307,20 @@
           "Nested Loop",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Nested Loop",
           "Index Scan",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Memoize",
           "Index Scan",
           "Memoize",
@@ -6408,10 +5329,10 @@
           "Index Only Scan"
         ],
         "indexes": [
-          "idx_sp_graph_skew_2k_fs_cover",
-          "idx_sp_graph_skew_2k_fs_role_entity",
-          "sp_graph_skew_2k_rdf_quad_pkey",
-          "sp_graph_skew_2k_term_pkey"
+          "idx_vgs_oyyg7wnl_fs_cover",
+          "idx_vgs_oyyg7wnl_fs_role_entity",
+          "vgs_oyyg7wnl_rdf_quad_pkey",
+          "vgs_oyyg7wnl_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -6473,14 +5394,14 @@
                               "Nested Loop",
                               [
                                 [
-                                  "Index Only Scan",
+                                  "Index Scan",
                                   []
                                 ],
                                 [
                                   "Nested Loop",
                                   [
                                     [
-                                      "Index Scan",
+                                      "Index Only Scan",
                                       []
                                     ],
                                     [
@@ -6511,14 +5432,14 @@
                                   "Nested Loop",
                                   [
                                     [
-                                      "Index Only Scan",
+                                      "Index Scan",
                                       []
                                     ],
                                     [
                                       "Nested Loop",
                                       [
                                         [
-                                          "Index Scan",
+                                          "Index Only Scan",
                                           []
                                         ],
                                         [
@@ -6552,15 +5473,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 459,
+        "shared_buffers": 570,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 1,
         "max_actual_rows": 27,
         "estimated_rows": 4,
         "heap_fetches": 0,
-        "planning_ms": 1.886,
-        "execution_ms": 0.681,
+        "planning_ms": 2.114,
+        "execution_ms": 1.344,
         "rows": 1
       },
       "dataset": "sp_graph_skew_2k",
@@ -6595,10 +5516,10 @@
           "Index Scan"
         ],
         "indexes": [
-          "idx_sp_graph_skew_2k_fs_frame_role",
-          "idx_sp_graph_skew_2k_fs_role_entity",
-          "sp_graph_skew_2k_rdf_quad_pkey",
-          "sp_graph_skew_2k_term_pkey"
+          "idx_vgs_oyyg7wnl_fs_frame_role",
+          "idx_vgs_oyyg7wnl_fs_role_entity",
+          "vgs_oyyg7wnl_rdf_quad_pkey",
+          "vgs_oyyg7wnl_term_pkey"
         ],
         "seq_scans": [],
         "tree": [
@@ -6704,18 +5625,110 @@
         "max_actual_rows": 17029,
         "estimated_rows": 6,
         "heap_fetches": 0,
-        "planning_ms": 41.701,
-        "execution_ms": 131.78,
+        "planning_ms": 37.581,
+        "execution_ms": 164.418,
         "rows": 17029
       },
       "dataset": "sp_graph_skew_2k",
       "notes": "no criterion \u2014 must stay flat (traversal_decision)"
+    },
+    {
+      "bench_id": "vector.index_and_search",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "seed_quads_per_sec": 1061,
+        "index_ddl_s": 0.005,
+        "vectors_upserted": 2000,
+        "vectors_per_sec": 304,
+        "vector_search_ms": 6.29,
+        "rows_returned": 10
+      },
+      "dataset": "synthetic:2000vectors:384d",
+      "notes": "issues/192 \u2014 HNSW top-10 over 2000 384-d vectors, pre-computed probe (no embedding)"
+    },
+    {
+      "bench_id": "write.delete.concrete_vs_deferred",
+      "kind": "write",
+      "status": "ok",
+      "metrics": {
+        "seed_quads_per_sec": 1239,
+        "concrete_quads_per_sec": 2260,
+        "where_bound_quads_per_sec": 1598,
+        "concrete_s": 1.327,
+        "where_bound_s": 1.878,
+        "sweep_s": 0.006,
+        "deferred_share": 0.003,
+        "orphans_before_sweep": 1000
+      },
+      "dataset": "synthetic:2000edges",
+      "notes": "issues/192 \u2014 concrete vs WHERE-bound delete and the deferred referential sweep (issues/064, issues/079)"
+    },
+    {
+      "bench_id": "write.export.copy_round_trip",
+      "kind": "write",
+      "status": "ok",
+      "metrics": {
+        "source_quads": 596458,
+        "export_s": 0.924,
+        "export_quads_per_sec": 645398,
+        "export_bytes": 78075037,
+        "import_s": 18.374,
+        "import_quads_per_sec": 32462,
+        "import_over_export": 19.88,
+        "edge_rows_rebuilt": 38957
+      },
+      "dataset": "sp_graph_skew_2k",
+      "notes": "issues/192 \u2014 binary COPY export then import, including the derived-table resync the import performs"
+    },
+    {
+      "bench_id": "write.ingest.bulk_vs_executemany",
+      "kind": "write",
+      "status": "ok",
+      "metrics": {
+        "executemany_quads_per_sec": 4311,
+        "copy_quads_per_sec": 62609,
+        "bulk_e2e_quads_per_sec": 39607,
+        "index_rebuild_s": 3.71,
+        "copy_speedup": 14.524,
+        "e2e_speedup": 9.188
+      },
+      "dataset": "synthetic:400000q"
+    },
+    {
+      "bench_id": "write.per_write_curve.incremental_probe",
+      "kind": "write",
+      "status": "ok",
+      "metrics": {
+        "growth_class": "flat",
+        "probe_ms_at_100000q": 82.83,
+        "probe_ms_at_300000q": 91.74,
+        "probe_ms_at_900000q": 92.11
+      },
+      "dataset": "synthetic:[50000, 150000, 450000]",
+      "notes": "probe=300 quads, min of 3 rolled-back runs"
+    },
+    {
+      "bench_id": "write.update.insert_vs_modify",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "insert_data_ms": 6491.5,
+        "insert_where_ms": 2710.1,
+        "modify_ms": 3115.1,
+        "edges_after_insert": 2000,
+        "edges_after_modify": 2000,
+        "remarked_quads": 2000,
+        "n_edges": 2000
+      },
+      "dataset": "perfdel_6d6d7b17",
+      "notes": "SPARQL UPDATE: INSERT DATA / INSERT WHERE / MODIFY over 2000 edges \u2014 issues/192"
     }
   ],
   "baseline": {
     "name": "query",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260918T191026Z-56d06339.json",
-    "reason": "FIXTURE REMOVED 2026-09-21: `lead_nurture_grouped` (46 GB, 74.5M quads) was dropped from the test stack to free space. It is recreate-on-demand from internal_data/lead_nurture_grouped/ \u2014 the fast path is scripts/load_wordnet_csv.py with the pre-built quads.csv.gz + quads_terms.csv.gz (~11 min), or regenerate via scripts/generate_lead_dataset.py --entities 100000 --trim (seed 7, per manifest.json). The env block below is NOT edited: it records the machine these numbers were MEASURED on, where the fixture was resident at 49,077,829,632 bytes, and rewriting it would falsify that. Expect the next run to stamp a different `largest_gated_fixture` (sp_lead_synth_100k) and to report this space absent from SEED_ONLY_SPACES \u2014 that divergence is REAL and not drift to be explained away. Re-seed the fixture before re-promoting, or the new baseline measures a different stack.",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20261115T191715Z-63a4f8ac.json",
+    "reason": "Re-promoted 2026-11-15 as the per-volume baseline for vgtest_core (issues/306). The previous query.json (2026-09-18, 16GB shared_buffers, one 144 GB volume) was refused by perf_compare (issues/189 stamp mismatch) and cannot be reproduced on the 20 GB Docker VM. Query tier + API benches on volume vgtest_core (24 spaces incl. the build-once perf_edgehop), shared_buffers 8GB. Server image from a clean worktree at a6c130ae (server code identical to 63a4f8ac); 'dirty' is another session's uncommitted files on the host. Host load average 11-12 from unrelated apps: absolute timings are loaded-machine numbers. 1043 passed; 117 benches ok, 60 skipped (spaces on other volumes), 1 KNOWN HOLE: query.covering.advantage_growth failed its visibility-map guard inside the full core suite (2/2; passes standalone 3/3) - see issues/345.",
     "pg_stamped": true
   }
 }
