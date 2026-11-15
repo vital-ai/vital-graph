@@ -121,6 +121,7 @@ def clear_cache() -> None:
     _UNKNOWN.clear()
     _NO_VERDICT.clear()
     _WLOG_PRESENT.clear()
+    _LAST_SEEN_TOKEN.clear()
 
 
 #: Returned by `_stored_verdict` when the space has no `type_agreement` table,
@@ -610,15 +611,53 @@ BORN_STALE_BACKOFF_S = float(
     _os.getenv("VG_TYPE_AGREEMENT_BORN_STALE_BACKOFF_S", "3600"))
 
 
+#: (space_id, kind) -> the change token seen at the previous cycle (`issues/344`).
+_LAST_SEEN_TOKEN: dict = {}
+
+
+async def _not_quiet_yet(conn, space_id: str, kind: str, table: str) -> Optional[str]:
+    """Why a space that already HAS a stored row should wait, or None to scan.
+
+    `issues/344`. A verdict is usable only while nothing writes the space (the
+    token includes the space's write count), so a rescan is worth its cost only on
+    a space that has gone quiet. Without this, the main production KG space ran a
+    224 s edge scan every hour as its born-stale back-off expired, and was born
+    stale every time: 15 % of the database's time in a quiet hour (2026-11-15), for
+    a verdict it has never once been able to keep. The spaces that do get TRUE were
+    rescanned right after each write, and the next write invalidated them again.
+
+    Quiet = the token is the one seen at the PREVIOUS cycle, i.e. no write for a
+    whole cycle. A busy space never qualifies; one that goes quiet gets its verdict
+    one cycle later. In memory, so a restart costs one cycle's delay. A token that
+    cannot be read does not block (scan, as before): this is a cost gate, and the
+    stored token, not this, is what keeps a verdict correct.
+    """
+    try:
+        token = await change_token(conn, table, space_id)
+    except Exception:
+        token = None
+    if token is None:
+        return None
+    key = (space_id, kind)
+    prev = _LAST_SEEN_TOKEN.get(key)
+    _LAST_SEEN_TOKEN[key] = token
+    if prev == token:
+        return None
+    return "space written since the last cycle; waiting for a quiet one"
+
+
 async def _refresh_not_needed(conn, space_id: str, kind: str,
                               table: str) -> Optional[str]:
     """Why this kind should not be scanned now, or None to scan it.
 
-    Two reasons, both one indexed row plus one catalog read -- against a scan
+    Three reasons, each one indexed row plus a catalog read -- against a scan
     measured in MINUTES, so the check is free by comparison:
 
       * the stored verdict still matches its token, so it is current;
-      * the last attempt was born stale and the backoff has not expired.
+      * the last attempt was born stale or timed out and the backoff has not expired;
+      * the space has a stored row but was written since the last cycle
+        (`issues/344`, `_not_quiet_yet`). A space with NO row yet scans at once,
+        so a new space gets its first verdict without waiting.
     """
     try:
         row = await conn.fetchrow(
@@ -643,15 +682,15 @@ async def _refresh_not_needed(conn, space_id: str, kind: str,
             if age < TIMEOUT_BACKOFF_S:
                 return (f"last attempt ran out its {REFRESH_TIMEOUT_MS} ms budget; "
                         f"retried in {int(TIMEOUT_BACKOFF_S - age)}s")
-            return None
+            return await _not_quiet_yet(conn, space_id, kind, table)
         if age < BORN_STALE_BACKOFF_S:
             return (f"cannot hold a verdict at this write rate; retried in "
                     f"{int(BORN_STALE_BACKOFF_S - age)}s")
-        return None
+        return await _not_quiet_yet(conn, space_id, kind, table)
     token = await change_token(conn, table, space_id)
     if token is not None and token == row["change_token"]:
         return "verdict still current"
-    return None
+    return await _not_quiet_yet(conn, space_id, kind, table)
 
 
 async def refresh_type_agreement(conn, space_id: str, force: bool = False) -> list:
