@@ -126,45 +126,55 @@ class TestBothConversionPaths:
         assert any("hasTotallyMadeUpProperty" in m for m in _warnings(caplog))
 
 
-class TestDoesNotGuessWhenItCannotResolve:
+class TestUnregisteredTypes:
+    """VitalSigns raises KeyError for an unregistered type before recording
+    anything for it, so an unknown class never produces a dropped-predicate
+    report: the conversion fails loudly instead, as it always has."""
 
-    def test_unresolvable_type_is_silent(self, caplog):
-        """An unregistered class is not evidence a predicate is wrong — saying
-        nothing beats a false accusation on every custom type.
-
-        Exercised through `_warn_dropped_predicates` directly: a full
-        conversion with an unregistered type *raises* (VitalSigns
-        `get_vitalsigns_class` throws), so that case is already loud and is not
-        what this issue is about. The silent case is a **known** class with an
-        unknown predicate.
-        """
+    def test_unregistered_type_raises_and_is_not_reported(self, caplog):
         with caplog.at_level(logging.WARNING, logger=LOGGER):
-            qfu._warn_dropped_predicates({
-                "urn:t:1": {"type_uri": "urn:not:a:registered:class",
-                            "properties": {f"{H}anything": "x"}},
-            })
+            with pytest.raises(KeyError):
+                qfu.quad_list_to_graphobjects(
+                    _quads((f"{H}anything", '"x"'), type_uri="urn:not:a:registered:class"))
+        assert not any("anything" in m for m in _warnings(caplog))
+
+    def test_known_objects_in_a_failing_batch_are_still_reported(self, caplog):
+        """Reported in `finally`: the batch raises on the unknown type, and the
+        predicate dropped from the object converted before it is still logged."""
+        quads = (_quads((f"{H}hasTotallyMadeUpProperty", '"x"'))
+                 + _quads((f"{H}other", '"y"'), subject="urn:t:2",
+                          type_uri="urn:not:a:registered:class"))
+        with caplog.at_level(logging.WARNING, logger=LOGGER):
+            with pytest.raises(KeyError):
+                qfu.quad_list_to_graphobjects(quads)
+        assert any("hasTotallyMadeUpProperty" in m for m in _warnings(caplog))
+
+
+class TestOnlyWhatWasActuallyDropped:
+    """VitalSigns reports what the conversion did not store, so the check
+    cannot accuse a predicate the object kept. The check it replaced read a
+    class's allowed properties itself, and once read the narrow set: it
+    accused four inherited properties on every entity fetch."""
+
+    def test_inherited_properties_are_not_reported(self, caplog):
+        with caplog.at_level(logging.WARNING, logger=LOGGER):
+            qfu.quad_list_to_graphobjects(
+                _quads((f"{H}hasKGGraphURI", "<urn:t:1>"),
+                       ("http://vital.ai/ontology/vital-aimp#hasObjectCreationTime",
+                        '"2026-11-16T10:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime>'),
+                       type_uri=f"{H}KGEntity"))
         assert _warnings(caplog) == []
 
-    def test_subject_without_a_type_is_silent(self, caplog):
+    def test_annotations_are_not_reported(self, caplog):
         with caplog.at_level(logging.WARNING, logger=LOGGER):
-            qfu._warn_dropped_predicates(
-                {"urn:t:1": {"type_uri": None, "properties": {f"{H}x": "v"}}})
+            qfu.quad_list_to_graphobjects(
+                _quads(("http://www.w3.org/2000/01/rdf-schema#label", '"a label"@en')))
         assert _warnings(caplog) == []
 
-
-class TestAllowedPropertyLookup:
-
-    def test_resolves_a_known_class(self):
-        allowed = qfu._allowed_property_uris(f"{H}KGDocument")
-        assert allowed is not None
-        assert f"{V}hasName" in allowed
-        assert f"{H}hasKGDocumentFileNode" not in allowed
-
-    def test_unknown_class_returns_none_not_empty(self):
-        """None means "cannot say"; an empty set would mean "nothing is
-        allowed" and would make every predicate look wrong."""
-        assert qfu._allowed_property_uris("urn:not:a:class") is None
-
-    def test_result_is_cached(self):
-        qfu._allowed_property_uris(f"{H}KGDocument")
-        assert f"{H}KGDocument" in qfu._ALLOWED_PROPS_CACHE
+    def test_one_warning_per_class_not_per_object(self, caplog):
+        quads = (_quads((f"{H}madeUp", '"x"'), subject="urn:t:1")
+                 + _quads((f"{H}madeUp", '"y"'), subject="urn:t:2"))
+        with caplog.at_level(logging.WARNING, logger=LOGGER):
+            qfu.quad_list_to_graphobjects(quads)
+        msgs = [m for m in _warnings(caplog) if "madeUp" in m]
+        assert len(msgs) == 1 and "1 predicate(s)" in msgs[0]

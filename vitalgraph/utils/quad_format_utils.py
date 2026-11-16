@@ -337,18 +337,8 @@ def _graphobjects_to_quad_list_fast(
 # ---------------------------------------------------------------------------
 
 #: type_uri -> resolved GraphObject subclass, or None when unresolvable.
-#: Resolving a class and reading its allowed properties is not free, and a bulk
-#: write converts many subjects of the same few types.
+#: Used for class names and the class-as-predicate hint in the warning.
 _CLASS_CACHE: dict = {}
-
-#: type_uri -> frozenset of property URIs the class accepts.
-_ALLOWED_PROPS_CACHE: dict = {}
-
-
-#: Scaffolding predicates handled structurally, never part of the property map.
-#: Read lazily — the constants are defined further down the module.
-def _structural_predicates() -> frozenset:
-    return frozenset({_RDF_TYPE, _VITALTYPE, _URI_PROP})
 
 
 def _resolve_class(class_uri: str):
@@ -371,51 +361,6 @@ def _resolve_class(class_uri: str):
     return cls
 
 
-def _allowed_property_uris(type_uri: str):
-    """Property URIs accepted by the class *type_uri*, or None if unresolvable.
-
-    None means "cannot say" — an unregistered type is not evidence that a
-    predicate is wrong, so callers must not warn on it. An empty set would say
-    the opposite and would accuse every predicate on every custom type.
-    """
-    if type_uri in _ALLOWED_PROPS_CACHE:
-        return _ALLOWED_PROPS_CACHE[type_uri]
-
-    allowed = None
-    cls = _resolve_class(type_uri)
-    if cls is not None:
-        try:
-            inst = cls()
-            # get_allowed_properties() is NOT the full set: it returns only the
-            # properties reachable through the class's own ontology, so
-            # properties contributed to a base class by *other* ontology
-            # packages are missing.  For KGEntity it returns 34 URIs while
-            # get_allowed_domain_properties() returns 93 — the gap includes
-            # vital-aimp#hasObjectCreationTime, vital-aimp#hasObjectStatusType,
-            # vital#hasObjectModificationDateTime and haley-ai-kg#hasKGGraphURI,
-            # all of which are declared on VITAL_Node (KGEntity's ancestor) and
-            # are perfectly valid.  Warning off the narrow set accused those four
-            # on every single entity fetch while the data round-tripped fine.
-            #
-            # Union both: the domain set is the authoritative inherited view, and
-            # keeping the narrow set costs nothing if the two ever diverge.
-            uris = set()
-            for getter in ('get_allowed_domain_properties', 'get_allowed_properties'):
-                fn = getattr(inst, getter, None)
-                if fn is None:
-                    continue
-                try:
-                    uris.update(p['uri'] for p in fn() if isinstance(p, dict) and 'uri' in p)
-                except Exception as e:  # one accessor failing must not blind the other
-                    logger.debug("Could not read %s for %s: %s", getter, type_uri, e)
-            allowed = frozenset(uris) if uris else None
-        except Exception as e:
-            logger.debug("Could not read allowed properties for %s: %s", type_uri, e)
-
-    _ALLOWED_PROPS_CACHE[type_uri] = allowed
-    return allowed
-
-
 def _predicate_hint(pred_uri: str) -> Optional[str]:
     """Explain a dropped predicate when the URI is itself a registered class.
 
@@ -435,34 +380,27 @@ def _predicate_hint(pred_uri: str) -> Optional[str]:
     return None
 
 
-def _warn_dropped_predicates(subjects: dict) -> None:
-    """Log predicates that the resolved class will not accept.
+def _warn_dropped_predicates(dropped: list) -> None:
+    """Log the predicates a conversion did not store, once per class.
+
+    *dropped* is the list VitalSigns (>= 0.1.57) fills when a `from_*`
+    conversion is given `dropped=[]`: one `(subject_uri, type_uri,
+    predicate_uri)` per predicate an object did not store. VitalSigns decides
+    what was dropped (predicates that are not properties of the class; on the
+    triples path, also annotations whose value is not a literal); this
+    function only groups, explains and logs.
 
     Warns rather than rejects: the failure mode here is silence, not
     permissiveness, and rejecting would break callers that currently rely on
     extra predicates being tolerated (issue 036).
-
-    Called from both conversion paths — they use different VitalSigns entry
-    points and do not share a fix site.
 
     Predicates are reported as full URIs. Abbreviating them would mean
     splitting on a separator this code has no business assuming, and two
     namespaces can share a local name.
     """
     dropped_by_type: dict = {}
-    structural = _structural_predicates()
-
-    for data in subjects.values():
-        type_uri = data.get('type_uri')
-        if not type_uri:
-            continue
-        allowed = _allowed_property_uris(type_uri)
-        if allowed is None:
-            continue  # cannot resolve the class — say nothing rather than guess
-        for pred in data.get('properties', {}):
-            if pred in structural or pred in allowed:
-                continue
-            dropped_by_type.setdefault(type_uri, set()).add(pred)
+    for _subject, type_uri, pred in dropped:
+        dropped_by_type.setdefault(type_uri, set()).add(pred)
 
     for type_uri, preds in dropped_by_type.items():
         details = []
@@ -632,12 +570,15 @@ def _quad_list_to_graphobjects_fast(quads: List[Quad]) -> List[GraphObject]:
     if not entries:
         return []
 
-    # Predicates the resolved class will not accept are dropped by
-    # from_property_maps without a word (issue 036). Warn while the requested
-    # predicates and the type URI are both still in hand.
-    _warn_dropped_predicates(subjects)
-
-    graph_objects = GraphObject.from_property_maps(entries)
+    # Predicates the class will not accept are not stored (issue 036);
+    # VitalSigns lists them in `dropped`. Reported in `finally`: a batch that
+    # then raises (an unregistered type raises KeyError) still logs what was
+    # dropped from the objects converted before it.
+    dropped: list = []
+    try:
+        graph_objects = GraphObject.from_property_maps(entries, dropped=dropped)
+    finally:
+        _warn_dropped_predicates(dropped)
     logger.debug("Converted %d quads to %d GraphObjects (fast path)", len(quads), len(graph_objects))
     return graph_objects
 
@@ -645,22 +586,6 @@ def _quad_list_to_graphobjects_fast(quads: List[Quad]) -> List[GraphObject]:
 # ---------------------------------------------------------------------------
 # Original rdflib path — kept for fallback / revert
 # ---------------------------------------------------------------------------
-
-
-def _subject_map_from_triples(triples_list) -> dict:
-    """Shape rdflib triples like the fast path's subject map, for the check.
-
-    Only the fields `_warn_dropped_predicates` reads are populated.
-    """
-    subjects: dict = {}
-    for s_term, p_term, o_term in triples_list:
-        s_uri, p_uri = str(s_term), str(p_term)
-        entry = subjects.setdefault(s_uri, {'type_uri': None, 'properties': {}})
-        if p_uri in (_RDF_TYPE, _VITALTYPE):
-            entry['type_uri'] = str(o_term)
-        else:
-            entry['properties'][p_uri] = str(o_term)
-    return subjects
 
 
 def _quad_list_to_graphobjects_rdflib(quads: List[Quad]) -> List[GraphObject]:
@@ -674,14 +599,15 @@ def _quad_list_to_graphobjects_rdflib(quads: List[Quad]) -> List[GraphObject]:
         o = nquads_term_to_rdflib(quad.o)
         g.add((s, p, o))
 
-    # This path uses a different VitalSigns entry point and never builds a
-    # property map, so it needs its own call — and it is reached only when the
-    # fast path raised, which is exactly when a silent drop is worst
-    # (issue 036).
-    _warn_dropped_predicates(_subject_map_from_triples(triples_list := list(
-        g.triples((None, None, None)))))
-
-    graph_objects = GraphObject.from_triples_list(triples_list)
+    # A different VitalSigns entry point, so its own `dropped` list. Reached
+    # only when the fast path raised, which is exactly when a silent drop is
+    # worst (issue 036).
+    dropped: list = []
+    try:
+        graph_objects = GraphObject.from_triples_list(
+            list(g.triples((None, None, None))), dropped=dropped)
+    finally:
+        _warn_dropped_predicates(dropped)
     logger.debug("Converted %d quads to %d GraphObjects (rdflib path)", len(quads), len(graph_objects))
     return graph_objects
 

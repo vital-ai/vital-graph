@@ -1016,21 +1016,19 @@ class VitalGraphAppImpl:
                 except Exception as e:
                     self.logger.error(f"Failed to connect to database: {e}")
             
-            # Stop VitalSigns' periodic full collection (issues/269, 278).
+            # Build the VitalSigns singleton now, before the gc.freeze() below,
+            # so its registry is frozen with the other startup objects rather
+            # than built on the first request.
             #
-            # The VitalSigns singleton starts a thread that calls
-            # `gc.collect()` every 60 s, to clear GraphObject reference cycles
-            # sooner. That was production's exact 60.1 s gen-2 cadence: every
-            # minute a full collection holding the GIL for 150-500 ms, so each
-            # in-flight request stalled behind it, finding a few hundred dead
-            # objects. CPython's own collector still clears cycles; the server
-            # needs no timer for it.
+            # There is no periodic gc.collect() thread to stop (issues/269,
+            # 278): a full collection every 60 s holding the GIL for 150-500 ms.
+            # vitalsigns >= 0.1.57 leaves it off unless VITALSIGNS_PERIODIC_GC
+            # is set, and the server must not set it.
             try:
                 from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                await asyncio.to_thread(VitalSigns().stop)
-                self.logger.info("🛑 VitalSigns periodic gc.collect() thread stopped")
+                await asyncio.to_thread(VitalSigns)
             except Exception as e:
-                self.logger.warning(f"Could not stop the VitalSigns gc thread: {e}")
+                self.logger.warning(f"Could not initialise VitalSigns at startup: {e}")
 
             # Freeze all current gen-2 objects so GC never scans them again.
             # This dramatically reduces gen-2 pause duration by excluding the
