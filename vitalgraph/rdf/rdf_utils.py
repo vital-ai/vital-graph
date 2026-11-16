@@ -322,52 +322,6 @@ def _stream_parse_rdf_file(file_path: str,
         'format_used': detected_format
     }
 
-def _memory_parse_with_rdflib(file_path: str, format_type: RDFFormat) -> Dict[str, Any]:
-    """Parse RDF file using rdflib (loads entire file into memory)."""
-    try:
-        temp_graph = Graph()
-        temp_graph.parse(file_path, format=format_type.value)
-        
-        triple_count = 0
-        blank_node_count = 0
-        malformed_uri_count = 0
-        
-        for subject, predicate, obj in temp_graph:
-            triple_count += 1
-            
-            if isinstance(subject, BNode) or isinstance(obj, BNode):
-                blank_node_count += 1
-            
-            for node in [subject, predicate, obj]:
-                if isinstance(node, URIRef):
-                    uri_str = str(node)
-                    if ' ' in uri_str or '\n' in uri_str or '\t' in uri_str:
-                        malformed_uri_count += 1
-        
-        namespaces = {prefix: str(namespace) for prefix, namespace in temp_graph.namespaces()}
-        temp_graph = None  # Clear memory
-        
-        validation_warnings = []
-        if blank_node_count > 0:
-            validation_warnings.append(f"Graph contains {blank_node_count} blank nodes")
-        if malformed_uri_count > 0:
-            validation_warnings.append(f"Found {malformed_uri_count} potentially malformed URIs")
-        
-        return {
-            'success': True,
-            'triple_count': triple_count,
-            'blank_node_count': blank_node_count,
-            'malformed_uri_count': malformed_uri_count,
-            'namespaces': namespaces,
-            'validation_warnings': validation_warnings
-        }
-        
-    except Exception as e:
-        return {
-            'success': False,
-            'error': f'rdflib parsing error: {str(e)}'
-        }
-
 
 def stream_parse_ntriples_nquads_generator(file_path: str, format_type: RDFFormat, 
                                           progress_interval: int = 10000) -> Generator[Tuple[str, ...], None, Dict[str, Any]]:
