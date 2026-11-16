@@ -7,9 +7,9 @@ THE PROBLEM. A filtered vector query has the form
 and Postgres serves it from the HNSW index. Without iterative scan the index
 hands back `hnsw.ef_search` (default 40) candidates and the filter runs on those
 alone, so a selective filter returns fewer than k rows, and not the nearest
-ones. Measured on 100k real MiniLM embeddings (vitalsigns
-`planning/vector/pgvector_filtered_search.md`): a type holding 1% of rows got
-recall 0.015 at LIMIT 20, i.e. 0-1 rows of the 20 that exist.
+ones. Measured on 100k real MiniLM embeddings (PostgreSQL 18, pgvector 0.8):
+a type holding 1% of rows got recall 0.015 at LIMIT 20, i.e. 0-1 rows of the
+20 that exist.
 
 `hnsw.iterative_scan = relaxed_order` (pgvector >= 0.8.0) makes the scan keep
 going until k rows pass the filter or `hnsw.max_scan_tuples` is reached:

@@ -3,8 +3,7 @@
 THE DEFECT. `WHERE <filter> ORDER BY embedding <=> q LIMIT k` is served from
 the HNSW index, which yields `hnsw.ef_search` (40) candidates; the filter runs on
 those alone. A type holding 1% of rows then returns 0-1 rows of the 20 asked
-for (vitalsigns `planning/vector/pgvector_filtered_search.md`: recall 0.015 on
-100k real embeddings). Nothing errors: the search simply finds less, and
+for (recall 0.015, measured on 100k real MiniLM embeddings). Nothing errors: the search simply finds less, and
 "fewer results for an uncommon type" reads as a property of the data.
 
 THE FIX (`vectorization/hnsw_scan.py`): iterative scan for the statement, top k
