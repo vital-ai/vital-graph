@@ -76,7 +76,11 @@ FROM pg_statio_user_tables WHERE relname = ANY($1::text[])
 
 
 def order_relations(rows: Sequence[dict], space_tables: Dict[str, str]) -> List[dict]:
-    """Core indexes, then core heaps, then everything else; larger first within each."""
+    """Core indexes, then core heaps, then everything else; larger first within each.
+
+    The DEFAULT order, used for relations the job has not measured yet (its first pass,
+    a new index). Once measured, `order_by_access` ranks them; see why there.
+    """
     core = {space_tables[k] for k in _CORE if k in space_tables}
 
     def rank(r):
@@ -84,6 +88,51 @@ def order_relations(rows: Sequence[dict], space_tables: Dict[str, str]) -> List[
             return 0 if r["is_index"] else 1
         return 2
     return sorted(rows, key=lambda r: (rank(r), -int(r["bytes"] or 0)))
+
+
+# RANKED BY MEASURED ACCESS, NOT BY SIZE (`issues/346`).
+#
+# "Core first, largest first" assumed the space fits the cap, which it did when
+# `issues/271` sized it (234 k blocks, ~1.8 GB). By 2026-11-16 production's prewarmed
+# space was 23.1 GiB against a 12 GiB cap, so largest-first filled the cap with the
+# biggest relations rather than the hottest. Measured over 30 minutes from
+# `pg_statio` (lookups AND the index maintenance each insert does), minus this
+# job's own touches: the warm set covered **37.6 %** of the space's block accesses;
+# ranked by accesses per byte, the same cap covers **97.9 %**. `quad_ctx_pred`
+# (3.35 GiB, 303 accesses/MiB) and `term_trgm` (0.94 GiB, 128/MiB) were warmed,
+# while every relation the write path's sync lookups read (`edge`, `frame_slot`,
+# `entity_slot_sort` and their indexes) was not. Those lookups take 0.2-0.8 ms warm
+# and averaged 173 ms and 80 ms on production, almost every block a read.
+#
+# Measured by the job itself, every pass, so it follows the workload with no
+# per-install configuration:
+#
+#     accesses(rel) = delta(heap|idx _blks_hit + _blks_read) - blocks this job touched
+#
+# `pg_prewarm` returns the blocks it touched, so the subtraction is exact. The rate is
+# a decayed average over passes (`PREWARM_ACCESS_ALPHA` per pass), so one burst
+# does not reorder the set. A counter that moved BACKWARDS (`pg_stat_reset`) or
+# cannot be read updates nothing; an unmeasured relation keeps the default order.
+PREWARM_ACCESS_ALPHA = float(os.getenv("VG_PREWARM_ACCESS_ALPHA", "0.1"))
+
+_ACCESS_SQL = """
+SELECT c.oid::regclass::text AS rel,
+       COALESCE(CASE WHEN c.relkind IN ('i', 'I') THEN si.idx_blks_hit + si.idx_blks_read
+                     ELSE st.heap_blks_hit + st.heap_blks_read END, 0)::bigint AS acc
+FROM pg_class c
+LEFT JOIN pg_statio_user_indexes si ON si.indexrelid = c.oid
+LEFT JOIN pg_statio_user_tables  st ON st.relid = c.oid
+WHERE c.oid = ANY($1::regclass[])
+"""
+
+
+def order_by_access(rows: Sequence[dict], space_tables: Dict[str, str],
+                    rate: Dict[str, float]) -> List[dict]:
+    """Measured relations by accesses per MiB, highest first; the rest after, in the default order."""
+    default = order_relations(rows, space_tables)
+    measured = sorted((r for r in default if r["rel"] in rate),
+                      key=lambda r: -rate[r["rel"]])
+    return measured + [r for r in default if r["rel"] not in rate]
 
 
 def apply_cap(rows: Sequence[dict], cap: int):
@@ -110,6 +159,33 @@ class PrewarmJob:
         self._max_bytes = max_bytes
         self._warned_missing_ext = False
         self._warned_no_tables: set = set()
+        # Per relation (`issues/346`): the access counter at the start of the last
+        # pass, the blocks this job touched in it, and the decayed accesses per MiB.
+        self._acc_prev: Dict[str, int] = {}
+        self._own_prev: Dict[str, int] = {}
+        self.access_rate: Dict[str, float] = {}
+
+    async def _measure(self, conn, rows: Sequence[dict]) -> None:
+        """Fold the accesses since the last pass into `access_rate`. Never raises."""
+        try:
+            acc = {r["rel"]: int(r["acc"]) for r in await conn.fetch(
+                _ACCESS_SQL, [r["rel"] for r in rows])}
+        except Exception as exc:
+            logger.debug("prewarm: access counters unreadable (%s); keeping the order", exc)
+            return
+        size = {r["rel"]: max(int(r["bytes"] or 0), 8192) for r in rows}
+        for rel, now in acc.items():
+            prev = self._acc_prev.get(rel)
+            self._acc_prev[rel] = now
+            if prev is None:
+                continue
+            real = now - prev - self._own_prev.get(rel, 0)
+            if now < prev:
+                continue                    # a stats reset: no information this pass
+            per_mib = max(real, 0) / (size.get(rel, 8192) / 2**20)
+            old = self.access_rate.get(rel)
+            self.access_rate[rel] = per_mib if old is None else (
+                PREWARM_ACCESS_ALPHA * per_mib + (1 - PREWARM_ACCESS_ALPHA) * old)
 
     def _space_tables(self, space_id: str) -> Dict[str, str]:
         from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
@@ -146,20 +222,28 @@ class PrewarmJob:
                                        "VG_PREWARM_SPACES", space_id)
                         self._warned_no_tables.add(space_id)
                     continue
-                kept, skipped = apply_cap(order_relations(rows, tables), budget)
+                await self._measure(conn, rows)
+                ranked = any(r["rel"] in self.access_rate for r in rows)
+                kept, skipped = apply_cap(
+                    order_by_access(rows, tables, self.access_rate), budget)
                 budget -= sum(int(r["bytes"]) for r in kept)
 
                 t0 = time.monotonic()
                 reads0 = await conn.fetchval(_READS_SQL, list(tables.values()))
                 blocks = 0
+                for r in rows:
+                    self._own_prev[r["rel"]] = 0
                 for r in kept:
-                    blocks += int(await conn.fetchval(
+                    n = int(await conn.fetchval(
                         "SELECT pg_prewarm($1::regclass, 'buffer')", r["rel"],
                         timeout=PREWARM_STATEMENT_TIMEOUT_S) or 0)
+                    self._own_prev[r["rel"]] = n      # subtracted at the next pass
+                    blocks += n
                 reads1 = await conn.fetchval(_READS_SQL, list(tables.values()))
                 read = max(0, int(reads1) - int(reads0))
                 stats = {"relations": len(kept), "blocks": blocks, "read": read,
-                         "seconds": round(time.monotonic() - t0, 3)}
+                         "seconds": round(time.monotonic() - t0, 3),
+                         "order": "measured access" if ranked else "default"}
                 summary["spaces"][space_id] = stats
                 # The measurement is the log: `read` near 0 pass after pass means
                 # the space stayed resident between passes; a rising share means
@@ -167,9 +251,10 @@ class PrewarmJob:
                 # counts every read of these tables during the pass, concurrent
                 # queries included, so it is an upper bound on the pass's own.
                 logger.info(
-                    "prewarm %s: %d relations, %d blocks in %.2fs, %d read (%.1f%%)",
+                    "prewarm %s: %d relations, %d blocks in %.2fs, %d read (%.1f%%), "
+                    "order: %s",
                     space_id, len(kept), blocks, stats["seconds"], read,
-                    100.0 * read / blocks if blocks else 0.0)
+                    100.0 * read / blocks if blocks else 0.0, stats["order"])
                 if skipped:
                     names = [r["relname"] for r in skipped]
                     summary["skipped"] += names
