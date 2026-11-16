@@ -541,7 +541,7 @@ class KGTypesEndpoint:
             self.logger.info(f"Creating KG types in space '{space_id}', graph '{graph_id}'")
 
             # Convert quads to GraphObjects and validate
-            kgtype_objects = quad_list_to_graphobjects(quads)
+            kgtype_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
             typed_objects = [obj for obj in kgtype_objects if isinstance(obj, KGType)]
             if not typed_objects:
                 return KGTypeCreateResponse(
@@ -617,7 +617,7 @@ class KGTypesEndpoint:
             self.logger.info(f"Updating KG types in space '{space_id}', graph '{graph_id}'")
 
             # Convert quads to GraphObjects and validate
-            kgtype_objects = quad_list_to_graphobjects(quads)
+            kgtype_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
             typed_objects = [obj for obj in kgtype_objects if isinstance(obj, KGType)]
             if not typed_objects:
                 return KGTypeUpdateResponse(

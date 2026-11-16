@@ -990,7 +990,7 @@ class KGEntitiesEndpoint:
         """Create or update entities from quads."""
         import time as _time
         _t_endpoint_start = _time.monotonic()
-        vitalsigns_objects = quad_list_to_graphobjects(quads)
+        vitalsigns_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
         _t_deserialize = _time.monotonic()
         self.logger.info(f"⏱️  ENDPOINT quad_list_to_graphobjects: {_t_deserialize - _t_endpoint_start:.3f}s ({len(quads)} quads → {len(vitalsigns_objects)} objects)")
         try:
@@ -1767,7 +1767,7 @@ class KGEntitiesEndpoint:
     
     async def _create_or_update_frames(self, space_id: str, graph_id: str, quads: List[Quad], operation_mode: Any, parent_uri: str = None, entity_uri: str = None, current_user: Dict = None, parent_frame_uri: str = None, if_unmodified_since: str = None):
         """Create or update frames for KGEntities integration from quads."""
-        graph_objects = quad_list_to_graphobjects(quads)
+        graph_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
         try:
             if not entity_uri:
                 from ..model.kgframes_model import FrameCreateResponse
@@ -1959,7 +1959,7 @@ class KGEntitiesEndpoint:
             return FrameUpdateResponse(status=status, message=message,
                                        updated_uri="", updated_count=0)
 
-        graph_objects = quad_list_to_graphobjects(quads)
+        graph_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
         try:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
@@ -2089,7 +2089,7 @@ class KGEntitiesEndpoint:
                                    parent_frame_uri: Optional[str] = None,
                                    if_unmodified_since: Optional[str] = None) -> FrameUpdateResponse:
         """Update frames within entity context from quads."""
-        graph_objects = quad_list_to_graphobjects(quads)
+        graph_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
         try:
             import time as _time
             _u0 = _time.time()
@@ -2170,6 +2170,15 @@ class KGEntitiesEndpoint:
                         }
                     frame_groups[frame_uri]['frame_objects'].append(graph_obj)
             
+            # Slot -> frame from the request's Edge_hasKGSlot edges (the first
+            # edge naming a slot wins, as the per-slot scan did), and the
+            # request's frames: computed once, not rescanned for every slot.
+            _slot_frame: Dict[str, str] = {}
+            for other in graph_objects:
+                if isinstance(other, Edge_hasKGSlot):
+                    _slot_frame.setdefault(str(other.edgeDestination), str(other.edgeSource))
+            _req_frames = [str(o.URI) for o in graph_objects if isinstance(o, KGFrame)]
+
             # Pass 2: assign slots and edges to their frame groups
             for graph_obj in graph_objects:
                 if isinstance(graph_obj, KGFrame):
@@ -2196,13 +2205,8 @@ class KGEntitiesEndpoint:
                     # and with several frames fell back to whichever came
                     # first, so a client could file a slot under any frame.
                     slot_uri = str(graph_obj.URI)
-                    target_frame_uri = None
-                    for other in graph_objects:
-                        if isinstance(other, Edge_hasKGSlot) and str(other.edgeDestination) == slot_uri:
-                            target_frame_uri = str(other.edgeSource)
-                            break
+                    target_frame_uri = _slot_frame.get(slot_uri)
                     if not target_frame_uri:
-                        _req_frames = [str(o.URI) for o in graph_objects if isinstance(o, KGFrame)]
                         if len(_req_frames) == 1:
                             target_frame_uri = _req_frames[0]
                         else:

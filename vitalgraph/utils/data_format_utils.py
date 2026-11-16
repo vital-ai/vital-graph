@@ -5,6 +5,7 @@ This module provides utilities for converting between different data formats
 used in VitalGraph, including VitalSigns GraphObjects and RDF quads.
 """
 
+import asyncio
 import logging
 from typing import List, Tuple, Optional, Dict, Any, Callable, TypeVar
 from rdflib import Graph, URIRef, Literal, BNode
@@ -56,13 +57,13 @@ async def graphobjects_to_quads(graph_objects: List[G], graph_id: str) -> List[T
     try:
         from rdflib import URIRef
         
-        # Use VitalSigns native to_triples_list method
+        # Off the event loop: a pure-CPU conversion, called from request
+        # handlers. A single object uses to_triples, several to_triples_list.
         if len(graph_objects) == 1:
-            # Single object - use to_triples
-            triples_list = graph_objects[0].to_triples()
+            triples_list = await asyncio.to_thread(graph_objects[0].to_triples)
         else:
-            # Multiple objects - use to_triples_list  
-            triples_list = graph_objects[0].to_triples_list(graph_objects)
+            triples_list = await asyncio.to_thread(
+                graph_objects[0].to_triples_list, graph_objects)
         
         # Convert triples to quads by adding graph context
         graph_uri = URIRef(_strip_angle_brackets(graph_id))
@@ -99,13 +100,13 @@ async def batch_graphobjects_to_quads(graph_objects: List[G], graph_id: str) -> 
     try:
         from rdflib import URIRef, Graph
         
-        # Use VitalSigns native to_triples_list method
+        # Off the event loop: a pure-CPU conversion, called from request
+        # handlers. A single object uses to_triples, several to_triples_list.
         if len(graph_objects) == 1:
-            # Single object - use to_triples
-            triples_list = graph_objects[0].to_triples()
+            triples_list = await asyncio.to_thread(graph_objects[0].to_triples)
         else:
-            # Multiple objects - use to_triples_list  
-            triples_list = graph_objects[0].to_triples_list(graph_objects)
+            triples_list = await asyncio.to_thread(
+                graph_objects[0].to_triples_list, graph_objects)
         
         # Convert triples to quads by adding graph context
         graph_uri = URIRef(_strip_angle_brackets(graph_id))

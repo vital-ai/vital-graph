@@ -513,14 +513,14 @@ class KGEntityFrameCreateProcessor:
             entity_frame_edge.edgeSource = entity_uri
             entity_frame_edge.edgeDestination = frame_obj.URI
             
-            # Debug: Verify edge properties are set correctly
-            self.logger.debug(f"🔍 Edge properties: URI={entity_frame_edge.URI}, edgeSource={getattr(entity_frame_edge, 'edgeSource', 'NOT_SET')}, edgeDestination={getattr(entity_frame_edge, 'edgeDestination', 'NOT_SET')}")
-            
-            # Debug: Test individual edge triple generation
-            edge_triples = await asyncio.to_thread(GraphObject.to_triples_list, [entity_frame_edge])
-            self.logger.debug(f"🔍 Edge {entity_frame_edge.URI} generates {len(edge_triples)} triples:")
-            for i, (s, p, o) in enumerate(edge_triples):
-                self.logger.debug(f"  Edge triple {i+1}: s={repr(str(s))}, p={repr(str(p))}, o={repr(str(o))}")
+            # Debug only: a triple conversion and a thread hop per frame, so
+            # skipped unless DEBUG is on (the f-strings alone would format).
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug(f"🔍 Edge properties: URI={entity_frame_edge.URI}, edgeSource={getattr(entity_frame_edge, 'edgeSource', 'NOT_SET')}, edgeDestination={getattr(entity_frame_edge, 'edgeDestination', 'NOT_SET')}")
+                edge_triples = await asyncio.to_thread(GraphObject.to_triples_list, [entity_frame_edge])
+                self.logger.debug(f"🔍 Edge {entity_frame_edge.URI} generates {len(edge_triples)} triples:")
+                for i, (s, p, o) in enumerate(edge_triples):
+                    self.logger.debug(f"  Edge triple {i+1}: s={repr(str(s))}, p={repr(str(p))}, o={repr(str(o))}")
             
             # Set grouping URIs for the edge
             if hasattr(entity_frame_edge, 'kGGraphURI'):
@@ -775,37 +775,41 @@ class KGEntityFrameCreateProcessor:
             List[tuple]: List of quad tuples (subject, predicate, object, graph) to insert
         """
         try:
-            self.logger.debug(f"🔍 Building insert quads for {len(all_objects)} objects")
+            debug = self.logger.isEnabledFor(logging.DEBUG)
+            if debug:
+                self.logger.debug(f"🔍 Building insert quads for {len(all_objects)} objects")
             
-            # Log each object type, URI, and check for kGGraphURI property
-            for i, obj in enumerate(all_objects):
-                obj_type = type(obj).__name__
-                obj_uri = str(obj.URI) if hasattr(obj, 'URI') else 'NO_URI'
-                has_kg_graph_uri = hasattr(obj, 'kGGraphURI')
-                kg_graph_uri_value = str(obj.kGGraphURI) if has_kg_graph_uri and obj.kGGraphURI else 'NOT_SET'
-                self.logger.debug(f"🔍   Object {i+1}: {obj_type} - {obj_uri}")
-                self.logger.debug(f"🔍   Has kGGraphURI: {has_kg_graph_uri}, Value: {kg_graph_uri_value}")
+                # Log each object type, URI, and check for kGGraphURI property
+                for i, obj in enumerate(all_objects):
+                    obj_type = type(obj).__name__
+                    obj_uri = str(obj.URI) if hasattr(obj, 'URI') else 'NO_URI'
+                    has_kg_graph_uri = hasattr(obj, 'kGGraphURI')
+                    kg_graph_uri_value = str(obj.kGGraphURI) if has_kg_graph_uri and obj.kGGraphURI else 'NOT_SET'
+                    self.logger.debug(f"🔍   Object {i+1}: {obj_type} - {obj_uri}")
+                    self.logger.debug(f"🔍   Has kGGraphURI: {has_kg_graph_uri}, Value: {kg_graph_uri_value}")
             
             # Convert VitalSigns objects to triples (offload to thread to avoid blocking event loop)
             triples = await asyncio.to_thread(GraphObject.to_triples_list, all_objects)
             
-            self.logger.debug(f"🔍 to_triples_list returned {len(triples)} RDFLib triple objects")
+            # Two full scans of the triples, for debug output only.
+            if debug:
+                self.logger.debug(f"🔍 to_triples_list returned {len(triples)} RDFLib triple objects")
             
-            # Check if hasKGGraphURI triples are present
-            kg_graph_uri_triples = [t for t in triples if 'hasKGGraphURI' in str(t[1])]
-            frame_graph_uri_triples = [t for t in triples if 'hasFrameGraphURI' in str(t[1])]
-            self.logger.debug(f"🔍 Found {len(kg_graph_uri_triples)} hasKGGraphURI triples")
-            self.logger.debug(f"🔍 Found {len(frame_graph_uri_triples)} hasFrameGraphURI triples")
+                # Check if hasKGGraphURI triples are present
+                kg_graph_uri_triples = [t for t in triples if 'hasKGGraphURI' in str(t[1])]
+                frame_graph_uri_triples = [t for t in triples if 'hasFrameGraphURI' in str(t[1])]
+                self.logger.debug(f"🔍 Found {len(kg_graph_uri_triples)} hasKGGraphURI triples")
+                self.logger.debug(f"🔍 Found {len(frame_graph_uri_triples)} hasFrameGraphURI triples")
             
-            for triple in kg_graph_uri_triples:
-                s, p, o = triple
-                self.logger.debug(f"🔍   hasKGGraphURI triple: {s} -> {o}")
+                for triple in kg_graph_uri_triples:
+                    s, p, o = triple
+                    self.logger.debug(f"🔍   hasKGGraphURI triple: {s} -> {o}")
             
-            for i, triple in enumerate(triples[:10]):  # Log first 10 triples
-                s, p, o = triple
-                self.logger.debug(f"🔍   Triple {i+1}: {s} | {p} | {o}")
-            if len(triples) > 10:
-                self.logger.debug(f"🔍   ... and {len(triples) - 10} more triples")
+                for i, triple in enumerate(triples[:10]):  # Log first 10 triples
+                    s, p, o = triple
+                    self.logger.debug(f"🔍   Triple {i+1}: {s} | {p} | {o}")
+                if len(triples) > 10:
+                    self.logger.debug(f"🔍   ... and {len(triples) - 10} more triples")
             
             # Convert triples to quads by adding graph_id
             # Keep RDFLib objects (especially Literal with datatype/language)

@@ -330,7 +330,7 @@ class KGRelationsEndpoint:
         try:
             self.logger.info(f"Processing KG Relations in space {space_id}, graph {graph_id}, mode '{operation_mode.value}'")
 
-            graph_objects = quad_list_to_graphobjects(quads)
+            graph_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
             if not graph_objects:
                 return self._invalid_write_response(
                     operation_mode, "No valid objects found in request")

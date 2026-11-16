@@ -268,7 +268,7 @@ class FilesEndpoint:
     
     async def _create_file_node(self, space_id: str, graph_id: Optional[str], quads: List[Quad], current_user: Dict) -> FileCreateResponse:
         """Create new file node (metadata only) from quads. Only FileNode or subclasses are allowed."""
-        graph_objects = quad_list_to_graphobjects(quads)
+        graph_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
         validation_error = self._validate_file_node_types(graph_objects)
         if validation_error:
             return FileCreateResponse(
@@ -302,7 +302,7 @@ class FilesEndpoint:
     
     async def _update_file_metadata(self, space_id: str, graph_id: Optional[str], quads: List[Quad], current_user: Dict) -> FileUpdateResponse:
         """Update existing file metadata from quads. Only FileNode or subclasses are allowed."""
-        graph_objects = quad_list_to_graphobjects(quads)
+        graph_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
         validation_error = self._validate_file_node_types(graph_objects)
         if validation_error:
             return FileUpdateResponse(

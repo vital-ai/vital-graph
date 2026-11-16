@@ -678,10 +678,10 @@ class GraphObjectRetriever:
             s = (row.get('s') or {}).get('value')
             if s:
                 by_uri.setdefault(s, []).append(row)
-        out: Dict[str, List[Any]] = {}
-        for uri, rows in by_uri.items():
-            out[uri] = await asyncio.to_thread(_bindings_to_objects, rows)
-        return out
+        # One thread hop for the page, not one per subject; still one
+        # _bindings_to_objects call per subject.
+        return await asyncio.to_thread(
+            lambda: {uri: _bindings_to_objects(rows) for uri, rows in by_uri.items()})
 
     async def get_entity_graphs_as_objects(
         self,
@@ -772,9 +772,12 @@ class GraphObjectRetriever:
             if uri:
                 by_entity.setdefault(uri, []).append(row)
 
+        # One thread hop for the page, not one per entity; still one
+        # _bindings_to_objects call per entity, so entities are never merged.
+        built = await asyncio.to_thread(
+            lambda: {uri: _bindings_to_objects(rows) for uri, rows in by_entity.items()})
         out: Dict[str, List[Any]] = {}
-        for uri, rows in by_entity.items():
-            objs = await asyncio.to_thread(_bindings_to_objects, rows)
+        for uri, objs in built.items():
             # NO ENTITY, NO GRAPH. The entity is a member of its own graph, so
             # its absence from the result means the self-link is missing — and a
             # graph without its entity is not a partial answer, it is a wrong

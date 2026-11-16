@@ -152,7 +152,7 @@ class KGFramesEndpoint:
         Note: entity_uri is accepted for backward compatibility but is NOT used.
         Standalone frames have no entity dependency.
         """
-        vitalsigns_objects = quad_list_to_graphobjects(quads)
+        vitalsigns_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
         # AN UNKNOWN MODE IS REFUSED (`issues/256` item 5). It became CREATE, so
         # a misspelt `upsert` silently wrote a create.
         try:
@@ -1444,7 +1444,7 @@ class KGFramesEndpoint:
         if mode not in ("create", "update", "upsert"):
             return _answer(OperationStatus.INVALID_REQUEST,
                            f"Unknown operation_mode {mode!r}: expected create, update or upsert")
-        vitalsigns_objects = quad_list_to_graphobjects(quads)
+        vitalsigns_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
         try:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:

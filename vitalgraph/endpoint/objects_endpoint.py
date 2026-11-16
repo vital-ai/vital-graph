@@ -213,7 +213,7 @@ class GraphObjectsEndpoint:
                     created_count=0,
                     created_uris=[],
                 )
-            graph_objects = quad_list_to_graphobjects(quads)
+            graph_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
             if not graph_objects:
                 return ObjectCreateResponse(
                     status=OperationStatus.INVALID_REQUEST,
@@ -248,7 +248,7 @@ class GraphObjectsEndpoint:
                     updated_count=0,
                     updated_uri=None,
                 )
-            graph_objects = quad_list_to_graphobjects(quads)
+            graph_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
             if not graph_objects:
                 return ObjectUpdateResponse(
                     status=OperationStatus.INVALID_REQUEST,

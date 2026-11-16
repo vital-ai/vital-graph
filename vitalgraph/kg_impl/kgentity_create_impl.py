@@ -125,28 +125,22 @@ class KGEntityCreateProcessor:
             else:
                 # Multiple entities: stamp each entity with its own URI.
                 # Build a map from entity URI → list of sub-objects belonging to it.
-                entity_uri_set = {str(e.URI) for e in entities}
-                # For each entity, collect itself plus any objects connected via edges
+                # Edges by endpoint, built once: each entity takes itself plus
+                # every edge with it as source or destination, in request
+                # order. (This was a scan of every object per entity, reading
+                # edgeSource/edgeDestination each time.) Frames and slots are
+                # grouped over the whole batch below.
+                edges_by_endpoint: Dict[str, List[GraphObject]] = {}
+                for obj in vitalsigns_objects:
+                    if isinstance(obj, VITAL_Edge):
+                        src = str(obj.edgeSource) if obj.edgeSource else None
+                        dst = str(obj.edgeDestination) if obj.edgeDestination else None
+                        for end in {src, dst} - {None}:
+                            edges_by_endpoint.setdefault(end, []).append(obj)
                 for ent in entities:
                     ent_uri = str(ent.URI)
-                    # Collect objects that belong to this entity:
-                    # the entity itself, and any edges/frames/slots whose kGGraphURI
-                    # should point to this entity.
                     ent_objects: List[GraphObject] = [ent]
-                    for obj in vitalsigns_objects:
-                        if obj is ent:
-                            continue
-                        # Edges sourced from this entity
-                        if isinstance(obj, VITAL_Edge):
-                            src = str(obj.edgeSource) if obj.edgeSource else None
-                            dst = str(obj.edgeDestination) if obj.edgeDestination else None
-                            if src == ent_uri or dst == ent_uri:
-                                ent_objects.append(obj)
-                        # Non-entity, non-edge objects not claimed by another entity
-                        elif not isinstance(obj, KGEntity):
-                            # Only claim if not already in another entity's set
-                            # (heuristic: standalone sub-objects default to their closest entity)
-                            pass
+                    ent_objects.extend(e for e in edges_by_endpoint.get(ent_uri, ()) if e is not ent)
                     self.grouping_manager.set_dual_grouping_uris_with_frame_separation(ent_objects, ent_uri)
                     self.logger.debug(f"🔍 Step 4: Set kGGraphURI={ent_uri} on {len(ent_objects)} objects")
                 # FRAME grouping over the WHOLE batch (`issues/257`). The loop
