@@ -23,6 +23,9 @@ PROVIDER_NAME = "vitalsigns_onnx"
 # Dimensions produced by the bundled ONNX model
 _ONNX_DIMS = 384
 
+# Texts per model run in vectorize_texts (see _vectorize_batch_sync).
+_BATCH_CHUNK = 64
+
 
 class VitalSignsProvider(VectorizationProvider):
     """Local vectorization using VitalSigns ONNX embedding model.
@@ -156,23 +159,29 @@ class VitalSignsProvider(VectorizationProvider):
         return list(result)  # type: ignore[arg-type]
 
     def _vectorize_batch_sync(self, texts: List[str]) -> List[List[float]]:
-        """Synchronous batch vectorization.
+        """Synchronous batch vectorization, one model run per chunk.
 
-        NOTE: We vectorize one-at-a-time to preserve positional order.
-        The upstream EmbeddingModel.vectorize(list) has a cache-ordering bug
-        where cached results are placed before newly-computed ones, breaking
-        the correspondence between input texts and output embeddings.
+        Relies on vitalsigns >= 0.1.56 (3c92d18): `vectorize(list)` returns
+        results in input order even when only some texts are cached. Before
+        that, cached results came first and this had to embed one text at a
+        time. Batched output matches the per-text output to ~3e-7 and is
+        ~3x faster for 200 texts.
+
+        Chunked because the tokenizer pads every text in a call to the longest
+        one, so memory grows with batch size x longest text, and auto_sync
+        passes its whole set in one call.
         """
         import numpy as np
         out: List[List[float]] = []
-        # Held across the whole batch rather than per text: re-acquiring 83
-        # times interleaves this batch with every other caller and multiplies
-        # the contention it exists to remove.
+        # Held across the whole batch rather than per chunk: re-acquiring it
+        # interleaves this batch with every other caller and multiplies the
+        # contention it exists to remove.
         with self._embed_lock:
-            for t in texts:
-                result = self._embedder.vectorize(t)  # single string → single array
-                if isinstance(result, np.ndarray):
-                    out.append(result.tolist())
-                else:
-                    out.append(list(result))  # type: ignore[arg-type]
+            for start in range(0, len(texts), _BATCH_CHUNK):
+                chunk = texts[start:start + _BATCH_CHUNK]
+                for result in self._embedder.vectorize(chunk):
+                    if isinstance(result, np.ndarray):
+                        out.append(result.tolist())
+                    else:
+                        out.append(list(result))  # type: ignore[arg-type]
         return out

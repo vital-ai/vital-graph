@@ -55,6 +55,8 @@ class _FakeTokenizerBoundModel:
         try:
             time.sleep(0.002)      # a window for a second thread to collide
             self.calls += 1
+            if isinstance(text, list):     # batch call: one row per text
+                return [[0.1, 0.2, 0.3] for _ in text]
             return [0.1, 0.2, 0.3]
         finally:
             self._in_use = False
@@ -140,7 +142,7 @@ class TestVitalSignsProviderSerialises:
         src = inspect.getsource(provider._vectorize_batch_sync.__func__)
         body = src[src.index("with self._embed_lock"):]
         assert body.count("with self._embed_lock") == 1
-        assert "for t in texts" in body, "the loop must sit INSIDE the lock"
+        assert "self._embedder.vectorize(" in body, "embedding must sit INSIDE the lock"
 
 
 class TestMiniLMProviderSerialises:
