@@ -258,6 +258,12 @@ class EmitContext:
         # request lists are, so a SLICE emitted inside a subquery still
         # surfaces to the executor rather than setting a flag nobody reads.
         self._needs_ordered_scan = [False]
+        # Set when a vector top-K drives the query from the HNSW index
+        # (`emit_extend._try_vector_driving_extend`). The executor turns on
+        # iterative scan for the statement (`vectorization/hnsw_scan.py`);
+        # without it a selective child pattern returns fewer than K rows.
+        # Shared with child contexts like the flag above.
+        self._vector_top_k = [False]
         # Set by emit_bgp when the generator's cardinality model chose a join
         # order it predicts at least `bgp_cardinality.ENFORCE_MIN_GAIN` times
         # cheaper than the default (`issues/293`). The executor then keeps the
@@ -495,6 +501,14 @@ class EmitContext:
         self._needs_ordered_scan[0] = bool(value)
 
     @property
+    def vector_top_k(self) -> bool:
+        return self._vector_top_k[0]
+
+    @vector_top_k.setter
+    def vector_top_k(self, value: bool) -> None:
+        self._vector_top_k[0] = bool(value)
+
+    @property
     def hashed_set_rows(self) -> int:
         return self._hashed_set_rows[0]
 
@@ -544,6 +558,7 @@ class EmitContext:
         ctx._deferred_uuids = self._deferred_uuids
         # Share the ordered-scan flag (issues/047)
         ctx._needs_ordered_scan = self._needs_ordered_scan
+        ctx._vector_top_k = self._vector_top_k
         # Share the fixed-join-order flag (issues/293)
         ctx._fixed_join_order = self._fixed_join_order
         ctx._hashed_set_rows = self._hashed_set_rows

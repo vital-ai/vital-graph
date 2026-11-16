@@ -1009,18 +1009,29 @@ class AgentRegistryImpl:
         embeddings = await provider.vectorize_texts([query_text])
         query_embedding = embeddings[0]
 
+        from vitalgraph.vectorization.hnsw_scan import hnsw_iterative_scan
+
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                f"SELECT v.agent_id, v.search_text, "
-                f"1 - (v.{emb_col} <=> $1::vector) AS similarity "
-                f"FROM {AGENT_VECTOR_TABLE} v "
-                f"JOIN agent a ON v.agent_id = a.agent_id "
-                f"WHERE a.status = 'active' "
-                f"AND v.{emb_col} IS NOT NULL "
-                f"ORDER BY v.{emb_col} <=> $1::vector "
-                f"LIMIT $2",
-                str(query_embedding), limit,
-            )
+            # Filtered top-k (`a.status`): iterative HNSW scan, or the index's
+            # first ef_search candidates are all the filter sees. The outer
+            # ORDER BY re-sorts what `relaxed_order` returns slightly out of
+            # order; it is on `similarity`, not the index expression, so the
+            # planner cannot drop it (`vectorization/hnsw_scan.py`).
+            async with conn.transaction():
+                async with hnsw_iterative_scan(conn):
+                    rows = await conn.fetch(
+                        f"SELECT agent_id, search_text, similarity FROM ("
+                        f"SELECT v.agent_id, v.search_text, "
+                        f"1 - (v.{emb_col} <=> $1::vector) AS similarity "
+                        f"FROM {AGENT_VECTOR_TABLE} v "
+                        f"JOIN agent a ON v.agent_id = a.agent_id "
+                        f"WHERE a.status = 'active' "
+                        f"AND v.{emb_col} IS NOT NULL "
+                        f"ORDER BY v.{emb_col} <=> $1::vector "
+                        f"LIMIT $2) nn "
+                        f"ORDER BY similarity DESC",
+                        str(query_embedding), limit,
+                    )
 
             results = []
             for row in rows:

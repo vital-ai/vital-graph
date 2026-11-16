@@ -324,3 +324,49 @@ class TestEmitExtend:
         )
         _patch_concat_companions(plan, ctx, typed)
         assert typed.lang is None
+
+
+class TestVectorDrivingAsksForIterativeScan:
+    """The driving top-K is served from HNSW, whose first `ef_search`
+    candidates are all a selective child filter would see. The executor turns
+    on iterative scan when the context says so (`GenerateResult.vector_top_k`);
+    recall itself is tested in `tests/integration/test_sparql_vector_top_k_recall.py`.
+    """
+
+    def _plan(self, hints):
+        from vitalgraph.db.sparql_sql.vg_functions import VG_VECTOR_SIMILARITY
+        expr = _func("vectorSimilarity", _var("entity"), _lit("q"),
+                     _lit("idx"), function_iri=VG_VECTOR_SIMILARITY)
+        return PlanV2(kind=KIND_EXTEND, extend_var="score", extend_expr=expr,
+                      hints=hints, children=[_leaf_bgp()])
+
+    def test_driving_path_sets_the_flag(self):
+        from vitalgraph.db.sparql_sql.emit_extend import _try_vector_driving_extend
+        ctx = _make_ctx({"entity": "text"})
+        assert not ctx.vector_top_k
+        assert _try_vector_driving_extend(
+            self._plan({"vg_top_k": {"limit": 5}}), ctx, "SELECT v0, v0__uuid FROM t")
+        assert ctx.vector_top_k
+
+    def test_correlated_path_does_not(self):
+        from vitalgraph.db.sparql_sql.emit_extend import emit_extend
+        ctx = _make_ctx({"entity": "text"})
+        emit_extend(self._plan({}), ctx)
+        assert not ctx.vector_top_k
+
+    def test_flag_is_shared_with_child_contexts(self):
+        ctx = _make_ctx({"entity": "text"})
+        child = ctx.child()
+        child.vector_top_k = True
+        assert ctx.vector_top_k
+
+    def test_threshold_is_outside_the_limited_scan(self):
+        """In the scan's WHERE, a threshold fewer than K rows pass makes
+        iterative scan run to `hnsw.max_scan_tuples`."""
+        from vitalgraph.db.sparql_sql.emit_extend import _try_vector_driving_extend
+        ctx = _make_ctx({"entity": "text"})
+        sql = _try_vector_driving_extend(
+            self._plan({"vg_top_k": {"limit": 5}, "vg_threshold": 0.7}),
+            ctx, "SELECT v0, v0__uuid FROM t")
+        limit_at = sql.index("LIMIT 5")
+        assert sql.index("> 0.7") > limit_at

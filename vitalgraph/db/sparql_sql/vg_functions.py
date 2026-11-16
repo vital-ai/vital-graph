@@ -770,11 +770,17 @@ def vector_top_k_driving_sql(
     ctx_clause = _context_clause(ctx, vargs.entity_var)
     # Remove leading " AND " for standalone WHERE
     where_parts = [f"TRUE{ctx_clause}"]
-    if threshold is not None:
-        where_parts.append(f"1 - (embedding <=> {embedding_sql}) > {threshold}")
+    # The threshold is NOT in the scan's WHERE: it is applied to the top K
+    # outside it (below). With iterative HNSW scan on (the executor turns it on
+    # for this statement, `GenerateResult.vector_top_k`), a threshold fewer
+    # than K rows pass makes the scan run to `hnsw.max_scan_tuples`. Same rows:
+    # the threshold is monotone in distance (`vectorization/hnsw_scan.py`).
 
-    # Filter to only subjects present in the child pattern so the top-K
-    # results are guaranteed to survive the downstream INNER JOIN.
+    # Filter to only subjects present in the child pattern so the top-K rows
+    # returned all survive the downstream INNER JOIN. That is only half of it:
+    # served from HNSW, the scan sees `hnsw.ef_search` candidates and this
+    # filter runs on those, so without iterative scan it returned FEWER than K
+    # whenever the child pattern was selective.
     if child_sql and child_uuid_col:
         where_parts.append(
             f"subject_uuid IN "
@@ -785,12 +791,20 @@ def vector_top_k_driving_sql(
     where_sql = " AND ".join(where_parts)
 
     score_alias = "__vg_score"
-    join_subquery = (
-        f"SELECT subject_uuid, 1 - (embedding <=> {embedding_sql}) AS {score_alias} "
+    # A LIMIT subquery is never flattened, so the outer WHERE cannot be pushed
+    # into the scan. No re-sort here: the caller's ORDER BY is on the score
+    # (`1 - distance`), which the planner cannot match to the index order.
+    top_k_scan = (
+        f"SELECT subject_uuid, embedding <=> {embedding_sql} AS __vg_dist "
         f"FROM {vec_table} "
         f"WHERE {where_sql} "
         f"ORDER BY embedding <=> {embedding_sql} "
         f"LIMIT {limit}"
+    )
+    threshold_sql = f" WHERE 1 - __vg_dist > {threshold}" if threshold is not None else ""
+    join_subquery = (
+        f"SELECT subject_uuid, 1 - __vg_dist AS {score_alias} "
+        f"FROM ({top_k_scan}) AS __vg_topk{threshold_sql}"
     )
 
     return VectorDrivingSQL(

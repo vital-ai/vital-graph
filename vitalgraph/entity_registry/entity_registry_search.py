@@ -18,9 +18,45 @@ from vitalgraph.entity_registry.entity_registry_vector_config import (
     get_entity_registry_embedding_column,
     get_entity_registry_provider,
 )
+from vitalgraph.vectorization.hnsw_scan import hnsw_iterative_scan
 from .entity_status import ACTIVE
 
 logger = logging.getLogger(__name__)
+
+# Columns a topic search returns, besides `score`. The inner query of
+# `_filtered_top_k_sql` selects these plus `distance`.
+_TOPIC_COLUMNS = (
+    "entity_id, primary_name, description, country, region, locality, "
+    "latitude, longitude, type_key, type_label, search_text"
+)
+
+
+def _filtered_top_k_sql(inner_select: str, max_distance_param: str,
+                        with_clause: bool = True) -> str:
+    """Wrap a filtered `ORDER BY embedding <=> q LIMIT k` query (`inner_select`,
+    which must select `_TOPIC_COLUMNS` and `distance`) in the shape iterative
+    HNSW scan needs (`vectorization/hnsw_scan.py`):
+
+      * the certainty cutoff is applied OUTSIDE the top k. In the scan's WHERE,
+        a cutoff that fewer than k rows pass makes iterative scan run to
+        `hnsw.max_scan_tuples`. Same rows as filtering first: the cutoff is
+        monotone in distance.
+      * `ORDER BY distance + 0` re-sorts. `relaxed_order` returns rows slightly
+        out of order, and a plain `ORDER BY distance` is matched to the CTE's
+        claimed order and dropped.
+
+    MATERIALIZED so the cutoff is never pushed into the scan. `with_clause`
+    False continues an existing WITH list.
+    """
+    cte = f"nn AS MATERIALIZED ({inner_select}\n            )"
+    head = f"WITH {cte}" if with_clause else f", {cte}"
+    return (
+        f"{head}\n"
+        f"            SELECT {_TOPIC_COLUMNS}, 1.0 - distance AS score\n"
+        f"            FROM nn\n"
+        f"            WHERE distance <= {max_distance_param}\n"
+        f"            ORDER BY distance + 0"
+    )
 
 
 class EntityRegistrySearch:
@@ -111,25 +147,31 @@ class EntityRegistrySearch:
 
         where_clause = " AND ".join(filters) if filters else "TRUE"
 
-        sql = f"""
-            SELECT e.entity_id, e.primary_name, e.description,
-                   e.country, e.region, e.locality,
-                   e.latitude, e.longitude,
-                   et.type_key, et.type_label,
-                   v.search_text,
-                   1.0 - (v.{self._embedding_column} <=> $1::vector) AS score
-            FROM {ENTITY_VECTOR_TABLE} v
-            JOIN entity e ON e.entity_id = v.entity_id
-            JOIN entity_type et ON et.type_id = e.entity_type_id
-            WHERE (v.{self._embedding_column} <=> $1::vector) <= $2
-              AND e.status = '{ACTIVE}'
-              AND {where_clause}
-            ORDER BY v.{self._embedding_column} <=> $1::vector
-            LIMIT $3
-        """
+        # Filtered top-k shape (`vectorization/hnsw_scan.py`): filters and the
+        # top k inside, the certainty cutoff ($2) and the re-sort outside.
+        sql = _filtered_top_k_sql(
+            inner_select=f"""
+                SELECT e.entity_id, e.primary_name, e.description,
+                       e.country, e.region, e.locality,
+                       e.latitude, e.longitude,
+                       et.type_key, et.type_label,
+                       v.search_text,
+                       v.{self._embedding_column} <=> $1::vector AS distance
+                FROM {ENTITY_VECTOR_TABLE} v
+                JOIN entity e ON e.entity_id = v.entity_id
+                JOIN entity_type et ON et.type_id = e.entity_type_id
+                WHERE v.{self._embedding_column} IS NOT NULL
+                  AND e.status = '{ACTIVE}'
+                  AND {where_clause}
+                ORDER BY v.{self._embedding_column} <=> $1::vector
+                LIMIT $3""",
+            max_distance_param="$2",
+        )
 
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(sql, *params)
+            async with conn.transaction():
+                async with hnsw_iterative_scan(conn):
+                    rows = await conn.fetch(sql, *params)
 
         return [dict(row) for row in rows]
 
@@ -571,6 +613,23 @@ class EntityRegistrySearch:
 
         where_clause = " AND ".join(filters) if filters else "TRUE"
 
+        inner = f"""
+                SELECT e.entity_id, e.primary_name, e.description,
+                       e.country, e.region, e.locality,
+                       e.latitude, e.longitude,
+                       et.type_key, et.type_label,
+                       v.search_text,
+                       v.{self._embedding_column} <=> $1::vector AS distance
+                FROM {ENTITY_VECTOR_TABLE} v
+                JOIN entity e ON e.entity_id = v.entity_id
+                JOIN entity_type et ON et.type_id = e.entity_type_id
+                JOIN geo_entities ge ON ge.entity_id = e.entity_id
+                WHERE v.{self._embedding_column} IS NOT NULL
+                  AND e.status = '{ACTIVE}'
+                  AND {where_clause}
+                ORDER BY v.{self._embedding_column} <=> $1::vector
+                LIMIT $6"""
+        # Filtered top-k shape (`vectorization/hnsw_scan.py`); cutoff is $5.
         sql = f"""
             WITH geo_entities AS (
                 SELECT DISTINCT entity_id
@@ -581,25 +640,13 @@ class EntityRegistrySearch:
                     $4
                 )
             )
-            SELECT e.entity_id, e.primary_name, e.description,
-                   e.country, e.region, e.locality,
-                   e.latitude, e.longitude,
-                   et.type_key, et.type_label,
-                   v.search_text,
-                   1.0 - (v.{self._embedding_column} <=> $1::vector) AS score
-            FROM {ENTITY_VECTOR_TABLE} v
-            JOIN entity e ON e.entity_id = v.entity_id
-            JOIN entity_type et ON et.type_id = e.entity_type_id
-            JOIN geo_entities ge ON ge.entity_id = e.entity_id
-            WHERE (v.{self._embedding_column} <=> $1::vector) <= $5
-              AND e.status = '{ACTIVE}'
-              AND {where_clause}
-            ORDER BY v.{self._embedding_column} <=> $1::vector
-            LIMIT $6
+            {_filtered_top_k_sql(inner, "$5", with_clause=False)}
         """
 
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(sql, *params)
+            async with conn.transaction():
+                async with hnsw_iterative_scan(conn):
+                    rows = await conn.fetch(sql, *params)
 
             # Enrich with location data for each entity
             results = []

@@ -81,6 +81,10 @@ class GenerateResult:
     # The executor RAISES the session's value to it for the statement, never
     # lowers it. None: nothing hashed, nothing set.
     work_mem_kb: Optional[int] = None
+    # True when a vector top-K drives the statement from the HNSW index. The
+    # executor turns on iterative scan for it (`vectorization/hnsw_scan.py`),
+    # or a selective child pattern leaves fewer than K rows.
+    vector_top_k: bool = False
     # Every pass that considered a faster shape for this query and refused,
     # with the values it refused on (`declines.py`). Carried on the result
     # rather than left in the log because the question it answers — "why is
@@ -2707,6 +2711,7 @@ async def _generate_sql(
             vector_requests=ctx.vector_requests,
             fuzzy_requests=ctx.fuzzy_requests,
             needs_ordered_scan=ctx.needs_ordered_scan and plan_source is None,
+            vector_top_k=ctx.vector_top_k,
             # the planner's SQL is pinned to its written order unless it says not to
             # (a recursive property path: `qplan.Rendered.pin`)
             fixed_join_order=(plan_source == "qtree" and qtree_pin) or (

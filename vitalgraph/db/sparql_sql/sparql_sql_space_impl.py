@@ -141,6 +141,17 @@ async def _apply_work_mem(conn, gen) -> None:
             int(kb))
 
 
+async def _apply_vector_scan(conn, gen) -> None:
+    """Iterative HNSW scan for a statement driven by a vector top-K
+    (`gen.vector_top_k`). Without it the index yields `hnsw.ef_search`
+    candidates and the child-pattern filter runs on those alone, so a
+    selective pattern returned fewer than K rows (`vectorization/hnsw_scan.py`).
+    SET LOCAL semantics: the CALLER holds the transaction."""
+    if getattr(gen, "vector_top_k", False):
+        from vitalgraph.vectorization.hnsw_scan import apply_hnsw_iterative_scan_local
+        await apply_hnsw_iterative_scan_local(conn)
+
+
 async def _apply_planner_advice(conn, gen) -> None:
     """With advice in the statement (`planner_ext`), say what the extension
     does with an item it cannot apply: fail under `require`, warn otherwise.
@@ -2751,6 +2762,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                             await conn.execute("SET LOCAL enable_sort = off")
                             await _apply_join_order(conn, gen)
                             await _apply_work_mem(conn, gen)
+                            await _apply_vector_scan(conn, gen)
                             await _apply_planner_advice(conn, gen)
                             rows = await conn.fetch(sql)
                     else:
@@ -2760,6 +2772,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                             await _apply_read_fence(conn)
                             await _apply_join_order(conn, gen)
                             await _apply_work_mem(conn, gen)
+                            await _apply_vector_scan(conn, gen)
                             await _apply_planner_advice(conn, gen)
                             rows = await conn.fetch(sql)
                     return rows
@@ -2789,6 +2802,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                             await _apply_read_fence(conn)
                             await _apply_join_order(conn, gen)
                             await _apply_work_mem(conn, gen)
+                            await _apply_vector_scan(conn, gen)
                             await _apply_planner_advice(conn, gen)
                             rows = await conn.fetch(sql)
                     if rows is None:

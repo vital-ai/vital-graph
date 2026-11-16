@@ -252,6 +252,7 @@ def _try_vector_driving_extend(plan: PlanV2, ctx: EmitContext, child_sql: str) -
     # Record vector request if needed
     if driving.vec_request is not None:
         ctx.add_vector_request(driving.vec_request)
+    ctx.vector_top_k = True
 
     # Allocate names
     var = plan.extend_var
