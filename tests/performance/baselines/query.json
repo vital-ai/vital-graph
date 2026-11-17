@@ -1,16 +1,16 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-11-15T19:28:01.149388+00:00",
+    "started_at": "2026-11-17T03:17:24.199921+00:00",
     "git": {
-      "commit": "63a4f8acd79eb0f0dfa2ff320cc92ca19b620939",
-      "short": "63a4f8ac",
+      "commit": "ca706d5cf35b5100c9dbf32904f49601d40c3d87",
+      "short": "ca706d5c",
       "branch": "main",
-      "dirty": true,
-      "untracked_files": 76
+      "dirty": false,
+      "untracked_files": 80
     },
     "machine": {
-      "host": "Marcs-MacBook-Pro.local",
+      "host": "ip-192-168-1-211.ec2.internal",
       "platform": "macOS-27.2-arm64-arm-64bit",
       "machine": "arm64",
       "cpu_count": 10,
@@ -28,20 +28,20 @@
         "persist": true,
         "seeded": true,
         "fixture_tables": 232,
-        "fixture_live_tuples": 193110,
-        "seed_space_bytes": 8288641024
+        "fixture_live_tuples": 0,
+        "seed_space_bytes": 8288649216
       },
       "flags": {
         "persist": true,
         "seeded": true
       },
       "largest_gated_fixture": "wordnet_frames",
-      "largest_gated_fixture_bytes": 8151744512,
+      "largest_gated_fixture_bytes": 8151752704,
       "shared_buffers_bytes": 8589934592,
       "exceeds_shared_buffers": false
     },
     "pg": {
-      "server_version": "18.7 (Debian 18.7-1.pgdg13+2)",
+      "server_version": "18.4 (Debian 18.4-1.pgdg13+1)",
       "shared_buffers": "8GB",
       "work_mem": "32MB",
       "maintenance_work_mem": "64MB",
@@ -59,10 +59,10 @@
     },
     "stats": {
       "fixture_tables": 232,
-      "fixture_live_tuples": 193110,
-      "fixture_last_analyze": "2026-11-15T18:48:22.855134+00:00"
+      "fixture_live_tuples": 0,
+      "fixture_last_analyze": "1970-01-01T00:00:00+00:00"
     },
-    "finished_at": "2026-11-15T19:36:31.344693+00:00"
+    "finished_at": "2026-11-17T03:25:17.360108+00:00"
   },
   "benches": [
     {
@@ -70,9 +70,9 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "first_page_ms": 63.1,
-        "deep_page_ms": 103.2,
-        "deep_offset_ratio": 1.63,
+        "first_page_ms": 55.0,
+        "deep_page_ms": 51.7,
+        "deep_offset_ratio": 0.94,
         "offset": 375,
         "rows": 25
       },
@@ -84,8 +84,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 40.1,
-        "sorted_ms": 34.9,
+        "unsorted_ms": 73.3,
+        "sorted_ms": 60.6,
         "rows": 25
       },
       "dataset": "synthetic:400frames",
@@ -96,11 +96,11 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "seed_quads_per_sec": 832,
-        "populate_geo_s": 3.142,
+        "seed_quads_per_sec": 1048,
+        "populate_geo_s": 3.711,
         "points_upserted": 2000,
-        "points_per_sec": 637,
-        "geo_search_ms": 20.5,
+        "points_per_sec": 539,
+        "geo_search_ms": 28.8,
         "rows_returned": 25
       },
       "dataset": "synthetic:2000points",
@@ -126,9 +126,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 92.4,
-        "agg_currency_avg_ms": 53.8,
-        "agg_currency_ratio": 1.72
+        "agg_currency_min_ms": 80.6,
+        "agg_currency_avg_ms": 42.8,
+        "agg_currency_ratio": 1.88
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -138,9 +138,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 108.0,
-        "agg_double_avg_ms": 63.5,
-        "agg_double_ratio": 1.7
+        "agg_double_min_ms": 226.8,
+        "agg_double_avg_ms": 396.9,
+        "agg_double_ratio": 0.57
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -150,9 +150,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 83.8,
-        "agg_integer_avg_ms": 46.0,
-        "agg_integer_ratio": 1.82
+        "agg_integer_min_ms": 75.8,
+        "agg_integer_avg_ms": 77.3,
+        "agg_integer_ratio": 0.98
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -172,12 +172,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 191.5,
-        "agg_max_ms": 204.6,
-        "agg_avg_ms": 143.0,
-        "agg_sum_ms": 133.7,
-        "agg_count_ms": 46.4,
-        "min_over_avg": 1.34
+        "agg_min_ms": 176.6,
+        "agg_max_ms": 156.2,
+        "agg_avg_ms": 102.9,
+        "agg_sum_ms": 109.9,
+        "agg_count_ms": 40.4,
+        "min_over_avg": 1.72
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -187,12 +187,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 85.0,
-        "agg_max_ms": 97.7,
-        "agg_avg_ms": 46.4,
-        "agg_sum_ms": 43.2,
-        "agg_count_ms": 4.3,
-        "min_over_avg": 1.83
+        "agg_min_ms": 81.8,
+        "agg_max_ms": 86.5,
+        "agg_avg_ms": 44.5,
+        "agg_sum_ms": 39.5,
+        "agg_count_ms": 3.7,
+        "min_over_avg": 1.84
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
@@ -207,12 +207,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "min_in_memory_ms": 123.8,
-        "min_spilled_ms": 95.3,
-        "spill_ratio": 0.77
+        "min_in_memory_ms": 74.1,
+        "min_spilled_ms": 78.4,
+        "spill_ratio": 1.06
       },
       "dataset": "sp_lead_synth_10k",
-      "notes": "MIN with and without a work_mem spill at 1MB \u2014 issues/029"
+      "notes": "MIN with and without a work_mem spill at 256kB \u2014 issues/029"
     },
     {
       "bench_id": "query.covering.advantage_growth",
@@ -244,8 +244,8 @@
         "max_actual_rows": 100,
         "estimated_rows": 100,
         "heap_fetches": 0,
-        "planning_ms": 0.248,
-        "execution_ms": 0.979,
+        "planning_ms": 0.38,
+        "execution_ms": 1.325,
         "matched_rows": 100
       },
       "dataset": "space_lead_dataset_test"
@@ -304,8 +304,8 @@
         "max_actual_rows": 1025,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.148,
-        "execution_ms": 4498.864
+        "planning_ms": 0.201,
+        "execution_ms": 8284.79
       },
       "dataset": "wordnet_frames"
     },
@@ -358,8 +358,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.065,
-        "execution_ms": 116.99
+        "planning_ms": 6.367,
+        "execution_ms": 145.343
       },
       "dataset": "wordnet_frames"
     },
@@ -412,8 +412,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.154,
-        "execution_ms": 7.135
+        "planning_ms": 0.275,
+        "execution_ms": 6.502
       },
       "dataset": "wordnet_frames"
     },
@@ -476,8 +476,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.839,
-        "execution_ms": 19.777,
+        "planning_ms": 2.875,
+        "execution_ms": 12.831,
         "sql_chars": 6681,
         "joins": 0
       },
@@ -539,8 +539,8 @@
         "max_actual_rows": 1649,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.78,
-        "execution_ms": 10.819,
+        "planning_ms": 2.87,
+        "execution_ms": 12.323,
         "sql_chars": 3797,
         "joins": 0
       },
@@ -607,8 +607,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.745,
-        "execution_ms": 45.3,
+        "planning_ms": 8.084,
+        "execution_ms": 50.563,
         "sql_chars": 6681,
         "joins": 0
       },
@@ -687,8 +687,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.355,
-        "execution_ms": 21.145,
+        "planning_ms": 1.557,
+        "execution_ms": 21.314,
         "sql_chars": 6953,
         "joins": 0
       },
@@ -756,8 +756,8 @@
         "max_actual_rows": 36581,
         "estimated_rows": 25,
         "heap_fetches": 2,
-        "planning_ms": 0.607,
-        "execution_ms": 56.78,
+        "planning_ms": 0.396,
+        "execution_ms": 72.175,
         "sql_chars": 3797,
         "joins": 0
       },
@@ -786,10 +786,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 21.1,
-        "page_ms_offset_250": 37.3,
-        "page_ms_offset_1000": 37.4,
-        "deep_ratio": 1.8
+        "page_ms_offset_0": 21.7,
+        "page_ms_offset_250": 29.7,
+        "page_ms_offset_1000": 32.2,
+        "deep_ratio": 1.4
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
@@ -984,9 +984,9 @@
         "max_actual_rows": 10000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 32.346,
-        "execution_ms": 34.324,
-        "min_ratio": 0.988,
+        "planning_ms": 30.517,
+        "execution_ms": 33.72,
+        "min_ratio": 1.311,
         "offsets_measured": 2,
         "deepest_offset": 250
       },
@@ -1172,8 +1172,8 @@
         "max_actual_rows": 53469,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 33.55,
-        "execution_ms": 414.199,
+        "planning_ms": 34.218,
+        "execution_ms": 426.085,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -1360,8 +1360,8 @@
         "max_actual_rows": 699,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 36.086,
-        "execution_ms": 367.769,
+        "planning_ms": 32.221,
+        "execution_ms": 278.938,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -1583,8 +1583,8 @@
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 42.829,
-        "execution_ms": 111.249,
+        "planning_ms": 46.238,
+        "execution_ms": 95.419,
         "sparql_chars": 1809,
         "sql_chars": 6510,
         "joins": 0
@@ -1778,8 +1778,8 @@
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 41.25,
-        "execution_ms": 217.644,
+        "planning_ms": 42.444,
+        "execution_ms": 213.768,
         "sparql_chars": 1773,
         "sql_chars": 6490,
         "joins": 0
@@ -1973,8 +1973,8 @@
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 38.562,
-        "execution_ms": 27.163,
+        "planning_ms": 37.132,
+        "execution_ms": 27.401,
         "sparql_chars": 1781,
         "sql_chars": 6490,
         "joins": 0
@@ -2142,8 +2142,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 51.196,
-        "execution_ms": 21.169,
+        "planning_ms": 48.966,
+        "execution_ms": 28.689,
         "total_matches": 911,
         "page_size": 25,
         "buffers_per_match": 22.954
@@ -2323,8 +2323,8 @@
         "max_actual_rows": 345,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 31.879,
-        "execution_ms": 642.778,
+        "planning_ms": 35.762,
+        "execution_ms": 764.374,
         "total_matches": 345,
         "page_size": 25,
         "buffers_per_match": 41.383
@@ -2494,8 +2494,8 @@
         "max_actual_rows": 513,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 48.799,
-        "execution_ms": 9097.465,
+        "planning_ms": 50.462,
+        "execution_ms": 7656.499,
         "total_matches": 523,
         "page_size": 25,
         "buffers_per_match": 15321.054
@@ -2663,8 +2663,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 50.478,
-        "execution_ms": 929.466,
+        "planning_ms": 51.633,
+        "execution_ms": 876.962,
         "total_matches": 738,
         "page_size": 25,
         "buffers_per_match": 53.999
@@ -2844,8 +2844,8 @@
         "max_actual_rows": 88,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 28.68,
-        "execution_ms": 131.32,
+        "planning_ms": 28.34,
+        "execution_ms": 110.2,
         "total_matches": 88,
         "page_size": 25,
         "buffers_per_match": 42.5
@@ -2863,11 +2863,11 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "growth_ratio": 0.47,
+        "growth_ratio": 0.54,
         "match_spread": 3.92,
-        "growth_vs_matches": -0.181,
+        "growth_vs_matches": -0.158,
         "buffers_smallest": 535084,
-        "buffers_largest": 252193
+        "buffers_largest": 287624
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "[10k] 25-row page, matches 88\u2192345. O(page) predicts ~1.0; O(matches) predicts ~3.9"
@@ -3044,8 +3044,8 @@
         "max_actual_rows": 88,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 28.379,
-        "execution_ms": 4.879,
+        "planning_ms": 27.516,
+        "execution_ms": 5.611,
         "rows": 25,
         "distinct": 25
       },
@@ -3224,8 +3224,8 @@
         "max_actual_rows": 88,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 29.039,
-        "execution_ms": 5.134,
+        "planning_ms": 27.575,
+        "execution_ms": 4.471,
         "rows": 25,
         "distinct": 25
       },
@@ -3754,10 +3754,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 42.9,
-        "sorted_ms_offset_250": 47.9,
-        "sorted_ms_offset_1000": 43.4,
-        "sorted_depth_ratio": 1.1
+        "sorted_ms_offset_0": 67.9,
+        "sorted_ms_offset_250": 44.3,
+        "sorted_ms_offset_1000": 38.0,
+        "sorted_depth_ratio": 0.7
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
@@ -3772,9 +3772,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 21.0,
-        "sorted_ms": 46.6,
-        "sort_ratio": 2.2
+        "unsorted_ms": 15.2,
+        "sorted_ms": 37.1,
+        "sort_ratio": 2.4
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -3813,8 +3813,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 34.0,
-        "min_ms": 32.3,
+        "wall_ms": 27.2,
+        "min_ms": 26.7,
         "page_size": 100,
         "results": 100
       },
@@ -3826,8 +3826,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 29.6,
-        "min_ms": 27.4,
+        "wall_ms": 23.3,
+        "min_ms": 22.5,
         "page_size": 100,
         "results": 100
       },
@@ -3844,8 +3844,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 28.6,
-        "min_ms": 26.3,
+        "wall_ms": 21.9,
+        "min_ms": 21.6,
         "page_size": 25,
         "results": 25
       },
@@ -3857,8 +3857,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 23.4,
-        "min_ms": 18.4,
+        "wall_ms": 15.9,
+        "min_ms": 15.4,
         "page_size": 25,
         "results": 25
       },
@@ -3875,8 +3875,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 109.8,
-        "min_ms": 71.2,
+        "wall_ms": 68.4,
+        "min_ms": 61.3,
         "page_size": 100,
         "results": 100
       },
@@ -3888,8 +3888,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 85.0,
-        "min_ms": 81.8,
+        "wall_ms": 67.7,
+        "min_ms": 66.2,
         "page_size": 100,
         "results": 73
       },
@@ -3906,8 +3906,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 38.5,
-        "min_ms": 38.1,
+        "wall_ms": 35.8,
+        "min_ms": 34.7,
         "page_size": 25,
         "results": 25
       },
@@ -3919,8 +3919,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 47.5,
-        "min_ms": 45.5,
+        "wall_ms": 39.4,
+        "min_ms": 38.8,
         "page_size": 25,
         "results": 25
       },
@@ -3937,8 +3937,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 68.6,
-        "min_ms": 64.8,
+        "wall_ms": 66.0,
+        "min_ms": 61.1,
         "page_size": 100,
         "results": 100
       },
@@ -3950,8 +3950,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 35.8,
-        "min_ms": 33.7,
+        "wall_ms": 32.3,
+        "min_ms": 29.0,
         "page_size": 100,
         "results": 99
       },
@@ -3968,8 +3968,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 37.4,
-        "min_ms": 36.7,
+        "wall_ms": 32.1,
+        "min_ms": 32.0,
         "page_size": 25,
         "results": 25
       },
@@ -3981,8 +3981,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 25.6,
-        "min_ms": 22.7,
+        "wall_ms": 24.5,
+        "min_ms": 23.4,
         "page_size": 25,
         "results": 25
       },
@@ -3999,8 +3999,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 164.6,
-        "min_ms": 160.8,
+        "wall_ms": 129.7,
+        "min_ms": 125.0,
         "page_size": 100,
         "results": 100
       },
@@ -4012,8 +4012,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 36.6,
-        "min_ms": 35.3,
+        "wall_ms": 31.4,
+        "min_ms": 29.4,
         "page_size": 100,
         "results": 13
       },
@@ -4030,8 +4030,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 51.8,
-        "min_ms": 50.7,
+        "wall_ms": 41.6,
+        "min_ms": 41.3,
         "page_size": 25,
         "results": 25
       },
@@ -4043,8 +4043,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 37.4,
-        "min_ms": 36.5,
+        "wall_ms": 29.4,
+        "min_ms": 29.0,
         "page_size": 25,
         "results": 13
       },
@@ -4058,7 +4058,7 @@
       "metrics": {
         "partitions_scanned": 1,
         "partitions_total": 4,
-        "node_types": "Seq Scan"
+        "node_types": "Index Only Scan"
       },
       "dataset": "synthetic:4part"
     },
@@ -4067,7 +4067,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "convergent_ms": 6293.8,
+        "convergent_ms": 5848.2,
         "convergent_rows": 1313755
       },
       "dataset": "sp_kg_rel",
@@ -4089,7 +4089,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_friendof_ms": 59.8,
+        "rel_friendof_ms": 67.2,
         "rel_friendof_rows": 14625
       },
       "dataset": "sp_kg_rel",
@@ -4100,7 +4100,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_reportsto_ms": 36.5,
+        "rel_reportsto_ms": 55.0,
         "rel_reportsto_rows": 4750
       },
       "dataset": "sp_kg_rel",
@@ -4111,7 +4111,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_worksfor_ms": 35.2,
+        "rel_worksfor_ms": 33.5,
         "rel_worksfor_rows": 4875
       },
       "dataset": "sp_kg_rel",
@@ -4291,9 +4291,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.4,
-        "literal_subject_ms": 0.65,
-        "values_ratio": 0.6
+        "values_ms": 0.44,
+        "literal_subject_ms": 0.64,
+        "values_ratio": 0.7
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -4303,7 +4303,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 389.3,
+        "wall_ms": 541.4,
         "rows": 4
       },
       "dataset": "wordnet_frames",
@@ -4314,7 +4314,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 827.3,
+        "wall_ms": 974.2,
         "rows": 1
       },
       "dataset": "wordnet_frames",
@@ -4325,7 +4325,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 478.8,
+        "wall_ms": 468.2,
         "rows": 425
       },
       "dataset": "wordnet_frames",
@@ -4336,7 +4336,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 262.7,
+        "wall_ms": 293.8,
         "rows": 45
       },
       "dataset": "wordnet_frames",
@@ -4561,8 +4561,8 @@
         "max_actual_rows": 9266,
         "estimated_rows": 54,
         "heap_fetches": 0,
-        "planning_ms": 3.296,
-        "execution_ms": 36.585,
+        "planning_ms": 2.448,
+        "execution_ms": 31.342,
         "rows": 70
       },
       "dataset": "sp_graph_skew_2k",
@@ -4781,8 +4781,8 @@
         "max_actual_rows": 191,
         "estimated_rows": 6,
         "heap_fetches": 0,
-        "planning_ms": 2.453,
-        "execution_ms": 4.99,
+        "planning_ms": 2.724,
+        "execution_ms": 4.479,
         "rows": 21
       },
       "dataset": "sp_graph_skew_2k",
@@ -5001,8 +5001,8 @@
         "max_actual_rows": 144,
         "estimated_rows": 6,
         "heap_fetches": 0,
-        "planning_ms": 2.602,
-        "execution_ms": 3.6,
+        "planning_ms": 2.526,
+        "execution_ms": 2.449,
         "rows": 7
       },
       "dataset": "sp_graph_skew_2k",
@@ -5284,8 +5284,8 @@
         "max_actual_rows": 2022,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 12.188,
-        "execution_ms": 10.42,
+        "planning_ms": 11.538,
+        "execution_ms": 7.345,
         "rows": 17
       },
       "dataset": "sp_graph_skew_2k",
@@ -5480,8 +5480,8 @@
         "max_actual_rows": 27,
         "estimated_rows": 4,
         "heap_fetches": 0,
-        "planning_ms": 2.114,
-        "execution_ms": 1.344,
+        "planning_ms": 2.06,
+        "execution_ms": 1.679,
         "rows": 1
       },
       "dataset": "sp_graph_skew_2k",
@@ -5625,8 +5625,8 @@
         "max_actual_rows": 17029,
         "estimated_rows": 6,
         "heap_fetches": 0,
-        "planning_ms": 37.581,
-        "execution_ms": 164.418,
+        "planning_ms": 24.04,
+        "execution_ms": 125.468,
         "rows": 17029
       },
       "dataset": "sp_graph_skew_2k",
@@ -5637,11 +5637,11 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "seed_quads_per_sec": 1061,
+        "seed_quads_per_sec": 1402,
         "index_ddl_s": 0.005,
         "vectors_upserted": 2000,
-        "vectors_per_sec": 304,
-        "vector_search_ms": 6.29,
+        "vectors_per_sec": 327,
+        "vector_search_ms": 5.13,
         "rows_returned": 10
       },
       "dataset": "synthetic:2000vectors:384d",
@@ -5652,13 +5652,13 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "seed_quads_per_sec": 1239,
-        "concrete_quads_per_sec": 2260,
-        "where_bound_quads_per_sec": 1598,
-        "concrete_s": 1.327,
-        "where_bound_s": 1.878,
-        "sweep_s": 0.006,
-        "deferred_share": 0.003,
+        "seed_quads_per_sec": 1039,
+        "concrete_quads_per_sec": 1807,
+        "where_bound_quads_per_sec": 910,
+        "concrete_s": 1.66,
+        "where_bound_s": 3.298,
+        "sweep_s": 0.012,
+        "deferred_share": 0.004,
         "orphans_before_sweep": 1000
       },
       "dataset": "synthetic:2000edges",
@@ -5670,12 +5670,12 @@
       "status": "ok",
       "metrics": {
         "source_quads": 596458,
-        "export_s": 0.924,
-        "export_quads_per_sec": 645398,
+        "export_s": 0.657,
+        "export_quads_per_sec": 907250,
         "export_bytes": 78075037,
-        "import_s": 18.374,
-        "import_quads_per_sec": 32462,
-        "import_over_export": 19.88,
+        "import_s": 30.664,
+        "import_quads_per_sec": 19451,
+        "import_over_export": 46.64,
         "edge_rows_rebuilt": 38957
       },
       "dataset": "sp_graph_skew_2k",
@@ -5686,12 +5686,12 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "executemany_quads_per_sec": 4311,
-        "copy_quads_per_sec": 62609,
-        "bulk_e2e_quads_per_sec": 39607,
-        "index_rebuild_s": 3.71,
-        "copy_speedup": 14.524,
-        "e2e_speedup": 9.188
+        "executemany_quads_per_sec": 3240,
+        "copy_quads_per_sec": 56815,
+        "bulk_e2e_quads_per_sec": 38321,
+        "index_rebuild_s": 3.398,
+        "copy_speedup": 17.538,
+        "e2e_speedup": 11.829
       },
       "dataset": "synthetic:400000q"
     },
@@ -5701,9 +5701,9 @@
       "status": "ok",
       "metrics": {
         "growth_class": "flat",
-        "probe_ms_at_100000q": 82.83,
-        "probe_ms_at_300000q": 91.74,
-        "probe_ms_at_900000q": 92.11
+        "probe_ms_at_100000q": 77.86,
+        "probe_ms_at_300000q": 75.65,
+        "probe_ms_at_900000q": 81.47
       },
       "dataset": "synthetic:[50000, 150000, 450000]",
       "notes": "probe=300 quads, min of 3 rolled-back runs"
@@ -5713,22 +5713,22 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "insert_data_ms": 6491.5,
-        "insert_where_ms": 2710.1,
-        "modify_ms": 3115.1,
+        "insert_data_ms": 6173.0,
+        "insert_where_ms": 2466.7,
+        "modify_ms": 2500.8,
         "edges_after_insert": 2000,
         "edges_after_modify": 2000,
         "remarked_quads": 2000,
         "n_edges": 2000
       },
-      "dataset": "perfdel_6d6d7b17",
+      "dataset": "perfdel_89fc6e25",
       "notes": "SPARQL UPDATE: INSERT DATA / INSERT WHERE / MODIFY over 2000 edges \u2014 issues/192"
     }
   ],
   "baseline": {
     "name": "query",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20261115T191715Z-63a4f8ac.json",
-    "reason": "Re-promoted 2026-11-15 as the per-volume baseline for vgtest_core (issues/306). The previous query.json (2026-09-18, 16GB shared_buffers, one 144 GB volume) was refused by perf_compare (issues/189 stamp mismatch) and cannot be reproduced on the 20 GB Docker VM. Query tier + API benches on volume vgtest_core (24 spaces incl. the build-once perf_edgehop), shared_buffers 8GB. Server image from a clean worktree at a6c130ae (server code identical to 63a4f8ac); 'dirty' is another session's uncommitted files on the host. Host load average 11-12 from unrelated apps: absolute timings are loaded-machine numbers. 1043 passed; 117 benches ok, 60 skipped (spaces on other volumes), 1 KNOWN HOLE: query.covering.advantage_growth failed its visibility-map guard inside the full core suite (2/2; passes standalone 3/3) - see issues/345.",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20261117T030501Z-ca706d5c.json",
+    "reason": "Re-recorded 2026-11-17 on PostgreSQL 18.4 (production's minor) after issues/347: the 2026-11-15 promotion ran on an image that had silently upgraded to 18.7. Volume vgtest_core (per-volume baselines, issues/306), shared_buffers 8GB. Server images built from a clean worktree at f842e74e (server code identical to ca706d5c, which adds only issue docs), vitalsigns 0.1.57; includes issues/344 and 346 and the vector, event-loop and conversion changes since the last baseline. Host load average ~11 from unrelated apps: absolute timings are loaded-machine numbers. 1052 passed; 117 benches ok, 60 skipped (spaces on other volumes), 1 KNOWN HOLE: query.covering.advantage_growth (issues/345).",
     "pg_stamped": true
   }
 }
