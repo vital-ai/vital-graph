@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
       - name: The image tag
@@ -31,13 +31,13 @@ jobs:
           ref="${{ inputs.ref || github.ref_name }}"
           if git rev-parse -q --verify "refs/tags/$ref" > /dev/null; then echo "tag=$ref" >> "$GITHUB_OUTPUT"
           else echo "tag=git-$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"; fi
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Build and push (linux/amd64)
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
