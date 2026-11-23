@@ -947,6 +947,24 @@ class SpaceManager:
             # key and every per-space cache too. Left behind, a space later
             # re-created under the same id is served from the old one's
             # caches (`issues/348`).
+            #
+            # Unless it has ALREADY been re-created: a notice can arrive after
+            # the same id was created again (on this instance or another), and
+            # forgetting would drop the NEW space's record and key. So the row
+            # decides. The old space's caches go either way.
+            backend = self.space_backend or self.db_impl
+            row = None
+            if hasattr(backend, "get_space_metadata"):
+                try:
+                    row = await backend.get_space_metadata(space_id)  # loads its key
+                except Exception as e:
+                    self.logger.error("Failed to re-read '%s' on its deleted "
+                                      "signal: %s", space_id, e)
+            if row:
+                self._invalidate_space_caches(space_id)
+                self.logger.info("📥 Space '%s' deleted and already re-created; "
+                                 "caches dropped, space kept", space_id)
+                return
             await self._forget_space(space_id)
             self.logger.info("📥 Space '%s' forgotten via signal", space_id)
 
@@ -964,10 +982,15 @@ class SpaceManager:
                 pass
         self._orphaned_spaces.discard(space_id)
         try:
-            from ..db.sparql_sql.space_names import forget_storage_key
-            forget_storage_key(space_id)
+            from ..db.sparql_sql.space_names import forget_storage_key, is_creating
+            # A create in progress here holds its own key; keep it.
+            if not is_creating(space_id):
+                forget_storage_key(space_id)
         except Exception as e:
             self.logger.error("Failed to forget the storage key of '%s': %s", space_id, e)
+        self._invalidate_space_caches(space_id)
+
+    def _invalidate_space_caches(self, space_id: str) -> None:
         try:
             from ..db.sparql_sql.space_cache_invalidation import invalidate_space_caches
             invalidate_space_caches(space_id)
@@ -1032,6 +1055,14 @@ class SpaceManager:
         # this process creates while the read runs is registered after its row
         # is written, so the read may have missed the row (`issues/348`).
         cached_before_read = set(self._spaces)
+        # Likewise for keys this process holds WITHOUT a registry record (an
+        # import/export job loads one directly), minus creates in progress,
+        # which hold a key before their row exists.
+        keys_before_read = set()
+        if hasattr(backend, "get_space_metadata"):
+            from ..db.sparql_sql.space_names import is_creating, known_space_ids
+            keys_before_read = {sid for sid in known_space_ids()
+                                if not is_creating(sid)}
         try:
             db_spaces = await backend.list_spaces()
         except Exception as e:
@@ -1075,6 +1106,8 @@ class SpaceManager:
         removed = 0
         stale_ids = [sid for sid in cached_before_read
                      if sid in self._spaces and sid not in db_space_map]
+        stale_ids += [sid for sid in keys_before_read - set(stale_ids)
+                      if sid not in self._spaces and sid not in db_space_map]
         for sid in stale_ids:
             await self._forget_space(sid)
             removed += 1

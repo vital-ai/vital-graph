@@ -67,6 +67,13 @@ _IDS: Dict[str, str] = {}
 #: (`issues/348`).
 _UNKEYED: set = set()
 
+#: Spaces this process is creating right now, under the key it allocated.
+#: Loading keys from the database leaves them alone: another instance creating
+#: the same id at the same moment announces ITS key, and taking it mid-create
+#: would build the rest of this create's objects, and later drop them, under
+#: the other space's name (`issues/348`).
+_CREATING: set = set()
+
 
 def space_prefix(space_id: str) -> str:
     """The prefix every database object of this space is named with."""
@@ -109,6 +116,26 @@ def forget_storage_key(space_id: str) -> None:
     if key is not None and _IDS.get(key) == space_id:
         del _IDS[key]
     _UNKEYED.discard(space_id)
+
+
+def begin_create(space_id: str, key: str) -> None:
+    """Name `space_id`'s objects under `key` for a create in progress, and keep
+    database loads from replacing it until `end_create`."""
+    register_storage_key(space_id, key)
+    _CREATING.add(space_id)
+
+
+def end_create(space_id: str) -> None:
+    _CREATING.discard(space_id)
+
+
+def is_creating(space_id: str) -> bool:
+    return space_id in _CREATING
+
+
+def known_space_ids() -> set:
+    """Every space this process knows how to name: keyed or read-unkeyed."""
+    return set(_KEYS) | _UNKEYED
 
 
 def mark_unkeyed(space_id: str) -> None:

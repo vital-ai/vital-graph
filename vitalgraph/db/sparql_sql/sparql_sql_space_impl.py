@@ -873,15 +873,19 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         name the schema generates comes from `space_prefix`. The row that
         records the key is written afterwards by `create_space_metadata`.
         """
-        from .space_names import forget_storage_key, register_storage_key
+        from .space_names import begin_create, end_create, forget_storage_key
         from .space_storage_key import allocate_storage_key
         try:
             async with self._db._pool.acquire() as conn:
-                register_storage_key(space_id, await allocate_storage_key(conn))
+                # Held until `create_space_metadata` writes or abandons the row:
+                # a NOTICE of another instance's same-id create must not swap
+                # this create's key out from under it (`issues/348`).
+                begin_create(space_id, await allocate_storage_key(conn))
                 await SparqlSQLSchema.create_space(conn, space_id, partition_quads)
             return True
         except Exception as e:
             forget_storage_key(space_id)
+            end_create(space_id)
             logger.error("create_space_storage(%s) failed: %s", space_id, e)
             return False
 
@@ -1033,9 +1037,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     # ==================================================================
 
     async def create_space_metadata(self, space_id: str, metadata: Dict[str, Any]) -> bool:
+        from .space_names import end_create, registered_storage_key
         try:
-            from .space_names import registered_storage_key
             from .space_storage_key import allocate_storage_key
+            # The key this create's objects were made under. `begin_create`
+            # holds it in the map, so a NOTICE of another instance's same-id
+            # create cannot have replaced it (`issues/348`).
+            own_key = registered_storage_key(space_id)
             async with self._db._pool.acquire() as conn:
                 # The row records the key the objects were created under.
                 #
@@ -1068,8 +1076,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     metadata.get('tenant', 'default'),
                     # The key the objects were just created under; a fresh one
                     # only for a row written without storage (none today).
-                    registered_storage_key(space_id)
-                    or await allocate_storage_key(conn),
+                    own_key or await allocate_storage_key(conn),
                 )
                 if written is None:
                     await self._abandon_lost_create(conn, space_id)
@@ -1096,16 +1103,20 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 raise
             logger.error("create_space_metadata(%s) failed: %s", space_id, e)
             return False
+        finally:
+            end_create(space_id)
 
     async def _abandon_lost_create(self, conn, space_id: str) -> None:
         """Undo a create that lost its row to an existing space of the same id.
 
         Drops ONLY this create's objects — they are named under the key it
-        registered, which is still the one `space_prefix` gives — and then
-        loads the existing row's key, so this process names the space as it
-        is. Never `delete_space_storage`: that also deletes the `space` and
-        `graph` rows by id, which are the OTHER space's.
+        allocated, which `begin_create` still holds as the one `space_prefix`
+        gives — and only then releases the hold and loads the existing row's
+        key, so this process names the space as it is. Never
+        `delete_space_storage`: that also deletes the `space` and `graph` rows
+        by id, which are the OTHER space's.
         """
+        from .space_names import end_create
         from .space_storage_key import load_storage_keys
         try:
             await SparqlSQLSchema.drop_space(conn, space_id)
@@ -1114,6 +1125,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 "create of %s lost to an existing space; dropping its own "
                 "objects (%s) failed, they are orphans: %s",
                 space_id, space_prefix(space_id), e)
+        end_create(space_id)
         await load_storage_keys(conn, space_id)
 
     async def update_space_metadata(self, space_id: str, metadata: Dict[str, Any]) -> bool:

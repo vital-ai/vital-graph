@@ -1,6 +1,6 @@
 # 348 — A space created on one instance is unusable on another
 
-## Status: FIX COMMITTED 2026-11-23; unit-tested; integration tests written, not yet run; not deployed
+## Status: FIX COMMITTED 2026-11-23 (`482e9d5a`, review fixes after it); unit-tested; integration tests written, not yet run; not deployed
 
 The vg test stack was not started: swap was at 27.4 of 28.7 GB.
 
@@ -21,16 +21,26 @@ The vg test stack was not started: swap was at 27.4 of 28.7 GB.
   - `create_space_with_tables` reads the row (loading its key) before the table check.
   - `create_space_metadata`'s upsert replaces an existing row only when that row names no
     objects (`... WHERE` on both quad tables, `RETURNING`).
+  - The key is held from allocation until the row is written or abandon
+    (`space_names.begin_create` / `end_create`). `load_storage_keys` skips a space being
+    created here, so another instance's same-id "created" notice cannot swap the key in
+    mid-create. The row write uses the key this create allocated.
   - On a lost row, `_abandon_lost_create` drops only this create's own tables, still
-    under its own key, then loads the winner's key. `SpaceAlreadyExistsError` propagates
+    under its own key, then releases the hold and loads the winner's key. `SpaceAlreadyExistsError` propagates
     through `SpaceImpl.create` and `create_space_with_tables`. Both previously turned it
     into `False`, and the old metadata-failure rollback (`delete_space_storage`) would
     have deleted the OTHER space's `space` and `graph` rows.
 - **Delete.**
-  - The "deleted" signal and the refresh both call `SpaceManager._forget_space`: registry
-    record, storage key, and `invalidate_space_caches`.
+  - The "deleted" signal re-reads the row first.
+    - If the row is gone, it calls `SpaceManager._forget_space`: registry record, storage
+      key, and `invalidate_space_caches`.
+    - If the space has already been re-created (a late notice), it drops only the caches
+      and keeps the new space's record and key.
+  - `_forget_space` never drops the key of a create in progress here.
+  - The refresh forgets spaces whose row is gone. That covers spaces cached before its
+    read, and also keys held without a registry record (the import/export path loads
+    one), except creates that were in progress when it started.
   - `delete_space_with_tables` resolves the space first.
-  - The refresh evicts only spaces cached before its read.
 - **Body-named spaces.**
   - `ImportExportJobManager._resolve_job_space` runs at job start.
   - The process trigger calls `ensure_space_loaded`.
@@ -38,22 +48,27 @@ The vg test stack was not started: swap was at 27.4 of 28.7 GB.
 ### Verified
 - `test_scripts/debug/_issue348_cross_instance_race.py`: 500 before the fix, 200 from the
   keyed table after it.
-- `tests/unit/test_a_space_created_elsewhere_is_usable_at_once.py`: 17 tests. Against the
-  code at HEAD (extracted to a temp dir), 13 fail.
-  - Of the 4 that pass there, the two request tests exercise the new resolver module
+- `tests/unit/test_a_space_created_elsewhere_is_usable_at_once.py`: 17 tests at
+  `482e9d5a`, 22 after the review fixes. Against the code before `482e9d5a` (extracted to
+  a temp dir), 13 of the first 17 failed.
+  - Of the 4 that passed there, the two request tests exercise the new resolver module
     itself, and the other two check behaviour that is unchanged.
   - Includes `test_space_routes_resolve_their_space`, which builds the real app and fails
     for any `space_id` route without the resolver.
 - Full unit suite: passes. The only failure before this commit was
   `test_every_indexed_issue_is_COMMITTED`, about this issue's own file being uncommitted.
-  - The new route-coverage test builds the app without `.env` (placeholder DB settings).
-    Loading it leaked into two later tests (`test_entity_registry_vector_config`,
-    `test_archive_tooling_reports_outcomes`) through module-level values read while it
-    was loaded.
+  - A leak from the new route-coverage test was found and FIXED before the commit. It
+    built the app with the repo's `.env` loaded, and that broke two later tests
+    (`test_entity_registry_vector_config`, `test_archive_tooling_reports_outcomes`)
+    through module-level values read while it was loaded. It now patches out
+    `load_dotenv_files` and uses placeholder DB settings, and both tests pass after it.
 - `tests/integration/test_a_duplicate_create_cannot_rekey_a_space.py` (4 tests: the
-  manager refuses; the row write refuses and drops only its own tables; an orphan row is
+  manager refuses; the row write refuses and drops only its own tables, with A's notice
+  arriving mid-create; an orphan row is
   still taken over; a delete on an instance that had not heard of the space drops the keyed
   tables): **not yet run**, needs the vg test stack.
+  - The row write's `to_regclass` guard has never run against a real database. It is the
+    riskiest untested part of the fix.
 - Not yet done: two server containers on the vg test stack, alternating requests.
 
 Found from outside, by a deployment that runs two vitalgraph instances behind one load
@@ -196,6 +211,13 @@ not idempotent client-side. Severity is data loss, so it is fixed with the rest.
   handler nor the refresh calls it.
 - If the space is re-created under the same id, the "created" signal re-registers the new
   key, but the per-space caches can still answer from the old space.
+- A late "deleted" notice can arrive after the same id was re-created. Each instance also
+  receives its own notices, so a quick delete-then-create on one instance is enough.
+  - Before the fix this dropped the new space's registry entry.
+  - The first version of the fix (`482e9d5a`) also dropped its key and caches. Requests
+    recovered through the resolver, but background work listing the registry missed the
+    space until the next refresh.
+  - Fixed after review: the handler re-reads the row and keeps a space that exists again.
 
 ### 6. The refresh evicts a space created during its read
 
@@ -273,8 +295,21 @@ B has the space registered, and `create_space_with_tables` refuses at `:269`.
 **Deletes elsewhere clear everything.**
 - The "deleted" signal branch calls `forget_storage_key()` and
   `invalidate_space_caches(space_id, space_manager=self)`.
-- The refresh does the same for each id it drops. It also drops keys for ids absent from
-  its snapshot, not only registry entries.
+- The refresh does the same for each id it drops. That includes keys held without a
+  registry record (an import/export job loads one directly), except a create in progress.
+- A late "deleted" notice for a space already re-created keeps the new space (the row
+  decides) and drops only the caches.
+
+**A same-id create on two instances at once** (found in review of `482e9d5a`). The row
+write took its key from the shared map at write time.
+- If A's "created" notice reached B mid-create, B's map held A's key. B's write then
+  passed as "already holds this key": B reported success over its own orphaned tables, and
+  B's setup after the write landed in A's tables.
+- Passing the allocated key alone would not have been enough. Once the write refused, the
+  abandon dropped tables by `space_prefix`, which by then gave A's key: it would have
+  dropped A's tables.
+- So the create holds its key (`begin_create`) until the row is written or abandoned, and
+  `load_storage_keys` leaves a space being created here alone.
 
 **The refresh keeps what it did not see.**
 - Record the set of cached ids before `list_spaces()`. Evict only ids that were in that
@@ -297,7 +332,9 @@ map is module-level, so swap or patch it per instance), over one fake or real da
   space manager (vector indexes).
 - An import or export job created on A and started on B for a space B does not yet know
   runs against the keyed tables.
-- An unknown id stays unknown, and a second request for it does not re-read.
+- An unknown id stays unknown and is re-read on every request. Caching the miss would
+  bring the race back for a space created elsewhere a moment later. The cost is one
+  indexed read per request for a made-up id, after authentication.
 - An unkeyed (pre-cutover) space is resolved once, not once per request.
 - A duplicate create on B raises `SpaceAlreadyExistsError`. A's key and row are unchanged,
   and no `vgs_` tables are left behind.

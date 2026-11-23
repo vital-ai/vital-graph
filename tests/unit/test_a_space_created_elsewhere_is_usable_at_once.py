@@ -37,12 +37,13 @@ KEY = "abcdefgh"
 def _isolated_key_map():
     """The key map is module-level: each test starts with SPACE unknown."""
     saved = (dict(space_names._KEYS), dict(space_names._IDS),
-             set(space_names._UNKEYED))
+             set(space_names._UNKEYED), set(space_names._CREATING))
     space_names.forget_storage_key(SPACE)
     yield
     space_names._KEYS.clear(); space_names._KEYS.update(saved[0])
     space_names._IDS.clear(); space_names._IDS.update(saved[1])
     space_names._UNKEYED.clear(); space_names._UNKEYED.update(saved[2])
+    space_names._CREATING.clear(); space_names._CREATING.update(saved[3])
 
 
 class SharedDb:
@@ -172,10 +173,15 @@ class TestTheRequestDoesNotWaitForTheSignal:
         assert await b.ensure_space_loaded(SPACE)
         assert space_names.registered_storage_key(SPACE) == KEY
 
-    async def test_an_unknown_id_stays_unknown(self):
+    async def test_an_unknown_id_stays_unknown_and_is_read_every_time(self):
+        """A miss is NOT cached: caching it would bring the race back for a
+        space created elsewhere a moment later. One indexed read per request
+        for an id that does not exist, after authentication."""
         db = SharedDb(rows={})
         b = SpaceManager(space_backend=db)
         assert not await b.ensure_space_loaded("no_such_space")
+        assert not await b.ensure_space_loaded("no_such_space")
+        assert db.reads == 2
         assert "no_such_space" not in b._spaces
         assert not space_names.is_resolved("no_such_space")
 
@@ -222,6 +228,23 @@ class TestLoadStorageKeysMarksWhatItRead:
         await load_storage_keys(Conn(), "old_space")
         assert space_names.is_resolved("old_space")
 
+    async def test_a_space_being_created_here_is_not_replaced(self):
+        """Another instance's same-id create announces ITS key. Taken mid-create,
+        the rest of this create's objects — and later their drop — would be
+        named under the other space's key."""
+        from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+
+        class Conn:
+            async def fetch(self, sql, *args):
+                return [{"space_id": SPACE, "storage_key": "otherkey", "keyed": True}]
+
+        space_names.begin_create(SPACE, KEY)
+        await load_storage_keys(Conn(), SPACE)
+        assert space_names.registered_storage_key(SPACE) == KEY
+        space_names.end_create(SPACE)
+        await load_storage_keys(Conn(), SPACE)
+        assert space_names.registered_storage_key(SPACE) == "otherkey"
+
     def test_registering_a_key_clears_the_unkeyed_mark(self):
         space_names.mark_unkeyed(SPACE)
         space_names.register_storage_key(SPACE, KEY)
@@ -260,8 +283,10 @@ class TestDeleteElsewhere:
         return seen
 
     async def test_the_deleted_signal_forgets_the_key_and_caches(self, invalidated):
-        b = SpaceManager(space_backend=SharedDb())
+        db = SharedDb()
+        b = SpaceManager(space_backend=db)
         assert await b.ensure_space_loaded(SPACE)
+        db.rows.clear()                                 # the delete committed
         await b._handle_space_signal({"type": "deleted", "space_id": SPACE})
         assert SPACE not in b._spaces
         assert not space_names.is_resolved(SPACE)
@@ -269,11 +294,42 @@ class TestDeleteElsewhere:
 
     async def test_the_deleted_signal_forgets_an_unregistered_space_too(self, invalidated):
         """The key can be known without a registry record (a job loaded it)."""
-        b = SpaceManager(space_backend=SharedDb())
+        b = SpaceManager(space_backend=SharedDb(rows={}))
         space_names.register_storage_key(SPACE, KEY)
         await b._handle_space_signal({"type": "deleted", "space_id": SPACE})
         assert not space_names.is_resolved(SPACE)
         assert invalidated == [SPACE]
+
+    async def test_a_late_deleted_notice_keeps_a_space_already_re_created(
+            self, invalidated):
+        """Deleted and re-created before the delete's notice is handled: the row
+        exists again, so the NEW space keeps its record and key. The old
+        space's caches still go."""
+        db = SharedDb(rows={SPACE: {"space_id": SPACE, "storage_key": "newkeyzz"}})
+        b = SpaceManager(space_backend=db)
+        space_names.register_storage_key(SPACE, KEY)    # the old space's key
+        b._spaces[SPACE] = object()
+        await b._handle_space_signal({"type": "deleted", "space_id": SPACE})
+        assert SPACE in b._spaces
+        assert space_names.registered_storage_key(SPACE) == "newkeyzz"
+        assert invalidated == [SPACE]
+
+    async def test_the_refresh_forgets_a_key_held_without_a_record(self, invalidated):
+        """A job loads a key without registering the space. A missed delete
+        must not leave that key behind."""
+        b = SpaceManager(space_backend=SharedDb(rows={}))
+        space_names.register_storage_key(SPACE, KEY)
+        await b._refresh_cache_from_db()
+        assert not space_names.is_resolved(SPACE)
+        assert invalidated == [SPACE]
+
+    async def test_the_refresh_keeps_the_key_of_a_create_in_progress(self, invalidated):
+        """A create holds its key before its row exists."""
+        b = SpaceManager(space_backend=SharedDb(rows={}))
+        space_names.begin_create(SPACE, KEY)
+        await b._refresh_cache_from_db()
+        assert space_names.registered_storage_key(SPACE) == KEY
+        assert invalidated == []
 
     async def test_the_refresh_forgets_a_space_whose_row_is_gone(self, invalidated):
         """The path for a delete whose notice was missed."""

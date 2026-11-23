@@ -58,13 +58,15 @@ async def load_storage_keys(conn, space_id: Optional[str] = None) -> int:
     spaces are keyed.
 
     Only spaces read here are touched, so a space being created in this process
-    — registered before its row exists — is left alone. A space read and found
+    — registered before its row exists — is left alone, and so is one this
+    process is creating even when the read finds a row for it (another
+    instance's create of the same id; `space_names.begin_create`). A space read and found
     unkeyed is marked so (`space_names.is_resolved`). A database without the
     column (not yet migrated) leaves the map as it is: every space is then
     named by its id, which is what such a database holds.
     """
     import asyncpg
-    from .space_names import mark_unkeyed, register_storage_key
+    from .space_names import is_creating, mark_unkeyed, register_storage_key
     try:
         if space_id is None:
             rows = await conn.fetch(_KEYED_SQL)
@@ -73,11 +75,15 @@ async def load_storage_keys(conn, space_id: Optional[str] = None) -> int:
     except (asyncpg.UndefinedColumnError, asyncpg.UndefinedTableError):
         # Not migrated: the space asked for is named by its id, and is now
         # known to be, so requests for it stop re-reading (`issues/348`).
-        if space_id is not None:
+        if space_id is not None and not is_creating(space_id):
             mark_unkeyed(space_id)
         return 0
     keyed = 0
     for r in rows:
+        if is_creating(r["space_id"]):
+            # Being created here, under the key this process allocated; a row
+            # read now is another instance's same-id create (`issues/348`).
+            continue
         if r["keyed"]:
             register_storage_key(r["space_id"], r["storage_key"])
             keyed += 1

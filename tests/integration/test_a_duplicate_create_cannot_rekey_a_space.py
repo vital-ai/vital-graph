@@ -101,6 +101,14 @@ class TestTheRowWriteRefuses:
         assert key_b and key_b != key_a
         assert await _tables_under(pg_conn, key_b) > 0
 
+        # A's "created" notice reaches B mid-create and loads A's row. B keeps
+        # its own key: taking A's here made B's row write pass as "already
+        # holds this key" (a success report over orphaned tables), and made
+        # the abandon drop A's tables.
+        from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+        await load_storage_keys(pg_conn, sp)
+        assert registered_storage_key(sp) == key_b
+
         with pytest.raises(SpaceAlreadyExistsError):
             await space_impl.create_space_metadata(sp, {"space_name": sp})
 
