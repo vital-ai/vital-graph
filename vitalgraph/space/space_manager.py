@@ -82,6 +82,8 @@ class SpaceManager:
         self.db_impl = db_impl
         self.space_backend = space_backend
         self._spaces: Dict[str, SpaceRecord] = {}
+        # space id -> [lock, users]: one create per id at a time (`issues/348`).
+        self._create_locks: Dict[str, list] = {}
         # Spaces with a database record but no backing tables. Kept visible in
         # `list_spaces` (an operator needs to see them to clean them up) and
         # excluded from `list_active_spaces`, which is what background work uses.
@@ -211,6 +213,31 @@ class SpaceManager:
     async def create_space_with_tables(self, space_id: str, space_name: str,
                                        space_description: str = None,
                                        partition_quads: int = 0) -> bool:
+        """Create a space: see `_create_space_with_tables`.
+
+        ONE CREATE PER ID AT A TIME IN THIS PROCESS. The storage-key hold
+        (`space_names.begin_create`) is per id, not per create: two same-id
+        creates running together here (a client retrying after a timeout) would
+        have the second replace the first's key mid-create, and the first's
+        release end the hold for both — tables split across two keys, both
+        reported created. Serialised, the second finds the first's space and is
+        refused (`issues/348`). Creates of the same id on two INSTANCES are the
+        row write's guard's job.
+        """
+        entry = self._create_locks.setdefault(space_id, [asyncio.Lock(), 0])
+        entry[1] += 1
+        try:
+            async with entry[0]:
+                return await self._create_space_with_tables(
+                    space_id, space_name, space_description, partition_quads)
+        finally:
+            entry[1] -= 1
+            if entry[1] == 0:
+                self._create_locks.pop(space_id, None)
+
+    async def _create_space_with_tables(self, space_id: str, space_name: str,
+                                        space_description: str = None,
+                                        partition_quads: int = 0) -> bool:
         """
         Create a new space with both database record and tables.
         

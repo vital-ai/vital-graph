@@ -35,10 +35,14 @@ KEY = "abcdefgh"
 
 @pytest.fixture(autouse=True)
 def _isolated_key_map():
-    """The key map is module-level: each test starts with SPACE unknown."""
+    """The key map is module-level. Each test starts with it EMPTY: keys other
+    tests in the same session loaded (the integration suites load real ones)
+    would otherwise be seen, and forgotten, by the refresh tests here."""
     saved = (dict(space_names._KEYS), dict(space_names._IDS),
              set(space_names._UNKEYED), set(space_names._CREATING))
-    space_names.forget_storage_key(SPACE)
+    for held in (space_names._KEYS, space_names._IDS,
+                 space_names._UNKEYED, space_names._CREATING):
+        held.clear()
     yield
     space_names._KEYS.clear(); space_names._KEYS.update(saved[0])
     space_names._IDS.clear(); space_names._IDS.update(saved[1])
@@ -266,6 +270,64 @@ class TestDuplicateCreate:
         with pytest.raises(SpaceAlreadyExistsError):
             await b.create_space_with_tables(SPACE, SPACE)
         assert space_names.registered_storage_key(SPACE) == KEY
+
+    async def test_two_same_id_creates_on_one_instance_run_one_at_a_time(self):
+        """The key hold is per id. Run together, the second create replaced the
+        first's key mid-create and both reported success. Serialised, the second
+        finds the first's space and is refused."""
+
+        class CreatingDb(SharedDb):
+            def __init__(self):
+                super().__init__(rows={})
+                self.storage_calls = 0
+
+            async def create_space_storage(self, space_id, partition_quads=0):
+                self.storage_calls += 1
+                space_names.begin_create(space_id, ["firstkey", "secondkz"][self.storage_calls - 1])
+                await asyncio.sleep(0.05)
+                return True
+
+            async def create_space_metadata(self, space_id, metadata):
+                key = space_names.registered_storage_key(space_id)
+                self.rows[space_id] = {"space_id": space_id, "storage_key": key}
+                space_names.end_create(space_id)
+                return True
+
+        db = CreatingDb()
+        b = SpaceManager(space_backend=db)
+        results = await asyncio.gather(
+            b.create_space_with_tables(SPACE, SPACE),
+            b.create_space_with_tables(SPACE, SPACE),
+            return_exceptions=True)
+        assert sorted(type(r).__name__ for r in results) == [
+            "SpaceAlreadyExistsError", "bool"], results
+        assert db.storage_calls == 1
+        assert b._create_locks == {}
+
+
+class TestALostCreateNeverDeletesTheWinnersRows:
+
+    async def test_a_failed_key_reload_still_reports_already_exists(self, monkeypatch):
+        """After dropping its own tables, the lost create reloads the winner's
+        key. A failure there must not surface as a plain error: the caller's
+        rollback for that deletes the `space` and `graph` rows by id."""
+        from vitalgraph.db.sparql_sql import space_storage_key as SK
+        from vitalgraph.db.sparql_sql import sparql_sql_schema as SS
+        from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
+
+        async def dropped(conn, space_id):
+            return None
+
+        async def reload_fails(conn, space_id=None):
+            raise ConnectionError("connection lost")
+
+        monkeypatch.setattr(SS.SparqlSQLSchema, "drop_space", staticmethod(dropped))
+        monkeypatch.setattr(SK, "load_storage_keys", reload_fails)
+        impl = SparqlSQLSpaceImpl.__new__(SparqlSQLSpaceImpl)
+        space_names.begin_create(SPACE, "ourkeyzz")
+        await impl._abandon_lost_create(object(), SPACE)    # does not raise
+        assert not space_names.is_creating(SPACE)
+        assert not space_names.is_resolved(SPACE)        # re-read on next use
 
 
 # ---------------------------------------------------------------------------

@@ -1126,7 +1126,19 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 "objects (%s) failed, they are orphans: %s",
                 space_id, space_prefix(space_id), e)
         end_create(space_id)
-        await load_storage_keys(conn, space_id)
+        # A failed reload must not escape. Any error but SpaceAlreadyExistsError
+        # makes `create_space_metadata` return False, and `SpaceImpl.create`'s
+        # rollback then runs `delete_space_storage`, which deletes the `space`
+        # and `graph` rows BY ID — the winning space's. On failure the dropped
+        # key is forgotten instead, so the next request re-reads the row.
+        try:
+            await load_storage_keys(conn, space_id)
+        except Exception as e:
+            from .space_names import forget_storage_key
+            forget_storage_key(space_id)
+            logger.error(
+                "create of %s lost to an existing space; loading that space's "
+                "key failed, it will be re-read on next use: %s", space_id, e)
 
     async def update_space_metadata(self, space_id: str, metadata: Dict[str, Any]) -> bool:
         """Update space_name and/or space_description in the space table."""
