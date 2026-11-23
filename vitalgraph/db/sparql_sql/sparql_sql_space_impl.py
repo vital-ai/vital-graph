@@ -873,21 +873,45 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         name the schema generates comes from `space_prefix`. The row that
         records the key is written afterwards by `create_space_metadata`.
         """
-        from .space_names import begin_create, end_create, forget_storage_key
+        from .space_names import (begin_create, end_create, forget_storage_key,
+                                  registered_storage_key)
         from .space_storage_key import allocate_storage_key
+        own_key = None
         try:
             async with self._db._pool.acquire() as conn:
                 # Held until `create_space_metadata` writes or abandons the row:
                 # a NOTICE of another instance's same-id create must not swap
                 # this create's key out from under it (`issues/348`).
-                begin_create(space_id, await allocate_storage_key(conn))
+                own_key = await allocate_storage_key(conn)
+                begin_create(space_id, own_key)
                 await SparqlSQLSchema.create_space(conn, space_id, partition_quads)
             return True
         except Exception as e:
-            forget_storage_key(space_id)
-            end_create(space_id)
             logger.error("create_space_storage(%s) failed: %s", space_id, e)
+            if own_key is not None and registered_storage_key(space_id) == own_key:
+                await self._drop_partial_create(space_id, own_key)
+                forget_storage_key(space_id)
+            end_create(space_id)
             return False
+
+    async def _drop_partial_create(self, space_id: str, own_key: str) -> None:
+        """Drop what a failed create built before it failed.
+
+        Its objects are named under its own key, which nothing else knows: no
+        `space` row records it, and the key is forgotten next. Left behind they
+        are orphans that only `scripts/cleanup_orphan_space_tables.py` finds
+        (`issues/348`). Dropped while the key is still held, so `space_prefix`
+        names THESE objects and no other space's. A fresh connection: the
+        failure may have been the one the create was using.
+        """
+        try:
+            async with self._db._pool.acquire() as conn:
+                await SparqlSQLSchema.drop_space(conn, space_id)
+        except Exception as e:
+            logger.error(
+                "create_space_storage(%s) failed, and dropping its partial "
+                "objects (vgs_%s_*) failed too; they are orphans: %s",
+                space_id, own_key, e)
 
     # Attempts for a space drop that loses on lock contention (issues/342).
     DROP_ATTEMPTS = 3

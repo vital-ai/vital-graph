@@ -330,6 +330,68 @@ class TestALostCreateNeverDeletesTheWinnersRows:
         assert not space_names.is_resolved(SPACE)        # re-read on next use
 
 
+class TestAFailedCreateLeavesNoTables:
+    """`create_space_storage` failing partway (a DDL error, a dropped
+    connection) used to forget its key and keep the tables it had built:
+    orphans with no row, under a key nothing remembers."""
+
+    def _impl(self, monkeypatch, *, allocate, create, dropped):
+        from vitalgraph.db.sparql_sql import space_storage_key as SK
+        from vitalgraph.db.sparql_sql import sparql_sql_schema as SS
+        from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
+
+        class Acquire:
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, *a):
+                return False
+
+        class Pool:
+            def acquire(self):
+                return Acquire()
+
+        async def drop_space(conn, space_id):
+            dropped.append(space_names.space_prefix(space_id))
+
+        monkeypatch.setattr(SK, "allocate_storage_key", allocate)
+        monkeypatch.setattr(SS.SparqlSQLSchema, "create_space", staticmethod(create))
+        monkeypatch.setattr(SS.SparqlSQLSchema, "drop_space", staticmethod(drop_space))
+        impl = SparqlSQLSpaceImpl.__new__(SparqlSQLSpaceImpl)
+        impl.db_impl = type("Db", (), {"_pool": Pool()})()
+        return impl
+
+    async def test_a_create_that_fails_partway_drops_its_own_tables(self, monkeypatch):
+        async def allocate(conn):
+            return "partialk"
+
+        async def create(conn, space_id, partition_quads=0):
+            raise ConnectionError("connection lost mid-DDL")
+
+        dropped: list = []
+        impl = self._impl(monkeypatch, allocate=allocate, create=create, dropped=dropped)
+        assert not await impl.create_space_storage(SPACE)
+        assert dropped == ["vgs_partialk"]                # under its OWN key
+        assert not space_names.is_resolved(SPACE)
+        assert not space_names.is_creating(SPACE)
+
+    async def test_a_create_that_fails_before_its_key_drops_nothing(self, monkeypatch):
+        """No key allocated means no objects of its own: whatever `space_prefix`
+        gives for the id is not this create's to drop."""
+        async def allocate(conn):
+            raise ConnectionError("connection lost")
+
+        async def create(conn, space_id, partition_quads=0):
+            raise AssertionError("not reached")
+
+        dropped: list = []
+        space_names.register_storage_key(SPACE, KEY)      # known for another reason
+        impl = self._impl(monkeypatch, allocate=allocate, create=create, dropped=dropped)
+        assert not await impl.create_space_storage(SPACE)
+        assert dropped == []
+        assert space_names.registered_storage_key(SPACE) == KEY
+
+
 # ---------------------------------------------------------------------------
 # Delete elsewhere: forgotten entirely
 # ---------------------------------------------------------------------------

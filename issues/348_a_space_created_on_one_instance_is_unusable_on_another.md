@@ -1,6 +1,6 @@
 # 348 — A space created on one instance is unusable on another
 
-## Status: FIXED 2026-11-23 (`482e9d5a`, `87acf917`, and a second round of review fixes); verified on two processes over one database; not deployed
+## Status: FIXED 2026-11-23 (`482e9d5a`, `87acf917`, `8e7a9436`, and a partial-create cleanup after it); verified on two processes over one database; not deployed
 
 ### What changed
 - **Request resolver** (`vitalgraph/space/space_resolution.py`).
@@ -26,9 +26,17 @@
   - One create per id at a time in a process (`create_space_with_tables` takes a per-id
     `asyncio.Lock`). The hold is per id, not per create, so two same-id creates on ONE
     instance (a client retrying after a timeout) used to run together. The second replaced
-    the first's key mid-create, the first's release ended the hold for both, the tables
-    were split across two keys, and both reported success. Now the second waits, finds the
-    space, and is refused.
+    the first's key mid-create, and the first's release ended the hold for both. On a real
+    database both then FAILED (400): one create's failure path forgot the shared key, so the
+    other built its next tables under the bare id (`relation "probe348_…_datatype" does not
+    exist`), and each left its keyed tables behind as orphans. Now the second waits, finds
+    the space, and is refused.
+  - A create that fails partway (a DDL error, a dropped connection) drops the tables it
+    already built, while its key is still held, before releasing it
+    (`_drop_partial_create`). It used to forget the key and keep them: orphans with no
+    row, under a key nothing remembers, found only by
+    `scripts/cleanup_orphan_space_tables.py`. Nothing is dropped when no key was
+    allocated, or when the map no longer holds this create's key.
   - On a lost row, `_abandon_lost_create` drops only this create's own tables, still
     under its own key, then releases the hold and loads the winner's key. A failure of
     that reload is caught: the key is forgotten (re-read on next use) and the create still
@@ -60,13 +68,16 @@
 - `tests/unit/test_a_space_created_elsewhere_is_usable_at_once.py`: 17 tests at
   `482e9d5a`, 21 at `87acf917`, 23 now. Against the code before `482e9d5a` (extracted to
   a temp dir), 13 of the first 17 failed.
-  - The same-id test fails with the lock bypassed: both creates report success.
+  - Of the 4 that passed there, the two request tests exercise the new resolver module
+    itself, and the other two check behaviour that is unchanged.
+  - 25 tests after the partial-create cleanup. Its "fails partway" test fails on
+    `8e7a9436`.
+  - The same-id test fails with the lock bypassed: both creates report success there.
+    That is the fake backend; on a real database both failed (see "What changed").
   - Each test starts with an EMPTY key map. At `87acf917` it only forgot the test's own
     space, so running this file in one pytest session with the integration file failed
     the four refresh tests in `TestDeleteElsewhere`: they saw, and forgot, keys the
     integration tests had loaded. Each file passed on its own.
-  - Of the 4 that passed there, the two request tests exercise the new resolver module
-    itself, and the other two check behaviour that is unchanged.
   - Includes `test_space_routes_resolve_their_space`, which builds the real app and fails
     for any `space_id` route without the resolver.
 - Full unit suite: passes. The only failure before this commit was
@@ -85,8 +96,17 @@
   - Two processes over one database, create on A then read on B: B answered 200 in 20 of
     20 tries. The pre-fix commit `4b5eeb8c` running as B failed 14 of 20 with
     `relation "probe348_…_vector_index" does not exist`.
-- Not yet run on a database: this round's changes (the per-id create lock and the
-  reload-failure catch). Both have unit tests.
+- Reported by the reviewer, run on the local kind cluster against `8e7a9436`:
+  - The unit and integration files in one pytest session: 27 passed. The cross-file
+    pollution is fixed.
+  - Two processes, create on A then read on B at once, x20: 20 of 20 answered 200. B's
+    resolver re-read the space all 20 times.
+  - Two simultaneous creates of one id on one instance, x10: exactly one won every time.
+    The other got "already exists in manager", and nothing was left behind.
+  - The same check on `87acf917` (no lock): both creates failed with 400 every time, and
+    each left a full table set orphaned (20 sets of 27 tables).
+- Not yet run on a database: the partial-create cleanup (`_drop_partial_create`). It has
+  unit tests only.
 
 Found from outside, by a deployment that runs two vitalgraph instances behind one load
 balancer over one PostgreSQL database. On 2026-11-21 its provisioning (create a space, then
@@ -107,7 +127,9 @@ confirmed the timing (§3).
 - After the handler finishes, the same call answers 200 from `vgs_abcdefgh_vector_index`.
 - This matches the production log.
 
-The duplicate create (§4) needs a real database. It is not reproduced yet.
+The duplicate create (§4) is exercised against a real database by
+`tests/integration/test_a_duplicate_create_cannot_rekey_a_space.py`, including A's notice
+arriving mid-create (passed on the local kind cluster; see "Verified").
 
 ## Symptom
 
