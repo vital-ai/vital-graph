@@ -66,12 +66,11 @@
 - `test_scripts/debug/_issue348_cross_instance_race.py`: 500 before the fix, 200 from the
   keyed table after it.
 - `tests/unit/test_a_space_created_elsewhere_is_usable_at_once.py`: 17 tests at
-  `482e9d5a`, 21 at `87acf917`, 23 now. Against the code before `482e9d5a` (extracted to
+  `482e9d5a`, 21 at `87acf917`, 23 at `8e7a9436`, 25 now. Against the code before `482e9d5a` (extracted to
   a temp dir), 13 of the first 17 failed.
   - Of the 4 that passed there, the two request tests exercise the new resolver module
     itself, and the other two check behaviour that is unchanged.
-  - 25 tests after the partial-create cleanup. Its "fails partway" test fails on
-    `8e7a9436`.
+  - The partial-create cleanup's "fails partway" test fails on `8e7a9436`.
   - The same-id test fails with the lock bypassed: both creates report success there.
     That is the fake backend; on a real database both failed (see "What changed").
   - Each test starts with an EMPTY key map. At `87acf917` it only forgot the test's own
@@ -105,8 +104,18 @@
     The other got "already exists in manager", and nothing was left behind.
   - The same check on `87acf917` (no lock): both creates failed with 400 every time, and
     each left a full table set orphaned (20 sets of 27 tables).
-- Not yet run on a database: the partial-create cleanup (`_drop_partial_create`). It has
-  unit tests only.
+- Reported by the reviewer, run on the local kind cluster against `f0b09be7`:
+  - A create forced to fail after building its core tables (27) returned False and left
+    none of its tables or functions behind. Its key and its hold were both released.
+  - The unit and integration files in one pytest session: 29 passed.
+  - A client that gives up on a create (50 ms timeout), then retries the same id: the
+    server did not cancel the abandoned create. It finished, and the retry was refused
+    as "already exists". `create_space_storage`'s `except Exception` (which a
+    `CancelledError` would skip) therefore only matters at shutdown, when the process is
+    exiting anyway.
+- After `f0b09be7`: the branch where a failed create finds the key map no longer holding its
+  key now logs a warning naming the orphaned prefix. It is not reachable with the per-id
+  lock, so it is not tested.
 
 Found from outside, by a deployment that runs two vitalgraph instances behind one load
 balancer over one PostgreSQL database. On 2026-11-21 its provisioning (create a space, then

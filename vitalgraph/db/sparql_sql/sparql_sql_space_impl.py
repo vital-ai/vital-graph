@@ -891,6 +891,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             if own_key is not None and registered_storage_key(space_id) == own_key:
                 await self._drop_partial_create(space_id, own_key)
                 forget_storage_key(space_id)
+            elif own_key is not None:
+                # Not reachable with the per-id create lock, but if the map has
+                # lost this create's key, dropping by `space_prefix` would name
+                # some other space's objects. Leave them, and say so.
+                logger.warning(
+                    "create_space_storage(%s) failed after allocating key %s, "
+                    "and the key map no longer holds it (it holds %s); its "
+                    "partial objects (vgs_%s_*) are left as orphans",
+                    space_id, own_key, registered_storage_key(space_id), own_key)
             end_create(space_id)
             return False
 
