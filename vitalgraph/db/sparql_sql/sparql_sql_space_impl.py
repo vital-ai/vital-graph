@@ -1037,10 +1037,16 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             from .space_names import registered_storage_key
             from .space_storage_key import allocate_storage_key
             async with self._db._pool.acquire() as conn:
-                # The row records the key the objects were created under. A
-                # row that already exists here had no objects (creation checks),
-                # so whatever key it held names nothing.
-                await conn.execute(
+                # The row records the key the objects were created under.
+                #
+                # An existing row is overwritten ONLY when it names no objects:
+                # its key's quad table and its id's quad table are both absent
+                # (a row left without tables), or it already holds this key.
+                # Creation checks for the space first, but another instance can
+                # create the same id between that check and this write; an
+                # unguarded upsert then re-pointed that space's row at this
+                # create's empty tables and cut its data off (`issues/348`).
+                written = await conn.fetchval(
                     """INSERT INTO space (space_id, space_name, space_description, tenant,
                                           update_time, storage_key)
                        VALUES ($1, $2, $3, $4, NOW(), $5)
@@ -1049,7 +1055,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                            space_description = EXCLUDED.space_description,
                            tenant = EXCLUDED.tenant,
                            update_time = NOW(),
-                           storage_key = EXCLUDED.storage_key""",
+                           storage_key = EXCLUDED.storage_key
+                       WHERE space.storage_key IS NOT DISTINCT FROM EXCLUDED.storage_key
+                          OR (to_regclass('public.' || quote_ident(
+                                  'vgs_' || space.storage_key || '_rdf_quad')) IS NULL
+                              AND to_regclass('public.' || quote_ident(
+                                  space.space_id || '_rdf_quad')) IS NULL)
+                       RETURNING space_id""",
                     space_id,
                     metadata.get('space_name', space_id),
                     metadata.get('space_description', ''),
@@ -1059,6 +1071,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     registered_storage_key(space_id)
                     or await allocate_storage_key(conn),
                 )
+                if written is None:
+                    await self._abandon_lost_create(conn, space_id)
+                    from vitalgraph.space.space_manager import SpaceAlreadyExistsError
+                    raise SpaceAlreadyExistsError(
+                        f"Space '{space_id}' already exists (created concurrently "
+                        f"elsewhere)")
                 # A new space's edge types are maintained from its first write
                 # (`sync_edge_table`, `issues/293`). Only while its edge table
                 # is still EMPTY: a row written over existing objects marks
@@ -1073,8 +1091,30 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     await mark_new_space_edge_types(conn, space_id)
             return True
         except Exception as e:
+            from vitalgraph.space.space_manager import SpaceAlreadyExistsError
+            if isinstance(e, SpaceAlreadyExistsError):
+                raise
             logger.error("create_space_metadata(%s) failed: %s", space_id, e)
             return False
+
+    async def _abandon_lost_create(self, conn, space_id: str) -> None:
+        """Undo a create that lost its row to an existing space of the same id.
+
+        Drops ONLY this create's objects — they are named under the key it
+        registered, which is still the one `space_prefix` gives — and then
+        loads the existing row's key, so this process names the space as it
+        is. Never `delete_space_storage`: that also deletes the `space` and
+        `graph` rows by id, which are the OTHER space's.
+        """
+        from .space_storage_key import load_storage_keys
+        try:
+            await SparqlSQLSchema.drop_space(conn, space_id)
+        except Exception as e:
+            logger.error(
+                "create of %s lost to an existing space; dropping its own "
+                "objects (%s) failed, they are orphans: %s",
+                space_id, space_prefix(space_id), e)
+        await load_storage_keys(conn, space_id)
 
     async def update_space_metadata(self, space_id: str, metadata: Dict[str, Any]) -> bool:
         """Update space_name and/or space_description in the space table."""

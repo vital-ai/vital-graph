@@ -58,18 +58,23 @@ async def load_storage_keys(conn, space_id: Optional[str] = None) -> int:
     spaces are keyed.
 
     Only spaces read here are touched, so a space being created in this process
-    — registered before its row exists — is left alone. A database without the
+    — registered before its row exists — is left alone. A space read and found
+    unkeyed is marked so (`space_names.is_resolved`). A database without the
     column (not yet migrated) leaves the map as it is: every space is then
     named by its id, which is what such a database holds.
     """
     import asyncpg
-    from .space_names import forget_storage_key, register_storage_key
+    from .space_names import mark_unkeyed, register_storage_key
     try:
         if space_id is None:
             rows = await conn.fetch(_KEYED_SQL)
         else:
             rows = await conn.fetch(_KEYED_SQL + " WHERE space_id = $1", space_id)
     except (asyncpg.UndefinedColumnError, asyncpg.UndefinedTableError):
+        # Not migrated: the space asked for is named by its id, and is now
+        # known to be, so requests for it stop re-reading (`issues/348`).
+        if space_id is not None:
+            mark_unkeyed(space_id)
         return 0
     keyed = 0
     for r in rows:
@@ -77,7 +82,7 @@ async def load_storage_keys(conn, space_id: Optional[str] = None) -> int:
             register_storage_key(r["space_id"], r["storage_key"])
             keyed += 1
         else:
-            forget_storage_key(r["space_id"])
+            mark_unkeyed(r["space_id"])
     return keyed
 
 

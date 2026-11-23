@@ -271,6 +271,15 @@ class SpaceManager:
             raise SpaceAlreadyExistsError(
                 f"Space '{space_id}' already exists")
             
+        # Read the space's row first. The table check below names tables with
+        # `space_prefix`, and a space created by ANOTHER instance that this
+        # one has not heard of yet would be looked for under its bare id,
+        # found absent, and created again under a new key — re-pointing the
+        # existing row at empty tables (`issues/348`). The read loads its key,
+        # so the check looks where its tables are.
+        if hasattr(self.space_backend, "get_space_metadata"):
+            await self.space_backend.get_space_metadata(space_id)
+
         # Check if space already exists in backend
         space_exists = await self.space_backend.space_exists(space_id)
         if space_exists:
@@ -321,6 +330,11 @@ class SpaceManager:
             self.logger.info(f"✅ Successfully created space with tables: '{space_id}'")
             return True
             
+        except SpaceAlreadyExistsError:
+            # Lost the row to the same id created concurrently elsewhere. The
+            # backend dropped this create's own objects; the cleanup below
+            # would act on the space by id, which is now the OTHER create's.
+            raise
         except Exception as e:
             self.logger.error(f"Error creating space '{space_id}' with tables: {e}")
             # Attempt to clean up partially created space
@@ -352,9 +366,16 @@ class SpaceManager:
             self.logger.error(f"Cannot delete space '{space_id}': No space backend available")
             return False
             
+        # Make sure this process names the space as it is before dropping
+        # anything. A space created on another instance and not heard of here
+        # was looked for under its bare id and reported missing; one
+        # registered without its key had its row deleted and its keyed tables
+        # left behind as orphans (`issues/348`).
+        await self.ensure_space_loaded(space_id)
+
         # Check if space exists in the manager
         space_record = self._spaces.get(space_id)
-        
+
         # Check if space exists in backend
         try:
             space_exists = await self.space_backend.space_exists(space_id)
@@ -692,8 +713,11 @@ class SpaceManager:
             True if space is available (was cached or successfully loaded),
             False if space does not exist in either cache or DB
         """
-        # Fast path: already in cache
-        if space_id in self._spaces:
+        # Fast path: registered AND this process knows how its objects are
+        # named. Registry membership alone is not enough: the signal path
+        # registers a space even when loading its key failed, and a request can
+        # arrive between the two (`issues/348`).
+        if space_id in self._spaces and self._names_resolved(space_id):
             return True
 
         self.logger.info(f"ensure_space_loaded: cache miss for '{space_id}', checking backend...")
@@ -725,8 +749,16 @@ class SpaceManager:
                 return False
 
             if not space_meta:
+                # A registered space whose read came back empty (a failed read
+                # returns None too) stays as available as it was before the
+                # read; removing it is the delete signal's and refresh's job.
                 self.logger.debug(f"ensure_space_loaded: '{space_id}' not found in backend either")
-                return False
+                return space_id in self._spaces
+
+            # The read above loaded the key. A space already registered keeps
+            # its record.
+            if space_id in self._spaces:
+                return True
 
             # Space exists in DB but not in cache — load it with metadata
             space_impl = SpaceImpl(
@@ -742,8 +774,21 @@ class SpaceManager:
 
         except Exception as e:
             self.logger.error(f"ensure_space_loaded: error checking/loading '{space_id}': {e}")
-            return False
+            return space_id in self._spaces
     
+    def _names_resolved(self, space_id: str) -> bool:
+        """Does this process know how `space_id`'s objects are named?
+
+        Only a backend that keeps storage keys (sparql_sql: its
+        `get_space_metadata` loads them) can be unresolved; for any other the
+        question does not arise.
+        """
+        backend = self.space_backend or self.db_impl
+        if not hasattr(backend, "get_space_metadata"):
+            return True
+        from ..db.sparql_sql.space_names import is_resolved
+        return is_resolved(space_id)
+
     async def get_space_or_load(self, space_id: str) -> Optional['SpaceRecord']:
         """
         Get a space record, lazily loading from the DB on cache miss.
@@ -898,19 +943,36 @@ class SpaceManager:
                 self.logger.error("Failed to add space '%s' from signal: %s", space_id, e)
 
         elif signal_type == "deleted":
-            if space_id not in self._spaces:
-                self.logger.debug("Space '%s' not in local registry — ignoring deleted signal", space_id)
-                return
+            # Forget the space ENTIRELY, registered here or not: its storage
+            # key and every per-space cache too. Left behind, a space later
+            # re-created under the same id is served from the old one's
+            # caches (`issues/348`).
+            await self._forget_space(space_id)
+            self.logger.info("📥 Space '%s' forgotten via signal", space_id)
+
+    async def _forget_space(self, space_id: str) -> None:
+        """Drop everything this process holds for `space_id`: the registry
+        record, the storage key, and every per-space cache. Run on every
+        "deleted" signal, this process's own included (its listener is a
+        separate connection, so it receives its own notices), and by the
+        refresh for a space whose row is gone."""
+        record = self._spaces.pop(space_id, None)
+        if record and hasattr(record.space_impl, "close"):
             try:
-                record = self._spaces.pop(space_id, None)
-                if record and hasattr(record.space_impl, "close"):
-                    try:
-                        await record.space_impl.close()
-                    except Exception:
-                        pass
-                self.logger.info("📥 Space '%s' removed from local registry via signal", space_id)
-            except Exception as e:
-                self.logger.error("Failed to remove space '%s' from signal: %s", space_id, e)
+                await record.space_impl.close()
+            except Exception:
+                pass
+        self._orphaned_spaces.discard(space_id)
+        try:
+            from ..db.sparql_sql.space_names import forget_storage_key
+            forget_storage_key(space_id)
+        except Exception as e:
+            self.logger.error("Failed to forget the storage key of '%s': %s", space_id, e)
+        try:
+            from ..db.sparql_sql.space_cache_invalidation import invalidate_space_caches
+            invalidate_space_caches(space_id)
+        except Exception as e:
+            self.logger.error("Failed to drop the caches of '%s': %s", space_id, e)
 
     # ── Periodic cache refresh ────────────────────────────────────────
 
@@ -966,6 +1028,10 @@ class SpaceManager:
         if not backend or not hasattr(backend, 'list_spaces'):
             return
 
+        # Only a space cached BEFORE the read can be judged stale by it. One
+        # this process creates while the read runs is registered after its row
+        # is written, so the read may have missed the row (`issues/348`).
+        cached_before_read = set(self._spaces)
         try:
             db_spaces = await backend.list_spaces()
         except Exception as e:
@@ -1003,16 +1069,14 @@ class SpaceManager:
                 if db_desc is not None and hasattr(rec.space_impl, 'space_description'):
                     rec.space_impl.space_description = db_desc
 
-        # Remove spaces from cache that are no longer in DB
+        # Forget spaces whose row is gone: the registry record, the storage
+        # key and the per-space caches, as the "deleted" signal does. This is
+        # the path for a delete whose notice was missed.
         removed = 0
-        stale_ids = [sid for sid in self._spaces if sid not in db_space_map]
+        stale_ids = [sid for sid in cached_before_read
+                     if sid in self._spaces and sid not in db_space_map]
         for sid in stale_ids:
-            record = self._spaces.pop(sid, None)
-            if record and hasattr(record.space_impl, 'close'):
-                try:
-                    await record.space_impl.close()
-                except Exception:
-                    pass
+            await self._forget_space(sid)
             removed += 1
 
         if added or removed:

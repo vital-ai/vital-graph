@@ -112,6 +112,12 @@ class ProcessEndpoint:
             if scheduler is None:
                 raise HTTPException(status_code=503, detail="Process scheduler not available")
 
+            # The space is named in the body, so the router-level resolver
+            # does not see it; resolve it here (`issues/348`).
+            space_manager = getattr(self.app_impl, "space_manager", None)
+            if body.space_id and space_manager is not None:
+                await space_manager.ensure_space_loaded(body.space_id)
+
             # Two different answers, and they used to share one message: a busy
             # lock is TRANSIENT (retry), an unknown process type is PERMANENT
             # (fix the request). A caller told "Lock busy or no handler

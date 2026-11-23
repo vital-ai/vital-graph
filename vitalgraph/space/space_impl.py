@@ -81,6 +81,12 @@ class SpaceImpl:
             return True
             
         except Exception as e:
+            # Lost the row to a space created concurrently elsewhere: a domain
+            # outcome the backend has already cleaned up after, reported as
+            # such rather than as a failure (`issues/348`).
+            from .space_manager import SpaceAlreadyExistsError
+            if isinstance(e, SpaceAlreadyExistsError):
+                raise
             self.logger.error(f"create() failed for space '{self.space_id}': {e}")
             return False
     

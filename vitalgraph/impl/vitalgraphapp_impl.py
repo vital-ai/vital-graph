@@ -135,6 +135,14 @@ class VitalGraphAppImpl:
         
         # Add dependency for getting current user (needed before route setup)
         self.get_current_user = self.auth.create_get_current_user_dependency()
+
+        # Re-reads a request's space from its row when this process cannot yet
+        # name its objects — e.g. created a moment ago on another instance
+        # (`issues/348`). Mounted on every router with space-scoped routes by
+        # `_include_space_router`.
+        from vitalgraph.space.space_resolution import space_resolving_dependency
+        self.resolve_request_space = space_resolving_dependency(
+            lambda: self.space_manager, self.get_current_user)
         
         # Setup middleware, static files, startup events, and routes
         self._setup_middleware()
@@ -1199,6 +1207,17 @@ class VitalGraphAppImpl:
         self._init_frontend_routes()
         self.logger.info("All endpoints initialized successfully!")
     
+    def _include_space_router(self, router, **kwargs):
+        """`include_router` for a router whose routes take a `space_id`.
+
+        Adds `resolve_request_space`, so a route runs only after this process
+        can name the space's objects (`issues/348`). A router with even one
+        such route goes through here; `test_space_routes_resolve_their_space`
+        fails for any that does not.
+        """
+        self.app.include_router(
+            router, dependencies=[Depends(self.resolve_request_space)], **kwargs)
+
     def _init_sparql_routers(self):
         """Initialize SPARQL endpoint routers."""
         # Set logger to DEBUG level for this function
@@ -1222,11 +1241,11 @@ class VitalGraphAppImpl:
         
         # Include routers in the FastAPI app
         self.logger.info("Including SPARQL routers in FastAPI app...")
-        self.app.include_router(query_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
-        self.app.include_router(update_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
-        self.app.include_router(insert_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
-        self.app.include_router(delete_router, prefix="/api/graphs/sparql")
-        self.app.include_router(graph_router, prefix="/api/graphs")
+        self._include_space_router(query_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
+        self._include_space_router(update_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
+        self._include_space_router(insert_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
+        self._include_space_router(delete_router, prefix="/api/graphs/sparql")
+        self._include_space_router(graph_router, prefix="/api/graphs")
         self.logger.info(f"Included graph router with prefix '/api/graphs' - {len(graph_router.routes)} routes")
     
     def _init_graph_data_routers(self):
@@ -1254,15 +1273,15 @@ class VitalGraphAppImpl:
         files_router = create_files_router(self.space_manager, self.get_current_user, config=self.config.config_data)
         
         # Include routers in the FastAPI app  
-        self.app.include_router(triples_router, prefix="/api/graphs")
-        self.app.include_router(kgtypes_router, prefix="/api/graphs")
-        self.app.include_router(objects_router, prefix="/api/graphs")
-        self.app.include_router(kgentities_router, prefix="/api/graphs")
-        self.app.include_router(kgframes_router, prefix="/api/graphs")
-        self.app.include_router(kgrelations_router, prefix="/api/graphs")
-        self.app.include_router(kgqueries_router, prefix="/api/graphs")
-        self.app.include_router(kgdocuments_router, prefix="/api/graphs")
-        self.app.include_router(files_router, prefix="/api")
+        self._include_space_router(triples_router, prefix="/api/graphs")
+        self._include_space_router(kgtypes_router, prefix="/api/graphs")
+        self._include_space_router(objects_router, prefix="/api/graphs")
+        self._include_space_router(kgentities_router, prefix="/api/graphs")
+        self._include_space_router(kgframes_router, prefix="/api/graphs")
+        self._include_space_router(kgrelations_router, prefix="/api/graphs")
+        self._include_space_router(kgqueries_router, prefix="/api/graphs")
+        self._include_space_router(kgdocuments_router, prefix="/api/graphs")
+        self._include_space_router(files_router, prefix="/api")
     
     def _init_data_routers(self):
         """Initialize data import/export endpoint routers.
@@ -1282,8 +1301,8 @@ class VitalGraphAppImpl:
         import_router = create_import_router(self, self.space_manager, self.get_current_user)
         export_router = create_export_router(self, self.space_manager, self.get_current_user)
 
-        self.app.include_router(import_router, prefix="/api/data", tags=["Data"])
-        self.app.include_router(export_router, prefix="/api/data", tags=["Data"])
+        self._include_space_router(import_router, prefix="/api/data", tags=["Data"])
+        self._include_space_router(export_router, prefix="/api/data", tags=["Data"])
         self.logger.info("✅ Data import/export routers registered (manager created at startup)")
 
     def _init_import_export_manager(self):
@@ -1379,7 +1398,7 @@ class VitalGraphAppImpl:
         
         # Create and include spaces router
         spaces_router = create_spaces_router(self.api, self.get_current_user)
-        self.app.include_router(spaces_router, prefix="/api")
+        self._include_space_router(spaces_router, prefix="/api")
     
     def _init_user_routes(self):
         """Initialize user management routes."""
@@ -1388,7 +1407,7 @@ class VitalGraphAppImpl:
         
         # Create and include users router
         users_router = create_users_router(self.api, self.get_current_user)
-        self.app.include_router(users_router, prefix="/api")
+        self._include_space_router(users_router, prefix="/api")
 
         # Create and include API keys router
         api_keys_router = create_api_keys_router(self.api, self.get_current_user)
@@ -1434,7 +1453,7 @@ class VitalGraphAppImpl:
         from vitalgraph.endpoint.admin_endpoint import create_admin_router
         
         admin_router = create_admin_router(self.space_manager, self.get_current_user)
-        self.app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
+        self._include_space_router(admin_router, prefix="/api/admin", tags=["Admin"])
     
     
     def _init_fuzzy_mapping_routes(self):
@@ -1442,49 +1461,49 @@ class VitalGraphAppImpl:
         from vitalgraph.endpoint.fuzzy_mappings_endpoint import create_fuzzy_mappings_router
         
         fuzzy_mappings_router = create_fuzzy_mappings_router(self, self.get_current_user)
-        self.app.include_router(fuzzy_mappings_router, prefix="/api", tags=["Fuzzy Mappings"])
+        self._include_space_router(fuzzy_mappings_router, prefix="/api", tags=["Fuzzy Mappings"])
 
     def _init_vector_index_routes(self):
         """Initialize vector index CRUD endpoint routes."""
         from vitalgraph.endpoint.vector_indexes_endpoint import create_vector_indexes_router
         
         vector_indexes_router = create_vector_indexes_router(self, self.get_current_user)
-        self.app.include_router(vector_indexes_router, prefix="/api", tags=["Vector Indexes"])
+        self._include_space_router(vector_indexes_router, prefix="/api", tags=["Vector Indexes"])
     
     def _init_search_mapping_routes(self):
         """Initialize search mapping CRUD endpoint routes."""
         from vitalgraph.endpoint.search_mappings_endpoint import create_search_mappings_router
         
         search_mappings_router = create_search_mappings_router(self, self.get_current_user)
-        self.app.include_router(search_mappings_router, prefix="/api", tags=["Search Mappings"])
+        self._include_space_router(search_mappings_router, prefix="/api", tags=["Search Mappings"])
 
     def _init_fts_index_routes(self):
         """Initialize FTS index CRUD endpoint routes."""
         from vitalgraph.endpoint.fts_indexes_endpoint import create_fts_indexes_router
         
         fts_indexes_router = create_fts_indexes_router(self, self.get_current_user)
-        self.app.include_router(fts_indexes_router, prefix="/api", tags=["FTS Indexes"])
+        self._include_space_router(fts_indexes_router, prefix="/api", tags=["FTS Indexes"])
 
     def _init_geo_config_routes(self):
         """Initialize geo config CRUD endpoint routes."""
         from vitalgraph.endpoint.geo_config_endpoint import create_geo_config_router
         
         geo_config_router = create_geo_config_router(self, self.get_current_user)
-        self.app.include_router(geo_config_router, prefix="/api", tags=["Geo Config"])
+        self._include_space_router(geo_config_router, prefix="/api", tags=["Geo Config"])
 
     def _init_geo_points_routes(self):
         """Initialize geo points listing/query endpoint routes."""
         from vitalgraph.endpoint.geo_points_endpoint import create_geo_points_router
         
         geo_points_router = create_geo_points_router(self, self.get_current_user)
-        self.app.include_router(geo_points_router, prefix="/api", tags=["Geo"])
+        self._include_space_router(geo_points_router, prefix="/api", tags=["Geo"])
     
     def _init_metrics_routes(self):
         """Initialize query metrics endpoint routes."""
         from vitalgraph.endpoint.metrics_endpoint import MetricsEndpoint
         
         metrics_endpoint = MetricsEndpoint(self.api, self.get_current_user)
-        self.app.include_router(metrics_endpoint.router, prefix="/api", tags=["Metrics"])
+        self._include_space_router(metrics_endpoint.router, prefix="/api", tags=["Metrics"])
     
     def _init_frontend_routes(self):
         """Initialize frontend serving routes."""

@@ -324,6 +324,23 @@ class ImportExportJobManager:
     # Internal: run a job
     # ------------------------------------------------------------------
 
+    async def _resolve_job_space(self, space_id: Optional[str]) -> None:
+        """Load the job's space's storage key if this process lacks it.
+
+        A job is created by one request and started by another that carries
+        only its id, and runs on whichever instance received the start. That
+        instance may not have heard of a space created moments ago on another,
+        and the job names its tables with `space_prefix` (`issues/348`).
+        """
+        if not space_id:
+            return
+        from vitalgraph.db.sparql_sql.space_names import is_resolved
+        if is_resolved(space_id):
+            return
+        from vitalgraph.db.sparql_sql.space_storage_key import load_storage_keys
+        async with self._pool.acquire() as conn:
+            await load_storage_keys(conn, space_id)
+
     async def _run_job(
         self,
         job_id: str,
@@ -334,6 +351,7 @@ class ImportExportJobManager:
         """Execute an import or export job."""
         try:
             await self._update_status(job_id, "running", started_at=True)
+            await self._resolve_job_space(job.get('space_id'))
 
             if job['job_type'] == 'import':
                 result = await self._run_import(job_id, job, file_path, cancel_event)

@@ -59,6 +59,14 @@ _KEY_RE = re.compile(r"[a-z2-7]{8}")
 _KEYS: Dict[str, str] = {}
 _IDS: Dict[str, str] = {}
 
+#: Spaces whose row this process has READ and found not keyed (objects still
+#: named by id). Together with `_KEYS` this is what "this process knows how to
+#: name the space" means (`is_resolved`). Without it, a space absent from
+#: `_KEYS` is ambiguous: unkeyed, or created on another instance a moment ago
+#: and not yet heard of — and only the second needs a database read
+#: (`issues/348`).
+_UNKEYED: set = set()
+
 
 def space_prefix(space_id: str) -> str:
     """The prefix every database object of this space is named with."""
@@ -92,10 +100,31 @@ def register_storage_key(space_id: str, key: str) -> None:
 
 
 def forget_storage_key(space_id: str) -> None:
-    """Name `space_id`'s objects by its id again (or: it no longer exists)."""
+    """Name `space_id`'s objects by its id again (or: it no longer exists).
+
+    Also drops the "read and found unkeyed" mark: after this the process no
+    longer knows the space, and the next request for it reads its row.
+    """
     key = _KEYS.pop(space_id, None)
     if key is not None and _IDS.get(key) == space_id:
         del _IDS[key]
+    _UNKEYED.discard(space_id)
+
+
+def mark_unkeyed(space_id: str) -> None:
+    """Record that `space_id`'s row was read and its objects are named by id."""
+    forget_storage_key(space_id)
+    _UNKEYED.add(space_id)
+
+
+def is_resolved(space_id: str) -> bool:
+    """Does this process know how `space_id`'s objects are named?
+
+    True for a keyed space in the map, and for one whose row was read and found
+    unkeyed. False means `space_prefix` would fall back to the id WITHOUT
+    knowing that is right — the case `issues/348` is about.
+    """
+    return space_id in _KEYS or space_id in _UNKEYED
 
 
 def registered_storage_key(space_id: str) -> Optional[str]:
