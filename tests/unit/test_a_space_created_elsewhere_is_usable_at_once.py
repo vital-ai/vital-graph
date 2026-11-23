@@ -17,6 +17,7 @@ app and checks every route that takes a `space_id` carries the resolver.
 from __future__ import annotations
 
 import asyncio
+import re
 
 import asyncpg
 import httpx
@@ -520,10 +521,91 @@ class TestJobsResolveTheirSpace:
 # Coverage: every space-scoped route in the real app
 # ---------------------------------------------------------------------------
 
+_SPACE_PARAM = re.compile(r"space_id\s*:\s*[\w\[\], ]+=\s*(Query|Path)\(")
+
+
+def _plain_mounts():
+    """(variable, module) for every router `vitalgraphapp_impl` mounts with plain
+    `self.app.include_router`, resolved through the factory that built it and
+    the import that factory came from, in the same `_init_*` method."""
+    import ast
+    import pathlib
+
+    import vitalgraph
+    src = (pathlib.Path(vitalgraph.__file__).parent / "impl" /
+           "vitalgraphapp_impl.py").read_text()
+    out = []
+    for fn in ast.walk(ast.parse(src)):
+        if not isinstance(fn, ast.FunctionDef) or fn.name == "_include_space_router":
+            continue
+        imported, built = {}, {}
+        for node in ast.walk(fn):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                for a in node.names:
+                    imported[a.asname or a.name] = node.module
+            elif (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                  and isinstance(node.value.func, ast.Name)
+                  and isinstance(node.targets[0], ast.Name)):
+                built[node.targets[0].id] = node.value.func.id
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "include_router"
+                    and isinstance(node.func.value, ast.Attribute)
+                    and node.func.value.attr == "app" and node.args):
+                arg = node.args[0]
+                if isinstance(arg, ast.Name):
+                    out.append((arg.id, imported.get(built.get(arg.id, ""), None)))
+                elif (isinstance(arg, ast.Attribute)
+                      and isinstance(arg.value, ast.Name)):
+                    out.append((ast.unparse(arg), imported.get(arg.value.id)))
+                else:
+                    out.append((ast.unparse(arg), None))
+    return out, src
+
+
+def test_routers_mounted_without_the_resolver_take_no_space_id():
+    """The CI form of the route-coverage check. It reads source instead of
+    building the app, because importing `vitalgraphapp_impl` needs server-only
+    packages (`itsdangerous`, `uvicorn`) that the unit tier does not install
+    (see `test_refresh_endpoint_auth`). Every router mounted with plain
+    `include_router` must come from a module that declares no `space_id`
+    query or path parameter; one that does belongs on `_include_space_router`."""
+    import importlib.util
+    import pathlib
+
+    mounts, app_src = _plain_mounts()
+    assert len(mounts) >= 3, f"found only {mounts}; the parse is broken"
+    offenders = []
+    for name, module in mounts:
+        assert module, f"cannot tell where router {name!r} comes from"
+        path = pathlib.Path(importlib.util.find_spec(module).origin)
+        if _SPACE_PARAM.search(path.read_text()):
+            offenders.append(f"{name} ({module})")
+    assert not offenders, offenders
+    # Routes declared on the app itself are not behind any router dependency.
+    assert not _SPACE_PARAM.search(app_src)
+
+
+def test_the_space_parameter_pattern_finds_space_routes():
+    """Guards the check above against going vacuous: the pattern must find the
+    space routes the resolver exists for."""
+    import pathlib
+
+    import vitalgraph
+    src = (pathlib.Path(vitalgraph.__file__).parent / "endpoint" /
+           "vector_indexes_endpoint.py").read_text()
+    assert len(_SPACE_PARAM.findall(src)) >= 5
+
+
 def test_space_routes_resolve_their_space(monkeypatch):
     """Every route that takes a `space_id` query or path parameter is mounted
     with the resolver. A router included with plain `include_router` instead of
-    `_include_space_router` fails here, naming its routes."""
+    `_include_space_router` fails here, naming its routes.
+
+    Builds the real app, so it needs the server extra; skipped without it (the
+    CI unit tier), where the source-level check above stands in."""
+    pytest.importorskip("itsdangerous")
+    pytest.importorskip("uvicorn")
     from fastapi.routing import APIRoute, _IncludedRouter
 
     import vitalgraph.config.config_loader as CL
