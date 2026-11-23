@@ -1,6 +1,6 @@
 # 348 — A space created on one instance is unusable on another
 
-## Status: FIXED 2026-11-23 (`482e9d5a`, `87acf917`, `8e7a9436`, and a partial-create cleanup after it); verified on two processes over one database; not deployed
+## Status: FIXED 2026-11-23 (`482e9d5a` … `869f9cd6`; CI fix `1708ba57`); verified end to end with two containers behind a load balancer; not deployed
 
 ### What changed
 - **Request resolver** (`vitalgraph/space/space_resolution.py`).
@@ -116,6 +116,31 @@
 - After `f0b09be7`: the branch where a failed create finds the key map no longer holding its
   key now logs a warning naming the orphaned prefix. It is not reachable with the per-id
   lock, so it is not tested.
+- Reported by the reviewer, end to end on the local k8s setup (kind), 2026-11-23:
+  - Setup:
+    - Two vitalgraph containers per round, built from this repo's Dockerfile, behind an
+      nginx round-robin load balancer, as in production.
+    - One database (`sparql_sql_graph` on vital-pg), reached through the pooler in
+      session mode, as `dev_stack.py --k8s` runs it.
+    - The deployment's own provisioning script (the step that failed on 2026-11-21) ran
+      5 times per round with no retries, each run creating new spaces and their indexes.
+  - HEAD `869f9cd6`: 5 of 5 runs provisioned on the first try, with no 500s. Each container
+    resolved a space it had not yet heard of 5 times.
+  - Pre-fix `4b5eeb8c`: 0 of 5. Every run failed at `GET /api/vector-indexes?space_id=…`
+    with 500 "does not exist", the production error. The failures were always on the same
+    container: round-robin sent each create to one container and the next call to the
+    other.
+  - One difference from production: there the planned AWS setup connects to the primary
+    directly, not through a pooler. Session mode keeps NOTIFY working either way, and the
+    fix does not depend on NOTIFY.
+  - Conclusion: the deployment can drop its provisioning retries once a release with
+    these commits is deployed there.
+- CI: "Tests (Tier 1 + 2)" failed from `482e9d5a` to `869f9cd6`. The app-building
+  route-coverage test needs `itsdangerous` and `uvicorn`, server-only packages the unit tier
+  does not install. Fixed in `1708ba57`: that test skips without them, and a source-level
+  check runs instead, resolving each router mounted with plain `include_router` to its
+  module and requiring that none declares a `space_id` parameter. Tier 1 + 2 passes:
+  6,427 passed, 21 skipped.
 
 Found from outside, by a deployment that runs two vitalgraph instances behind one load
 balancer over one PostgreSQL database. On 2026-11-21 its provisioning (create a space, then
