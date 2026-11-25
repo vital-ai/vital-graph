@@ -31,6 +31,7 @@ import logging
 import os
 import platform
 import socket
+import contextvars
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -80,6 +81,35 @@ def vacuum_floor(live_rows: int) -> float:
 # the rest are counted, so a quiet cycle stays one short line.
 STEP_LOG_THRESHOLD_S = float(os.getenv("VG_MAINTENANCE_STEP_LOG_THRESHOLD_S", "1"))
 _step_clock = time.monotonic
+
+
+# PER SPACE, INSIDE A STEP. A step loops over every space, so its total cannot
+# say which space it went on, and `entity_slot_sort_integrity` alone covers the
+# shortfall split AND the coverage sweep (`issues/350`). `run()` sets a dict
+# here for the cycle; a step's loop records into it through `timed_spaces`.
+# Unset outside a cycle (a direct `trigger_maintenance`, a test), so recording
+# is then a no-op.
+_cycle_parts: contextvars.ContextVar[Optional[Dict[str, float]]] = \
+    contextvars.ContextVar("vg_maintenance_cycle_parts", default=None)
+
+
+def timed_spaces(part: str, space_ids):
+    """Iterate *space_ids*, adding each loop body's wall time to ``part[space]``.
+
+    A generator so a loop needs one changed line and none of its ``continue``s
+    or ``except``s move: the time between yielding a space and being asked for
+    the next one IS that space's loop body. ``finally`` covers ``break`` and a
+    raise out of the body (the generator is closed as the loop unwinds).
+    """
+    parts = _cycle_parts.get()
+    for sid in space_ids:
+        t = _step_clock()
+        try:
+            yield sid
+        finally:
+            if parts is not None:
+                key = f"{part}[{sid}]"
+                parts[key] = parts.get(key, 0.0) + (_step_clock() - t)
 
 
 def format_step_timings(timings: Dict[str, float],
@@ -804,13 +834,17 @@ class MaintenanceJob:
         # Seconds per step, in run order (`issues/353`). A dict, not a list of
         # pairs, so a step that runs twice accumulates rather than duplicates.
         timings: Dict[str, float] = {}
+        parts: Dict[str, float] = {}
         summary["step_timings"] = timings
+        summary["space_timings"] = parts
+        parts_token = _cycle_parts.set(parts)
         start = time.monotonic()
 
         try:
             stats = await self._timed(timings, "fetch_space_stats", self._fetch_space_stats())
             if not stats:
                 logger.info("MaintenanceJob: no space tables found, skipping")
+                _cycle_parts.reset(parts_token)
                 return summary
 
             logger.info(
@@ -930,23 +964,26 @@ class MaintenanceJob:
             summary["aborted"] = f"{type(e).__name__}: {e}"
             logger.error("MaintenanceJob cycle error: %s", e, exc_info=True)
 
+        _cycle_parts.reset(parts_token)
         elapsed = (time.monotonic() - start) * 1000
         if summary["aborted"]:
             logger.error(
                 "MaintenanceJob cycle ABORTED after %.0fms (%s) — analyze=%s "
-                "vacuum=%s; every later step was SKIPPED, not clean; steps=%s",
+                "vacuum=%s; every later step was SKIPPED, not clean; steps=%s spaces=%s",
                 elapsed, summary["aborted"], summary["analyze"],
                 summary["vacuum"], format_step_timings(timings),
+                format_step_timings(parts),
             )
         else:
             logger.info(
-                "MaintenanceJob cycle complete in %.0fms — analyze=%s vacuum=%s vector_reindex=%s cleanup=%s steps=%s",
+                "MaintenanceJob cycle complete in %.0fms — analyze=%s vacuum=%s vector_reindex=%s cleanup=%s steps=%s spaces=%s",
                 elapsed,
                 summary["analyze"],
                 summary["vacuum"],
                 summary["vector_reindex"],
                 summary["cleanup"],
                 format_step_timings(timings),
+                format_step_timings(parts),
             )
         return summary
 
@@ -2129,7 +2166,7 @@ class MaintenanceJob:
 
         started = time.monotonic()
         done: List[Dict] = []
-        for i, space_id in enumerate(due):
+        for i, space_id in enumerate(timed_spaces("stats_recompute", due)):
             # Budget checked BEFORE starting, never mid-recompute: a partial
             # recompute is not a thing — it is one transaction — so the choice
             # is to start it or not. The unstarted ones keep their slot and stay
@@ -2305,7 +2342,7 @@ class MaintenanceJob:
         pending = take_sweep_pending()
         from ..db.sparql_sql.sync_frame_slot_table import (
             cleanup_stale_frame_slot)
-        for sid in sorted(pending)[:_SWEEP_SPACES_PER_CYCLE]:
+        for sid in timed_spaces("referential_sweep", sorted(pending)[:_SWEEP_SPACES_PER_CYCLE]):
             try:
                 async with self._pool.acquire() as conn:
                     # THE SPACE MAY HAVE GONE since it was marked pending
@@ -2349,7 +2386,7 @@ class MaintenanceJob:
         # Tracked independently of drift — see the note at the selection below.
         worst_orphan_space = None
         worst_orphan_rate = 0.0
-        for space_id in space_ids:
+        for space_id in timed_spaces("edge_integrity", space_ids):
             # Backed off after a timeout (`issues/270`); see `log_probe_failure`.
             if probe_backed_off("edge_integrity", space_id):
                 continue
@@ -2607,7 +2644,7 @@ class MaintenanceJob:
             frame_slot_drift, frame_slot_orphan_rate)
 
         findings: Dict[str, Dict] = {}
-        for space_id in space_ids:
+        for space_id in timed_spaces("frame_slot_integrity", space_ids):
             # Backed off after a timeout (`issues/270`); see `log_probe_failure`.
             if probe_backed_off("frame_slot_integrity", space_id):
                 continue
@@ -2689,7 +2726,7 @@ class MaintenanceJob:
         residue_space = None
         residue_drift = 0
         stale_space = None
-        for space_id in space_ids:
+        for space_id in timed_spaces("frame_slot_backfill", space_ids):
             # Backed off after a timeout (`issues/270`); see `log_probe_failure`.
             if probe_backed_off("frame_entity_integrity", space_id):
                 continue
@@ -2989,7 +3026,7 @@ class MaintenanceJob:
         # than being rewired when one exists.
         slot_gaps: dict = {}
         _shortfall_probe = "entity_slot_sort_row_shortfall"
-        for space_id in space_ids:
+        for space_id in timed_spaces("slot_split", space_ids):
             if probe_backed_off(_shortfall_probe, space_id):
                 continue
             try:
@@ -3131,7 +3168,7 @@ class MaintenanceJob:
             clear_probe_backoff(_shortfall_probe, space_id)
 
         worst = None          # (shortfall, space_id, gap)
-        for space_id in space_ids:
+        for space_id in timed_spaces("slot_coverage", space_ids):
             try:
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):

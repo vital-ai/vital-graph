@@ -1,6 +1,6 @@
 # 353 — The maintenance cycle log has no per-step timings
 
-## Status: FIXED 2026-11-25 (step level). Unit-tested (unit suite 6,467, 0 failed). Not run on the vg stack yet, not deployed. The per-space breakdown and `result_details` are not done.
+## Status: FIXED 2026-11-25, per step and per space. Unit-tested (unit suite 6,472, 0 failed). Not run on the vg stack yet, not deployed. `result_details` not done.
 
 ## Found
 
@@ -54,22 +54,31 @@ group also carries `ecs-test/*`) then replaces the sampler for `349`'s remeasure
   - Slowest first.
   - The threshold is `VG_MAINTENANCE_STEP_LOG_THRESHOLD_S`, default 1.
   - A step that raised is still counted, which is the one an operator needs.
-- **Not done:**
-  - **Per-space times inside the multi-space steps.** `entity_slot_sort_integrity` covers
-    the shortfall split *and* the coverage sweep (`350`), for every space, so the line
-    cannot yet separate those two or name the space.
-  - **`result_details`.** The cycle has no tracker row of its own; each step writes its
-    own.
-
-  Both need timing inside each step's loop over spaces, a larger edit.
+- **Per space, inside a step**, with a second field, `spaces=slot_split[sp_main]:98.1s,slot_coverage[sp_main]:43.0s,…`.
+  - It uses the same formatter and threshold.
+  - `run()` sets a context variable for the cycle. The per-space loops iterate through
+    `timed_spaces(part, space_ids)`: a generator that times each loop body. That is one
+    changed line per loop, with no `continue` or `except` moved.
+  - The loops:
+    - `slot_split` and `slot_coverage`, which are the two halves of
+      `entity_slot_sort_integrity` (`350`);
+    - `stats_recompute` (`351`);
+    - `edge_integrity`, `referential_sweep`, `frame_slot_integrity` and
+      `frame_slot_backfill`.
+  - Outside a cycle (a direct trigger, a test) nothing is recorded.
+- **Not done: `result_details`.** The cycle has no tracker row of its own; each step writes
+  its own.
 
 Tests: `tests/unit/test_maintenance_step_timings.py`:
 - every step is timed, and the slow ones are logged in order;
 - an aborted cycle reports the steps that ran, including the failing one;
-- the formatter.
+- the formatter;
+- `timed_spaces` with `continue`, `break` and a raise;
+- the real `_run_entity_slot_sort_integrity` with stubbed queries, which records split
+  and coverage per space separately.
 
 Logs Insights, once deployed (production streams only):
 
     fields @timestamp, @message
     | filter @logStream like /^ecs\/vitalgraph\// and @message like /cycle complete/
-    | parse @message "steps=*" as steps
+    | parse @message "steps=* spaces=*" as steps, spaces
