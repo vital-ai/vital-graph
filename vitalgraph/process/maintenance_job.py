@@ -71,6 +71,30 @@ def vacuum_floor(live_rows: int) -> float:
     return max(VACUUM_DEAD_THRESHOLD, VACUUM_SCALE_FACTOR * (live_rows or 0))
 
 
+# ---------------------------------------------------------------------------
+# Per-step timings on the cycle line (`issues/353`)
+# ---------------------------------------------------------------------------
+# The completion line used to carry only the cycle total, so finding where a
+# production cycle's time went took a 26-minute `pg_stat_activity` sampler
+# (`issues/349`). Steps at or above the threshold are listed, slowest first;
+# the rest are counted, so a quiet cycle stays one short line.
+STEP_LOG_THRESHOLD_S = float(os.getenv("VG_MAINTENANCE_STEP_LOG_THRESHOLD_S", "1"))
+_step_clock = time.monotonic
+
+
+def format_step_timings(timings: Dict[str, float],
+                        threshold_s: Optional[float] = None) -> str:
+    """``"slot:98.1s,stats_recompute:12.0s,+9 under 1s"`` from a step->seconds map."""
+    th = STEP_LOG_THRESHOLD_S if threshold_s is None else threshold_s
+    slow = sorted(((n, t) for n, t in timings.items() if t >= th),
+                  key=lambda nt: -nt[1])
+    parts = [f"{n}:{t:.1f}s" for n, t in slow]
+    rest = len(timings) - len(slow)
+    if rest:
+        parts.append(f"+{rest} under {th:g}s")
+    return ",".join(parts) or "none"
+
+
 def _live_rows(row) -> int:
     """`n_live_tup` from a stats row, 0 when the row does not carry it."""
     try:
@@ -777,10 +801,14 @@ class MaintenanceJob:
         summary: Dict = {"analyze": None, "vacuum": None, "cleanup": False,
                          "vector_reindex": None, "value_stats": None,
                          "aborted": None}
+        # Seconds per step, in run order (`issues/353`). A dict, not a list of
+        # pairs, so a step that runs twice accumulates rather than duplicates.
+        timings: Dict[str, float] = {}
+        summary["step_timings"] = timings
         start = time.monotonic()
 
         try:
-            stats = await self._fetch_space_stats()
+            stats = await self._timed(timings, "fetch_space_stats", self._fetch_space_stats())
             if not stats:
                 logger.info("MaintenanceJob: no space tables found, skipping")
                 return summary
@@ -797,20 +825,20 @@ class MaintenanceJob:
             # --- ANALYZE ---
             analyze_space = self._pick_worst_for_analyze(stats)
             if analyze_space:
-                summary["analyze"] = await self._run_analyze(analyze_space)
+                summary["analyze"] = await self._timed(timings, f"analyze({analyze_space})", self._run_analyze(analyze_space))
 
             # --- VACUUM ---
             vacuum_space = self._pick_worst_for_vacuum(stats)
             if vacuum_space:
-                summary["vacuum"] = await self._run_vacuum(vacuum_space)
+                summary["vacuum"] = await self._timed(timings, f"vacuum({vacuum_space})", self._run_vacuum(vacuum_space))
 
             # --- Edge-table integrity (backfill worst-drifted space) ---
-            edge_result = await self._run_edge_integrity(list(stats.keys()))
+            edge_result = await self._timed(timings, "edge_integrity", self._run_edge_integrity(list(stats.keys())))
             if edge_result:
                 summary["edge_integrity"] = edge_result
 
             # --- Edge types: re-mark spaces a SPARQL update dirtied ---
-            reconcile_result = await self._run_edge_type_reconcile(list(stats.keys()))
+            reconcile_result = await self._timed(timings, "edge_type_reconcile", self._run_edge_type_reconcile(list(stats.keys())))
             if reconcile_result:
                 summary["edge_type_reconcile"] = reconcile_result
 
@@ -823,31 +851,31 @@ class MaintenanceJob:
             # cannot fix because backfilling only ADDS. The second repairs the
             # single worst-drifted space with `backfill_frame_slot_table`, the
             # same shape as edge integrity above.
-            fs_result = await self._run_frame_slot_integrity(list(stats.keys()))
+            fs_result = await self._timed(timings, "frame_slot_integrity", self._run_frame_slot_integrity(list(stats.keys())))
             if fs_result:
                 summary["frame_slot_integrity"] = fs_result
 
-            fs_fix = await self._run_frame_slot_backfill(list(stats.keys()))
+            fs_fix = await self._timed(timings, "frame_slot_backfill", self._run_frame_slot_backfill(list(stats.keys())))
             if fs_fix:
                 summary["frame_slot_backfill"] = fs_fix
 
             # --- Entity/slot sort integrity (derived from edge; issues/096) ---
-            ess_result = await self._run_entity_slot_sort_integrity(list(stats.keys()))
+            ess_result = await self._timed(timings, "entity_slot_sort_integrity", self._run_entity_slot_sort_integrity(list(stats.keys())))
             if ess_result:
                 summary["entity_slot_sort_integrity"] = ess_result
 
             # --- Grouping self-link (entity-graph reads depend on it) ---
-            selflink_result = await self._run_grouping_self_link_check(list(stats.keys()))
+            selflink_result = await self._timed(timings, "grouping_self_link_check", self._run_grouping_self_link_check(list(stats.keys())))
             if selflink_result:
                 summary["grouping_self_link"] = selflink_result
 
             # --- Graph registration (quads in a graph nothing lists; issues/116) ---
-            graphreg_result = await self._run_graph_registration_check(list(stats.keys()))
+            graphreg_result = await self._timed(timings, "graph_registration_check", self._run_graph_registration_check(list(stats.keys())))
             if graphreg_result:
                 summary["graph_registration"] = graphreg_result
 
             # --- Missing schema indexes (an interrupted bulk import; issues/156) ---
-            index_result = await self._run_space_index_check(list(stats.keys()))
+            index_result = await self._timed(timings, "space_index_check", self._run_space_index_check(list(stats.keys())))
             if index_result:
                 summary["missing_indexes"] = index_result
 
@@ -855,7 +883,7 @@ class MaintenanceJob:
             # Read on every query and it does change plans, so an empty or
             # stale table is a wrong plan. Nothing refreshed it periodically
             # before this: only an admin resync, an import, or the bulk loader.
-            fanout_result = await self._run_edge_fanout_refresh(list(stats.keys()))
+            fanout_result = await self._timed(timings, "edge_fanout_refresh", self._run_edge_fanout_refresh(list(stats.keys())))
             if fanout_result:
                 summary["edge_fanout_refresh"] = fanout_result
 
@@ -863,35 +891,35 @@ class MaintenanceJob:
             # Self-gating: a space whose verdict still matches its token is
             # skipped for a catalog read, and one that proved unable to hold a
             # verdict is backed off. See `refresh_type_agreement`.
-            agree_result = await self._run_type_agreement_refresh(list(stats.keys()))
+            agree_result = await self._timed(timings, "type_agreement_refresh", self._run_type_agreement_refresh(list(stats.keys())))
             if agree_result:
                 summary["type_agreement"] = agree_result
 
             # --- Pattern verdicts: decide the implications the planner asked about ---
             # Only spaces with the write log; a full check each, never on the
             # query path (`pattern_verdict`).
-            verdict_result = await self._run_pattern_verdict_refresh(list(stats.keys()))
+            verdict_result = await self._timed(timings, "pattern_verdict_refresh", self._run_pattern_verdict_refresh(list(stats.keys())))
             if verdict_result:
                 summary["pattern_verdicts"] = verdict_result
 
             # --- Stats: ONE recompute, replacing integrity + prune + rebuild ---
-            stats_result = await self._run_stats_recompute(list(stats.keys()))
+            stats_result = await self._timed(timings, "stats_recompute", self._run_stats_recompute(list(stats.keys())))
             if stats_result:
                 summary["stats_recompute"] = stats_result
 
             # --- Value histograms (rebuild the worst-drifted space) ---
-            vstats_result = await self._run_value_stats_refresh(list(stats.keys()))
+            vstats_result = await self._timed(timings, "value_stats_refresh", self._run_value_stats_refresh(list(stats.keys())))
             if vstats_result:
                 summary["value_stats"] = vstats_result
 
             # --- Vector index REINDEX ---
-            vector_result = await self._run_vector_reindex(list(stats.keys()))
+            vector_result = await self._timed(timings, "vector_reindex", self._run_vector_reindex(list(stats.keys())))
             if vector_result:
                 summary["vector_reindex"] = vector_result
 
             # --- Cleanup (once per day) ---
             if self._should_cleanup():
-                summary["cleanup"] = await self._run_cleanup()
+                summary["cleanup"] = await self._timed(timings, "cleanup", self._run_cleanup())
 
         except Exception as e:
             # One `except` covers the whole cycle, so a failure in ANY step
@@ -906,20 +934,35 @@ class MaintenanceJob:
         if summary["aborted"]:
             logger.error(
                 "MaintenanceJob cycle ABORTED after %.0fms (%s) — analyze=%s "
-                "vacuum=%s; every later step was SKIPPED, not clean",
+                "vacuum=%s; every later step was SKIPPED, not clean; steps=%s",
                 elapsed, summary["aborted"], summary["analyze"],
-                summary["vacuum"],
+                summary["vacuum"], format_step_timings(timings),
             )
         else:
             logger.info(
-                "MaintenanceJob cycle complete in %.0fms — analyze=%s vacuum=%s vector_reindex=%s cleanup=%s",
+                "MaintenanceJob cycle complete in %.0fms — analyze=%s vacuum=%s vector_reindex=%s cleanup=%s steps=%s",
                 elapsed,
                 summary["analyze"],
                 summary["vacuum"],
                 summary["vector_reindex"],
                 summary["cleanup"],
+                format_step_timings(timings),
             )
         return summary
+
+    @staticmethod
+    async def _timed(timings: Dict[str, float], name: str, coro):
+        """Await *coro*, adding its wall time to ``timings[name]``.
+
+        In a ``finally`` so a step that raises is still counted: the cycle's one
+        ``except`` then reports the steps that ran, including the one that
+        failed, which is the step an operator needs the time of.
+        """
+        t = _step_clock()
+        try:
+            return await coro
+        finally:
+            timings[name] = timings.get(name, 0.0) + (_step_clock() - t)
 
     # ------------------------------------------------------------------
     # On-demand triggers (bypass freshness checks)

@@ -1,6 +1,6 @@
 # 353 — The maintenance cycle log has no per-step timings
 
-## Status: OPEN 2026-11-25. Not started.
+## Status: FIXED 2026-11-25 (step level). Unit-tested (unit suite 6,467, 0 failed). Not run on the vg stack yet, not deployed. The per-space breakdown and `result_details` are not done.
 
 ## Found
 
@@ -41,3 +41,35 @@ Small. No behaviour change, and one `try/finally` per step.
 A CloudWatch Logs Insights query over the production streams (`ecs/vitalgraph/*` only; the
 group also carries `ecs-test/*`) then replaces the sampler for `349`'s remeasurement and
 `350`-`352`'s first steps.
+
+## Fix (2026-11-25)
+
+- **`MaintenanceJob.run()` times every step it awaits** through `_timed`, on
+  `_step_clock` (`time.monotonic`), with the time added in a `finally`.
+  - The timings are in `summary["step_timings"]`.
+  - `analyze` and `vacuum` are named with their space, e.g. `analyze(sp_x)`, because each
+    runs on one space.
+- **Both the completion line and the ABORTED line end with
+  `steps=stats_recompute:151.0s,entity_slot_sort_integrity:98.0s,…,+9 under 1s`.**
+  - Slowest first.
+  - The threshold is `VG_MAINTENANCE_STEP_LOG_THRESHOLD_S`, default 1.
+  - A step that raised is still counted, which is the one an operator needs.
+- **Not done:**
+  - **Per-space times inside the multi-space steps.** `entity_slot_sort_integrity` covers
+    the shortfall split *and* the coverage sweep (`350`), for every space, so the line
+    cannot yet separate those two or name the space.
+  - **`result_details`.** The cycle has no tracker row of its own; each step writes its
+    own.
+
+  Both need timing inside each step's loop over spaces, a larger edit.
+
+Tests: `tests/unit/test_maintenance_step_timings.py`:
+- every step is timed, and the slow ones are logged in order;
+- an aborted cycle reports the steps that ran, including the failing one;
+- the formatter.
+
+Logs Insights, once deployed (production streams only):
+
+    fields @timestamp, @message
+    | filter @logStream like /^ecs\/vitalgraph\// and @message like /cycle complete/
+    | parse @message "steps=*" as steps
