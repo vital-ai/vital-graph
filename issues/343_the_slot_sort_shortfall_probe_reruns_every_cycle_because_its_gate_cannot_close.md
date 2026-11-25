@@ -1,6 +1,6 @@
 # 343 — The slot-sort shortfall probe reruns every cycle because its gate cannot close
 
-## Status: FIXED 2026-11-15. Unit-tested and VERIFIED on the vg test stack (rebuilt image, `vgtest_core`); NOT deployed.
+## Status: FIXED 2026-11-15. Unit-tested and VERIFIED on the vg test stack (rebuilt image, `vgtest_core`); DEPLOYED to production 2026-11-23. On production it works for quiet spaces only: the continuously written main KG space still runs the split every cycle (`issues/349`).
 
 ## Found
 
@@ -99,3 +99,21 @@ counter and runs. It is the same for every probe behind `probe_data_changed`.
   (13.6 %; reruns a full 66 s scan on any written space, so an incremental check is the
   candidate) and the `pg_prewarm` rate (2,203 calls/h; check it against `issues/271`'s
   intent).
+
+## On production after deploy (2026-11-25)
+
+The one-hour pgss window above, rerun 2026-11-25 02:38 → 03:41 UTC, about 28 h after the
+rollout:
+- `WITH slots AS` fell from ~750 s/h (51 %) to **~470 s/h** (26 %), and is still the top
+  statement.
+- 4 calls × 98 s were on the main KG space, i.e. every 15-minute cycle; 3 × 26 s were on
+  other spaces.
+
+The main KG space is written continuously (61,426 quad rows in 10 minutes; every other
+space 0). The gate opens on any write, so on that space the fix changes nothing. It works
+where data is quiet: the test service's median maintenance cycle went from 102 s to 0.7 s.
+
+The production cycle median went from 756 s to 433 s (24 h before vs after; 17.5 h →
+15.2 h of cycle time).
+
+**Expected effect only partly reached.** The busy-space case is `issues/349`.

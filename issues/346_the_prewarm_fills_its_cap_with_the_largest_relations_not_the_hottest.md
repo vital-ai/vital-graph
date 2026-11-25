@@ -1,6 +1,6 @@
 # 346 — The prewarm fills its cap with the largest relations, not the hottest
 
-## Status: FIXED 2026-11-16. Unit-tested and verified against a real PostgreSQL 18.4; NOT deployed.
+## Status: FIXED 2026-11-16. Unit-tested and verified against a real PostgreSQL 18.4; DEPLOYED to production 2026-11-23. On production 2026-11-25: passes log `order: measured access`; passes re-reading >= 30 % of the cap 136/348 → 59/343 (6 h windows, the "before" from 2026-11-15).
 
 ## Found
 

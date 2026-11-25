@@ -1,6 +1,6 @@
 # 340: Numbers bound with VALUES do not compute: arithmetic is unbound and comparisons drop every row
 
-## Status: FIXED 2026-11-13 (uncommitted); verified on the rebuilt vg test stack: unit 6,356 passed; W3C/DAWG conformance 1,532 passed (unchanged); `tests/api/test_values_numbers_api.py` 17 and `test_fuzzy_match_api.py` 14.
+## Status: FIXED 2026-11-13 (`42ee050e`; DEPLOYED to production 2026-11-23); verified on the rebuilt vg test stack: unit 6,356 passed; W3C/DAWG conformance 1,532 passed (unchanged); `tests/api/test_values_numbers_api.py` 17 and `test_fuzzy_match_api.py` 14.
 
 ## Cause (confirmed)
 

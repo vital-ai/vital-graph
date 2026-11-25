@@ -1,6 +1,6 @@
 # 338: `/fuzzy-mappings/populate` resolves every mapping as `kgentity`, and answers OK when it indexes nothing
 
-## Status: FIXED 2026-11-12 (uncommitted), together with `339`; verified on the vg test stack: unit 6,343 passed; W3C/DAWG conformance 1,532 passed; fuzzy integration 14; API 37 (new + mappings) and 73 (auto-sync, kgqueries, text and geo search).
+## Status: FIXED 2026-11-12 (`0d2432e5`; DEPLOYED to production 2026-11-23), together with `339`; verified on the vg test stack: unit 6,343 passed; W3C/DAWG conformance 1,532 passed; fuzzy integration 14; API 37 (new + mappings) and 73 (auto-sync, kgqueries, text and geo search).
 
 Found 2026-11-12 while answering a question from a client service's
 session about indexing funder names on `KGEntityMention` nodes.

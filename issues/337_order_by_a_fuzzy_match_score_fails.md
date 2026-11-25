@@ -1,6 +1,6 @@
 # 337: ORDER BY a `vg:fuzzyMatch` score fails
 
-## Status: FIXED 2026-11-12 (uncommitted), verified on the vg test stack: unit 6,343 passed; W3C/DAWG conformance 1,532 passed; fuzzy integration 14; API 37 (new + mappings) and 73 (auto-sync, kgqueries, text and geo search).
+## Status: FIXED 2026-11-12 (`0d2432e5`; DEPLOYED to production 2026-11-23), verified on the vg test stack: unit 6,343 passed; W3C/DAWG conformance 1,532 passed; fuzzy integration 14; API 37 (new + mappings) and 73 (auto-sync, kgqueries, text and geo search).
 
 Reported 2026-11-12 by a client service's session while building a
 funder-name index on the local dev server (a dedicated funder space, 1,748

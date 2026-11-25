@@ -1,6 +1,6 @@
 # 344 — Type agreement rescans a space that cannot keep a verdict
 
-## Status: FIXED 2026-11-15. Unit-tested and VERIFIED on the vg test stack (rebuilt image, `vgtest_core`); NOT deployed.
+## Status: FIXED 2026-11-15. Unit-tested and VERIFIED on the vg test stack (rebuilt image, `vgtest_core`); DEPLOYED to production 2026-11-23. Confirmed on production 2026-11-25: the edge-agreement scan left the top 30 statements of an hour (was 13.6 %).
 
 ## Found
 

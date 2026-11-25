@@ -1,6 +1,6 @@
 # 341: `xsd:integer` of a decimal returns unbound instead of truncating
 
-## Status: FIXED 2026-11-13 (uncommitted), with `340`; verified on the rebuilt vg test stack: unit 6,356 passed; W3C/DAWG conformance 1,532 passed (unchanged); API 31.
+## Status: FIXED 2026-11-13 (`42ee050e`; DEPLOYED to production 2026-11-23), with `340`; verified on the rebuilt vg test stack: unit 6,356 passed; W3C/DAWG conformance 1,532 passed (unchanged); API 31.
 
 ## Fix
 

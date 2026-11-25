@@ -1,6 +1,6 @@
 # 336: Two concurrent creates of one entity are both accepted, and the entity is then unreadable as a graph
 
-## Status: FIXED 2026-11-11 (uncommitted), tested locally. Production data repaired: not yet.
+## Status: FIXED 2026-11-11 (`5ff11b97`; DEPLOYED to production 2026-11-23), tested locally. Production data repaired: not yet (post-rollout step, now due).
 
 Reported from production (server 0.0.101-prod line). 27 entities in two spaces
 were affected between 2026-10-20 and 2026-11-11, and new ones were appearing

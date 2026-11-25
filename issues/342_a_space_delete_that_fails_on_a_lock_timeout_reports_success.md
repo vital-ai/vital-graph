@@ -1,6 +1,6 @@
 # 342 — A space delete that fails on a lock timeout reports success
 
-## Status: FIXED 2026-11-15, verified on the vg test stack
+## Status: FIXED 2026-11-15, verified on the vg test stack (`c70cfa36`); DEPLOYED to production 2026-11-23
 
 Four layers, each of which hid the failure on its own:
 1. `delete_space_storage` runs the whole drop (every DROP plus the `graph`/`space` row

@@ -1,6 +1,6 @@
 # 348 — A space created on one instance is unusable on another
 
-## Status: FIXED 2026-11-23 (`482e9d5a` … `869f9cd6`; CI fix `1708ba57`); verified end to end with two containers behind a load balancer; not deployed
+## Status: FIXED 2026-11-23 (`482e9d5a` … `869f9cd6`; CI fix `1708ba57`); verified end to end with two containers behind a load balancer; DEPLOYED to production 2026-11-23
 
 ### What changed
 - **Request resolver** (`vitalgraph/space/space_resolution.py`).
@@ -134,7 +134,7 @@
     directly, not through a pooler. Session mode keeps NOTIFY working either way, and the
     fix does not depend on NOTIFY.
   - Conclusion: the deployment can drop its provisioning retries once a release with
-    these commits is deployed there.
+    these commits is deployed there. (Production runs it since 2026-11-23.)
 - CI: "Tests (Tier 1 + 2)" failed from `482e9d5a` to `869f9cd6`. The app-building
   route-coverage test needs `itsdangerous` and `uvicorn`, server-only packages the unit tier
   does not install. Fixed in `1708ba57`: that test skips without them, and a source-level
