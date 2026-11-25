@@ -1,6 +1,6 @@
 # 349 — The slot-sort probe still runs every cycle on a space that is written every cycle
 
-## Status: OPEN, 2026-11-25. Measured on production (read-only); fix proposed, not started.
+## Status: FIXED 2026-11-25: opt-in minimum interval in `probe_data_changed`. Unit-tested (11 of the new tests fail on the unfixed code; unit suite 6,462, 0 failed) and VERIFIED on the vg test stack (`vgtest_core`, run on a scratch EC2 instance via `scripts/scratch_stack.sh`). Not deployed.
 
 Follow-up to `343`. That fix is deployed (2026-11-23) and works for quiet spaces. It
 cannot help a space whose quads change between every two maintenance cycles. On
@@ -143,20 +143,96 @@ Alternatives, for later:
 - Make the shortfall and drift exact at write time. That's the largest change, the same
   direction as the durable `344` fix.
 
+## Fix
+
+`vitalgraph/process/maintenance_job.py`, in `probe_data_changed` itself, so every call
+site gets it with no change of its own:
+
+- `PROBE_MIN_INTERVAL_S`, from `VG_MAINTENANCE_PROBE_MIN_INTERVAL_S`. The default is
+  21600 (6 h), the same as the edge-fanout refresh interval. 0 turns it off, which is
+  `343`'s behaviour exactly.
+- `INTERVAL_GATED_PROBES` lists the four probes above. A probe in it whose gate opened
+  less than the interval ago on this space returns False, written or not.
+- The watermark is not advanced while the interval holds a probe, so writes made during
+  the interval still count when it ends. With no write, nothing runs after the interval
+  either.
+- Unconverged work still runs: a probe whose last pass repaired rows or failed partway
+  opens every cycle. The interval counts from the last time the gate opened for any
+  reason, including an unreadable counter.
+- In memory and per process, like the rest of the gate, so a restart runs each probe once.
+
+Not changed:
+- `entity_slot_sort_coverage` and `stats_recompute`, which still open on any write.
+- The `ANALYZE` step.
+
+**To-do 4 dropped.** The stats recompute "overrun" is by design. The budget is checked
+before starting each space, and a recompute is one transaction, so the first due space
+always runs and the rest are deferred, not dropped. Checking the last duration first would
+move the time between cycles, not remove it.
+
+## Tests
+
+- `tests/unit/test_probe_min_interval.py` (new, 13), on `probe_data_changed` with a fake
+  clock and watermark:
+  - the opted-in set (and that coverage and stats are not in it);
+  - each of the four waits out the interval and then sees the write made during it;
+  - no write means no run after the interval;
+  - coverage and stats still reopen on any write;
+  - unconverged work still runs inside the interval;
+  - the interval is per space;
+  - 0 turns it off;
+  - an unreadable counter does not defeat the interval;
+  - the 6 h default.
+- `tests/unit/test_slot_sort_shortfall_gate.py`, which drives the real
+  `_run_entity_slot_sort_integrity` through a fake pool, gets a fake clock:
+  - `test_a_write_reopens_it` became `…_once_the_interval_has_passed`;
+  - new `test_a_space_written_every_cycle_runs_once_per_interval` covers the production
+    case: a write before every 15-minute cycle over two intervals gives 2 splits, where
+    `343` alone gave 48.
+  - The repair, failed-pass and timeout tests pass unchanged.
+- Negative control: both files against `HEAD` (`834176ab`) in a throwaway copy. 11 fail;
+  the rest pin behaviour that is unchanged.
+- Unit suite: 6,462 tests, 0 failed, 17 skipped.
+
 ## To do
 
 1. ~~Measure each step of a production cycle~~: done, above.
-2. Implement the opt-in interval in `probe_data_changed` (or a wrapper), with the setting,
-   and opt in the four probes listed.
-3. Tests:
-   - a space written every cycle runs each opted-in probe at most once per interval;
-   - a probe left unconverged still runs on the next cycle;
-   - `entity_slot_sort_coverage` and `stats_recompute` are unaffected;
-   - a quiet space behaves as under `343`;
-   - `test_probe_change_gate.py` still passes.
-4. Separately, the stats recompute's budget overrun: check the budget before starting a
-   space whose last recompute took longer than the remaining budget.
-5. After deploy:
-   - the pgss window again;
+2. ~~Implement the opt-in interval~~: done (Fix).
+3. ~~Tests~~: done.
+4. ~~Stats recompute budget~~: dropped, see Fix.
+5. ~~Run on the vg test stack~~: done, below.
+6. After deploy:
+   - the pgss window again: `WITH slots AS` on the main KG space from 4 calls an hour to
+     about one per 6 h;
    - the `pg_stat_activity` sample again, for maintenance's share of wall time;
    - `_prewarm_log_summary.py` for the high-read passes.
+
+## Verified on the vg test stack (2026-11-25)
+
+The test stack was built from the working tree on a scratch EC2 instance (`r8g.2xlarge`,
+`scripts/scratch_stack.sh`), on the `vgtest_core` volume restored from its snapshot. The
+local Mac was swapping too hard to run it.
+
+`test_scripts/debug/_issue349_interval_verify.py`, run inside the app container:
+- It drives the real `_run_edge_integrity`, `_run_frame_slot_integrity`,
+  `_run_frame_slot_backfill` and `_run_entity_slot_sort_integrity`.
+- It uses the real 6 h default and a fake clock.
+- It writes one quad (inserted and deleted) before cycles 2 and 3.
+- It ran on two spaces the app's MaintenanceJob excludes.
+
+| cycle | `sp_lead_synth_10k` | `sp_lead_types` |
+|---|---|---|
+| 1 cold | 43.22 s: split, coverage, edge drift, frame drift ×2 | 8.85 s: same |
+| 2 written, +15 min | **0.15 s: coverage only** | **0.03 s: coverage only** |
+| 3 written, +15 min | 0.15 s: coverage only | 0.03 s: coverage only |
+| 4 no new write, interval passed | 7.56 s: split, edge drift, frame drift ×2 | 1.28 s: same |
+| 5 no write, interval passed again | 0.03 s: nothing | 0.01 s: nothing |
+
+Verdict PASS on both:
+- The opted-in probes are held inside the interval despite writes.
+- The writes made during the interval count once it ends (cycle 4).
+- With no write, nothing runs.
+- The coverage sweep, not opted in, still runs on every write.
+
+Under `343` alone, cycles 2 and 3 would each have rerun the split and the drift probes.
+

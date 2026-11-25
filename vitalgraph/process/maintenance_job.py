@@ -547,16 +547,62 @@ def reset_stats_recompute_schedule() -> None:
 _probe_watermark: Dict[Tuple[str, str], int] = {}
 _probe_unconverged: Dict[Tuple[str, str], bool] = {}
 
+# --- issues/349: the write gate cannot close on a space written every cycle ---
+#
+# `issues/343` put the slot-sort shortfall split behind the gate above. It fixed
+# the quiet spaces and none of the busy one: production's main KG space is
+# written continuously (61,426 quad rows in 10 minutes, 2026-11-25; every other
+# space 0), so "changed since last cycle" was true every cycle and its 98-248 s
+# split still ran every cycle. Sampling `pg_stat_activity` over a production
+# cycle put maintenance statements at 69 % of wall-clock, and the probes listed
+# below at ~62 % of that.
+#
+# So a MINIMUM INTERVAL per (probe, space), on top of the write gate, for the
+# probes that only WARN or REPAIR rows the write path already keeps in sync. A
+# delay of up to the interval delays a warning, or a repair of a write-path miss;
+# no read depends on these having run.
+#
+# OPT-IN, by name, deliberately. `entity_slot_sort_coverage` is NOT here: it
+# records the coverage markers and whole-space blocks that decide whether the
+# fast sort and filter paths serve a type, and delaying it can serve them on
+# stale coverage. `stats_recompute` has its own per-space schedule.
+#
+# UNCONVERGED WORK STILL OVERRIDES: a pass that repaired rows or failed part-way
+# runs again next cycle, interval or not (`issues/343`'s convergence rule).
+#
+# While held by the interval the watermark is NOT advanced, so writes made during
+# the interval still count as new when it ends. In memory, like the gate: a
+# restart runs each probe once.
+PROBE_MIN_INTERVAL_S = float(
+    os.getenv("VG_MAINTENANCE_PROBE_MIN_INTERVAL_S", "21600"))   # 6h; 0 = off
+INTERVAL_GATED_PROBES = frozenset({
+    "entity_slot_sort_row_shortfall",
+    "edge_table_drift",
+    "frame_slot_integrity",
+    "frame_entity_drift",
+})
+#: (probe, space) -> monotonic time the gate last opened
+_probe_last_open: Dict[Tuple[str, str], float] = {}
+#: test seam
+_probe_clock = time.monotonic
+
 
 async def probe_data_changed(conn, space_id: str, probe: str) -> bool:
     """True when *probe* should re-derive for *space_id*.
 
-    False only when BOTH: the quad table is unchanged since this probe last ran,
-    AND that probe last reported no outstanding work.
+    False when the probe last reported no outstanding work AND either the quad
+    table is unchanged since it last ran, or (for `INTERVAL_GATED_PROBES`) it
+    ran less than `PROBE_MIN_INTERVAL_S` ago.
     """
     key = (probe, space_id)
+    now = _probe_clock()
     if _probe_unconverged.get(key):
+        _probe_last_open[key] = now
         return True
+    if probe in INTERVAL_GATED_PROBES and PROBE_MIN_INTERVAL_S > 0:
+        last = _probe_last_open.get(key)
+        if last is not None and now - last < PROBE_MIN_INTERVAL_S:
+            return False   # watermark untouched: these writes count later
     try:
         wm = await conn.fetchval(
             "SELECT COALESCE(n_tup_ins,0) + COALESCE(n_tup_upd,0) "
@@ -564,14 +610,19 @@ async def probe_data_changed(conn, space_id: str, probe: str) -> bool:
             "FROM pg_stat_user_tables WHERE relname = $1",
             f"{space_prefix(space_id)}_rdf_quad")
     except Exception:
+        _probe_last_open[key] = now
         return True  # cannot tell -> do the work
     if wm is None:
+        _probe_last_open[key] = now
         return True
     prev = _probe_watermark.get(key)
     _probe_watermark[key] = int(wm)
     # `pg_stat_reset()` moves the counter DOWN; != is the honest test, and it
     # fails toward running.
-    return prev is None or int(wm) != prev
+    changed = prev is None or int(wm) != prev
+    if changed:
+        _probe_last_open[key] = now
+    return changed
 
 
 def mark_probe_converged(space_id: str, probe: str, converged: bool) -> None:
@@ -583,6 +634,7 @@ def reset_probe_gate() -> None:
     """Test seam; also forces a full re-derive on the next cycle."""
     _probe_watermark.clear()
     _probe_unconverged.clear()
+    _probe_last_open.clear()
     _probe_failures.clear()
 
 

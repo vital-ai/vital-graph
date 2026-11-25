@@ -50,8 +50,10 @@ async def _no_timeouts(_conn):
 @pytest.fixture
 def rig(monkeypatch):
     M.reset_probe_gate()
-    state = {"watermark": 100, "repair_rows": 0, "gap_raises": None,
+    state = {"watermark": 100, "repair_rows": 0, "gap_raises": None, "now": 1000.0,
              "calls": {"shortfall": 0, "gap": 0, "repair": 0}}
+    # `issues/349`: the gate also holds an opted-in probe for a minimum interval.
+    monkeypatch.setattr(M, "_probe_clock", lambda: state["now"])
 
     async def shortfall(conn, space_id, timeout=None):
         state["calls"]["shortfall"] += 1
@@ -114,12 +116,30 @@ async def test_unchanged_data_does_not_rerun_the_exact_split(rig):
 
 
 @pytest.mark.asyncio
-async def test_a_write_reopens_it(rig):
+async def test_a_write_reopens_it_once_the_interval_has_passed(rig):
+    """`issues/349`: a write alone no longer reopens it inside the interval."""
     job, st = rig
     await _cycle(job)
     st["watermark"] = 101
     await _cycle(job)
+    assert st["calls"]["gap"] == 1, "re-ran inside the minimum interval"
+    st["now"] += M.PROBE_MIN_INTERVAL_S
+    await _cycle(job)
     assert st["calls"]["gap"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_space_written_every_cycle_runs_once_per_interval(rig):
+    """The production case: the main KG space is written between every two cycles.
+    Under `343` alone the split ran every cycle there; now once per interval."""
+    job, st = rig
+    cycle_s = 900.0
+    cycles = int(2 * M.PROBE_MIN_INTERVAL_S / cycle_s)
+    for _ in range(cycles):
+        st["watermark"] += 1
+        await _cycle(job)
+        st["now"] += cycle_s
+    assert st["calls"]["gap"] == 2, st["calls"]
 
 
 @pytest.mark.asyncio
