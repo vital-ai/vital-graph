@@ -1,6 +1,6 @@
 # 353 — The maintenance cycle log has no per-step timings
 
-## Status: FIXED 2026-11-25, per step and per space. Unit-tested (unit suite 6,472, 0 failed) and VERIFIED on the vg test stack (`vgtest_core`, scratch EC2, 2026-11-26). Not deployed. `result_details` not done.
+## Status: FIXED 2026-11-25, per step and per space. Unit-tested (unit suite 6,472, 0 failed) and VERIFIED on the vg test stack (`vgtest_core`, scratch EC2, 2026-11-26). DEPLOYED to production 2026-11-26 in `v0.0.106-prod` (task definition rev 100); first production cycle carried both fields. `result_details` not done.
 
 ## Found
 
@@ -110,3 +110,23 @@ entry is listed. **PASS.**
   only a `pg_stat_activity` sample could show it.
 - **Cycle 2:** the 349 interval holds every split at 0.0 s. Coverage still runs, and the
   largest step is the hourly `grouping_self_link_check` at 3.0 s.
+
+## On production (2026-11-26, deploy session's report)
+
+`v0.0.106-prod` (task definition rev 100, 2/2 tasks). The first cycle after the restart
+ended 04:28 UTC after 1,923 s. That is the expected boot cycle: the in-memory gate was
+reset, so every probe ran once. Its line carried both fields:
+
+    steps=entity_slot_sort_integrity:996.5s,edge_integrity:369.0s,grouping_self_link_check:363.5s,frame_slot_integrity:53.2s,graph_registration_check:52.5s,…
+    spaces=slot_split[<main KG>]:359.8s,edge_integrity[<main KG>]:162.4s,slot_split[<lead data>]:109.9s,slot_coverage[<actions KG>]:106.5s,…,slot_coverage[<main KG>]:55.7s,slot_split[<actions KG>]:55.4s,…
+
+Space ids are replaced by roles here. What the boot cycle shows:
+
+- **The split and the coverage sweep are now separate, per space, in the log:**
+  `slot_split[<main KG>]` 360 s against `slot_coverage[<main KG>]` 56 s. `349` holds the
+  split for 6 h after this; the coverage sweep (`350`) is not held.
+- **`grouping_self_link_check` took 363.5 s.** It is a REPORT-only watch, run at most
+  hourly per space (`should_run_watch`, `VITALGRAPH_WATCH_INTERVAL_S`). The pgss window
+  saw its `WITH targets … NOT EXISTS` counts at 55 s and 50 s. Not yet tracked by an issue;
+  watch its share in steady-state cycles before opening one.
+- **`edge_integrity` took 369 s.** It is gated by `349` and runs once per 6 h per space.
