@@ -236,3 +236,28 @@ Verdict PASS on both:
 
 Under `343` alone, cycles 2 and 3 would each have rerun the split and the drift probes.
 
+## On production, per probe (2026-11-26, from `353`'s `spaces=` field)
+
+13.3 h window, 03:46 → 17:00 UTC, after the `v0.0.106` restart (which reset the gate).
+248 cycles, read from CloudWatch by the deploy session. `slot_split[<main KG>]` ran
+**exactly 3 times:**
+
+| time (UTC) | gap | cost |
+|---|---|---:|
+| 04:28 (boot cycle) | | 359.8 s |
+| 10:15 | 5 h 47 m | 364.9 s |
+| 16:27 | 6 h 12 m | 363.6 s |
+
+- **The interval holds.** The two gaps are 5 h 47 m and 6 h 12 m, against the 6 h
+  setting; a gap can come in a little under the interval as well as over, so it bounds
+  the cadence only roughly.
+- **The split now costs ~1,090 s in 13.3 h, 2.3 % of wall time;** before this fix it was
+  the largest maintenance cost.
+- **Cycles:** median 0.6 s, mean 83 s, p90 278 s, p95 667 s, max 1,923 s (the boot
+  cycle).
+- **Maintenance is 43 % of wall time,** most of it the stats recompute (`351`). The
+  "~30-35 %" expected above assumed the coverage sweep and the recompute stayed as they
+  were.
+
+The earlier report from cycle totals alone, over 6 h on `v0.0.105`, put the median cycle
+at 32.2 s.

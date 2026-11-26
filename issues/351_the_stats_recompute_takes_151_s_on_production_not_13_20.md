@@ -67,3 +67,18 @@ It also does not fit the cycle budget:
   spaces. Note that `STATS_RECOMPUTE_INTERVAL_S` is 3600 per space, so the main KG space
   pays 151 s an hour now.
 - Either way: correct both docstrings' timings.
+
+## On production after `349` + `353` (2026-11-26): now the largest maintenance cost
+
+13.3 h of `steps=` fields (deploy session), 03:46 → 17:00 UTC:
+
+| step | runs | mean | max | total | share of maintenance | share of wall |
+|---|---:|---:|---:|---:|---:|---:|
+| `stats_recompute` | 24 | 380 s | 692 s | 9,109 s | **44 %** | ~19 % |
+
+- **24 runs in 13.3 h is ~2 an hour.** The step recomputes each due space on its own
+  hourly, hash-phased schedule.
+- **Next read: the per-space split.** It is in `spaces=` as `stats_recompute[<space>]`. It
+  shows whether the 692 s is the main KG space alone, or several due spaces landing in
+  one cycle past the 120 s budget.
+- **The first step above is still the read-only `EXPLAIN`.**

@@ -77,3 +77,14 @@ Find out which of the two statements takes the 43 s on production, and on which 
   once they are deployed;
 - `pg_stat_statements` groups both under one aliased text (see the memory note on pgss
   aliasing), so it cannot split them per space.
+
+## On production after `349` + `353` (2026-11-26)
+
+13.3 h of `spaces=` fields (deploy session).
+- `slot_coverage[<main KG>]` was at or above the 1 s logging threshold **only in the 3
+  cycles where the split also ran**, at 29-55 s. Every other cycle it was under 1 s.
+  The boot cycle had `slot_coverage[<actions KG>]` at 106.5 s.
+- **The sweep is not the cost this issue estimated from the 2026-11-25 sample.** Its
+  heavy runs line up with the 6-hourly split, plausibly because the split's own writes
+  or cold cache make the coverage counts expensive in those cycles.
+- **Priority: low.** Re-check after a week. Until then nothing here needs doing.
