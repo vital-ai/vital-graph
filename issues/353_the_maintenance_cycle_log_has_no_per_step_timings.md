@@ -1,6 +1,6 @@
 # 353 — The maintenance cycle log has no per-step timings
 
-## Status: FIXED 2026-11-25, per step and per space. Unit-tested (unit suite 6,472, 0 failed). Not run on the vg stack yet, not deployed. `result_details` not done.
+## Status: FIXED 2026-11-25, per step and per space. Unit-tested (unit suite 6,472, 0 failed) and VERIFIED on the vg test stack (`vgtest_core`, scratch EC2, 2026-11-26). Not deployed. `result_details` not done.
 
 ## Found
 
@@ -82,3 +82,31 @@ Logs Insights, once deployed (production streams only):
     fields @timestamp, @message
     | filter @logStream like /^ecs\/vitalgraph\// and @message like /cycle complete/
     | parse @message "steps=* spaces=*" as steps, spaces
+
+## Verified on the vg test stack (2026-11-26)
+
+`test_scripts/debug/_issue353_cycle_line_verify.py`, run in the rebuilt app container on
+a scratch EC2 instance (`scripts/scratch_stack.sh`). It runs two real
+`MaintenanceJob.run()` cycles over all 15 KG spaces, with the threshold at 0 so that every
+entry is listed. **PASS.**
+
+| | cycle 1 (fresh process, as after a deploy) | cycle 2 |
+|---|---:|---:|
+| wall | 268.7 s | 3.3 s |
+| sum of `step_timings` | 268.7 s | 3.3 s |
+| `steps=` / `spaces=` on the line | yes / yes | yes / yes |
+| spaces with `slot_split[…]` and `slot_coverage[…]` | 15 / 15 | 15 / 15 |
+
+- **Cycle 1's slowest steps:**
+  - `entity_slot_sort_integrity:199.4s`;
+  - `edge_integrity:37.2s`;
+  - `grouping_self_link_check:12.2s`.
+- **Cycle 1's slowest spaces:**
+  - `slot_split[uw_prodshape]:85.1s` and `slot_split[uw_prodshape2]:85.1s`;
+  - `slot_split[sp_graph_rel_10k]:20.7s`;
+  - `edge_integrity[uw_prodshape]:14.7s`.
+
+  This is the split separated from the coverage sweep, and named by space. Before this
+  only a `pg_stat_activity` sample could show it.
+- **Cycle 2:** the 349 interval holds every split at 0.0 s. Coverage still runs, and the
+  largest step is the hourly `grouping_self_link_check` at 3.0 s.
