@@ -1,6 +1,6 @@
 # 349 — The slot-sort probe still runs every cycle on a space that is written every cycle
 
-## Status: FIXED 2026-11-25: opt-in minimum interval in `probe_data_changed`. Unit-tested (11 of the new tests fail on the unfixed code; unit suite 6,462, 0 failed) and VERIFIED on the vg test stack (`vgtest_core`, run on a scratch EC2 instance via `scripts/scratch_stack.sh`). Not deployed.
+## Status: FIXED 2026-11-25: opt-in minimum interval in `probe_data_changed`. Unit-tested (11 of the new tests fail on the unfixed code; unit suite 6,462, 0 failed) and VERIFIED on the vg test stack (`vgtest_core`, run on a scratch EC2 instance via `scripts/scratch_stack.sh`). DEPLOYED to production 2026-11-25 ~16:28 EST in `v0.0.105-prod` (task definition rev 99, built from `4e35573e`); production effect not yet measured.
 
 Follow-up to `343`. That fix is deployed (2026-11-23) and works for quiet spaces. It
 cannot help a space whose quads change between every two maintenance cycles. On
