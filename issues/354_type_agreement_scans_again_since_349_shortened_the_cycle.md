@@ -1,6 +1,6 @@
 # 354 — Type agreement scans again on production, likely because `349` shortened the cycle that `344`'s quiet test counts in
 
-## Status: OPEN 2026-11-26. Cause CONFIRMED for the main KG space from production's own log lines (read-only CloudWatch, before vs after `349`). Fix not started.
+## Status: OPEN 2026-11-26. Cause CONFIRMED for the main KG space from production's own log lines (read-only CloudWatch, before vs after `349`). FIXED 2026-11-26: quiet is measured in time. Unit-tested (3 of the new tests fail on the unfixed code; unit suite 6,477, 0 failed). VERIFIED on the vg test stack (`vgtest_core`, scratch EC2, with a control against the old gate). Not deployed.
 
 ## Found
 
@@ -130,3 +130,69 @@ What it shows:
   the token. In memory, as now.
 - **Also:** wrap `_run_type_agreement_refresh`'s loop in `timed_spaces`, so `spaces=`
   shows this step per space.
+
+## Fix (2026-11-26)
+
+`_not_quiet_yet` (`edge_type_agreement.py`) now keeps, per `(space, kind)`, the token
+and **when this process first saw it**. A space that already has a stored row rescans
+only once that token has held for `VG_TYPE_AGREEMENT_QUIET_S` (default **1800 s**).
+- A write restarts the clock.
+- `0` gives the old one-cycle test.
+- The clock is `_quiet_clock` (`time.monotonic`), in memory as before, so a restart
+  restarts it.
+
+**Unchanged:**
+- a space with no stored row scans at once;
+- a current verdict is skipped;
+- the born-stale (1 h) and timeout (6 h) backoffs come first;
+- `force` bypasses everything.
+
+The extra condition on the last attempt's `compute_ms` is dropped. The refresh's scan
+budget is 300 s (`REFRESH_TIMEOUT_MS`), so 30 min of quiet already exceeds any scan that
+can finish.
+
+`_run_type_agreement_refresh`'s loop now goes through `timed_spaces("type_agreement", …)`,
+so the cycle line's `spaces=` carries `type_agreement[<space>]`.
+
+Tests (`tests/unit/sparql_sql/test_type_agreement_waits_for_a_quiet_space.py`, with a fake
+clock):
+- a 5-minute pause is not quiet;
+- a write during the wait restarts the clock;
+- a space paused every 5 minutes for a simulated day is never scanned through the real
+  `refresh_type_agreement`;
+- `QUIET_S=0` is the old test;
+- the default is 30 min.
+
+The `344` tests now advance the clock by `QUIET_S` where they used to call twice. So does
+`test_unprovable_agreement_is_not_rebought`'s recovery test.
+
+**Control:** against the unfixed module, the three behaviour tests fail, including "a
+5-minute pause passed as quiet".
+
+## Verified on the vg test stack (2026-11-26)
+
+`test_scripts/debug/_issue354_quiet_by_time_verify.py`, run in the rebuilt app container
+on a scratch EC2 instance. It drives the real `refresh_type_agreement` on
+`sp_lead_synth_10k` (excluded from the app's own maintenance job) with:
+- real tokens, scans and stored rows;
+- a fake clock, with cycles 5 minutes apart as on production.
+
+A "write" inserts and deletes one row in the quad, edge and frame_slot tables, then
+forces the statistics flush (`pg_stat_force_next_flush()`; an idle backend can otherwise
+hold its counters ~10 s). That space has no write log, so its token is the derived
+tables' own churn, and a quad-only write does not move it.
+
+| cycle | fixed | old gate (control) |
+|---|---|---|
+| 0, written | wait (first sighting) | wait |
+| 1, +5 min, no write | wait (300 of 1800 s) | **scans both** |
+| 2, +5 min, written | wait | wait |
+| 3, +5 min, no write | wait (300 of 1800 s) | **scans both** |
+| 4, +30 min, no write | **scans both** (frame 35.6 s, edge 7.4 s, both agree) | current |
+| 5, +5 min, no write | current | current |
+| verdict | **PASS** | FAIL |
+
+- **The fix:** the old gate scans at every 5-minute pause, which is production's pattern.
+  The fixed gate waits out the 30 minutes, scans once, and then holds a current verdict.
+- **The control** rebinds the old module's functions in the running process (the old
+  source from `HEAD` before this change), and runs the same script.

@@ -611,26 +611,38 @@ BORN_STALE_BACKOFF_S = float(
     _os.getenv("VG_TYPE_AGREEMENT_BORN_STALE_BACKOFF_S", "3600"))
 
 
-#: (space_id, kind) -> the change token seen at the previous cycle (`issues/344`).
+#: How long a space's change token must stay put before a space that already
+#: has a stored row is rescanned (`issues/354`). `344` first measured this in
+#: CYCLES ("the token seen at the previous cycle"), which was ~12 min while a
+#: cycle took 433 s. `349` cut the median cycle to under a second, so cycles
+#: start ~5 min apart, and on production the main KG space then passed the test
+#: in its first 5-minute pause: 9 attempts in ~22 h (3 in 45 h before), every one
+#: born stale or timed out. Time, not cycles, so the threshold no longer moves
+#: with the scheduler. 0 = the old one-cycle test.
+QUIET_S = float(_os.getenv("VG_TYPE_AGREEMENT_QUIET_S", "1800"))
+_quiet_clock = _time.monotonic
+
+#: (space_id, kind) -> (change token, when this process first saw that token).
 _LAST_SEEN_TOKEN: dict = {}
 
 
 async def _not_quiet_yet(conn, space_id: str, kind: str, table: str) -> Optional[str]:
     """Why a space that already HAS a stored row should wait, or None to scan.
 
-    `issues/344`. A verdict is usable only while nothing writes the space (the
-    token includes the space's write count), so a rescan is worth its cost only on
-    a space that has gone quiet. Without this, the main production KG space ran a
-    224 s edge scan every hour as its born-stale back-off expired, and was born
-    stale every time: 15 % of the database's time in a quiet hour (2026-11-15), for
-    a verdict it has never once been able to keep. The spaces that do get TRUE were
-    rescanned right after each write, and the next write invalidated them again.
+    `issues/344`, `354`. A verdict is usable only while nothing writes the space
+    (the token includes the space's write count), so a rescan is worth its cost
+    only on a space that has gone quiet. Without this, the main production KG
+    space ran a 224 s edge scan every hour as its born-stale back-off expired,
+    and was born stale every time: 15 % of the database's time in a quiet hour
+    (2026-11-15), for a verdict it has never once been able to keep.
 
-    Quiet = the token is the one seen at the PREVIOUS cycle, i.e. no write for a
-    whole cycle. A busy space never qualifies; one that goes quiet gets its verdict
-    one cycle later. In memory, so a restart costs one cycle's delay. A token that
-    cannot be read does not block (scan, as before): this is a cost gate, and the
-    stored token, not this, is what keeps a verdict correct.
+    Quiet = the token has not changed for `QUIET_S` seconds, measured from the
+    first cycle that saw it. A busy space never qualifies; one that goes quiet
+    gets its verdict `QUIET_S` later (the first sighting cannot know how long the
+    token has already held, so it starts the clock). In memory, so a restart
+    restarts the clock. A token that cannot be read does not block (scan, as
+    before): this is a cost gate, and the stored token, not this, is what keeps
+    a verdict correct.
     """
     try:
         token = await change_token(conn, table, space_id)
@@ -639,11 +651,16 @@ async def _not_quiet_yet(conn, space_id: str, kind: str, table: str) -> Optional
     if token is None:
         return None
     key = (space_id, kind)
+    now = _quiet_clock()
     prev = _LAST_SEEN_TOKEN.get(key)
-    _LAST_SEEN_TOKEN[key] = token
-    if prev == token:
+    if prev is None or prev[0] != token:
+        _LAST_SEEN_TOKEN[key] = (token, now)
+        return "space written since the last cycle; waiting for a quiet one"
+    held = now - prev[1]
+    if held >= QUIET_S:
         return None
-    return "space written since the last cycle; waiting for a quiet one"
+    return (f"waiting for a quiet space: token unchanged for {int(held)}s of "
+            f"{int(QUIET_S)}s")
 
 
 async def _refresh_not_needed(conn, space_id: str, kind: str,

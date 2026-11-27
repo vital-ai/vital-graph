@@ -2030,7 +2030,7 @@ class MaintenanceJob:
             refresh_type_agreement)
 
         results: List[Dict] = []
-        for sid in space_ids:
+        for sid in timed_spaces("type_agreement", space_ids):
             try:
                 async with self._pool.acquire() as conn:
                     results.extend(await refresh_type_agreement(

@@ -335,19 +335,22 @@ class TestABusySpaceIsBackedOffNotRescanned:
         assert all("cannot hold a verdict" in r["skipped"] for r in out), out
 
     @pytest.mark.asyncio
-    async def test_the_backoff_expires_so_a_quietened_space_recovers(self):
+    async def test_the_backoff_expires_so_a_quietened_space_recovers(self, monkeypatch):
+        clock = {"now": 5_000.0}
+        monkeypatch.setattr(eta, "_quiet_clock", lambda: clock["now"])
         stored = {"agrees": None, "change_token": "x",
                   "age_s": eta.BORN_STALE_BACKOFF_S + 1}
         conn = self._Conn(moves=False)          # it has gone quiet
         conn.stored = stored
-        # ONE OBSERVED QUIET CYCLE FIRST (`issues/344`): a single sighting cannot
-        # tell a quiet space from a busy one, and on production the busy one was
-        # rescanned for 224 s every hour as this back-off expired, born stale each
-        # time. So the first cycle after expiry records the token, and the next,
+        # QUIET FIRST (`issues/344`, `354`): a single sighting cannot tell a quiet
+        # space from a busy one, and on production the busy one was rescanned for
+        # 224 s every hour as this back-off expired, born stale each time. So the
+        # first cycle after expiry records the token, and a cycle `QUIET_S` later,
         # seeing it unchanged, scans. Recovery still needs no intervention.
         out = await eta.refresh_type_agreement(conn, "sp")
         assert conn.scans == 0, out
         assert all("quiet" in r["skipped"] for r in out), out
+        clock["now"] += eta.QUIET_S
         out = await eta.refresh_type_agreement(conn, "sp")
         assert conn.scans == 2
         assert all(r["agrees"] is True for r in out), out
