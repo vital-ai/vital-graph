@@ -1,6 +1,6 @@
 # 354 — Type agreement scans again on production, likely because `349` shortened the cycle that `344`'s quiet test counts in
 
-## Status: OPEN 2026-11-26. Cause is a hypothesis, unconfirmed; the first step is one read-only log query.
+## Status: OPEN 2026-11-26. Cause CONFIRMED for the main KG space from production's own log lines (read-only CloudWatch, before vs after `349`). Fix not started.
 
 ## Found
 
@@ -73,3 +73,60 @@ Wrapping it is a one-line change, worth making with any fix.
 
 Whichever is chosen, `344`'s tests must still hold: a quiet space recovers its verdict,
 and a new space scans at once.
+
+## Measured (2026-11-26, read-only CloudWatch, production streams only)
+
+Every `type agreement:` outcome line, grouped by space and outcome. The BORN STALE line is
+paired with its "differs" line and counted once.
+
+| space (role) | kind | outcome | before: runs / s | after: runs / s |
+|---|---|---|---:|---:|
+| main KG | frame | born stale | 0 / 0 | **5 / 1,045** |
+| main KG | frame | timed out (300 s) | 1 / 300 | **2 / 600** |
+| main KG | frame | absorbable | 1 / 194 | 0 / 0 |
+| main KG | edge | timed out (300 s) | 1 / 300 | **2 / 600** |
+| UW | edge | absorbable | 12 / 2,596 | 15 / 1,818 |
+| UW | edge | born stale | 4 / 990 | 0 / 0 |
+| UW | frame | absorbable | 17 / 242 | 15 / 476 |
+| business KG | edge + frame | absorbable | 28 / 229 | 32 / 252 |
+| **total** | | | **4,852 s** | **4,791 s** |
+
+The two windows:
+- **before:** `v0.0.104`, 2026-11-24 00:00 → 2026-11-25 21:20 UTC, **45.3 h**;
+- **after:** `v0.0.106`, 2026-11-26 03:46 → 2026-11-27 ~02:00 UTC, **~22 h**.
+
+What it shows:
+
+- **The scan rate doubled, ~107 → ~216 s/h,** with about the same total in half the time.
+- **On the main KG space every scan is wasted, and there are 6x as many.**
+  - Before: 3 attempts in 45 h. 344's quiet test almost never passed, because a cycle took
+    ~12 min and the space is never quiet that long.
+  - After: 9 attempts in ~22 h, all of them born stale or timed out, 2,245 s for no usable
+    verdict.
+  - The frame attempts come 1.5-2.7 h apart: the 1 h born-stale backoff expires, then
+    the first ~5-minute pause in writes passes the quiet test.
+  - This is the hypothesis above, confirmed.
+- **The UW and business KG spaces are another matter.** Their scans end ABSORBABLE: a
+  usable verdict, until the next write. They now rescan about twice as often, for the
+  same reason, but each scan does buy something. How long each verdict stays current, and
+  so whether the doubling is worth paying, is not measured.
+- **Only one task logs these lines** (one log stream). The maintenance job runs on one
+  of the two tasks.
+
+## Recommendation
+
+**Option 1, quiet by time.**
+- Require the token to be unchanged for at least `VG_TYPE_AGREEMENT_QUIET_S`, default
+  1800 s, instead of for one cycle.
+  - For a space whose last attempt was born stale or timed out, also require more than
+    its own last `compute_ms`. A scan that took 274 s cannot succeed on a space that
+    pauses for 5 minutes.
+- **Expected effect:**
+  - restores the before-349 behaviour on the main KG space (about 3 attempts in 45 h,
+    or none);
+  - halves the UW / business KG rescans.
+- **Cost:** a quiet space gets its verdict back up to 30 min later.
+- **Code:** `_not_quiet_yet` keeps the time it first saw the current token rather than only
+  the token. In memory, as now.
+- **Also:** wrap `_run_type_agreement_refresh`'s loop in `timed_spaces`, so `spaces=`
+  shows this step per space.
