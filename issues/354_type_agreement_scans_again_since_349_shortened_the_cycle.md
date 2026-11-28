@@ -1,6 +1,6 @@
 # 354 — Type agreement scans again on production, likely because `349` shortened the cycle that `344`'s quiet test counts in
 
-## Status: OPEN 2026-11-26. Cause CONFIRMED for the main KG space from production's own log lines (read-only CloudWatch, before vs after `349`). FIXED 2026-11-26: quiet is measured in time. Unit-tested (3 of the new tests fail on the unfixed code; unit suite 6,477, 0 failed). VERIFIED on the vg test stack (`vgtest_core`, scratch EC2, with a control against the old gate). Not deployed.
+## Status: OPEN 2026-11-26. Cause CONFIRMED for the main KG space from production's own log lines (read-only CloudWatch, before vs after `349`). FIXED 2026-11-26: quiet is measured in time. Unit-tested (3 of the new tests fail on the unfixed code; unit suite 6,477, 0 failed). VERIFIED on the vg test stack (`vgtest_core`, scratch EC2, with a control against the old gate). DEPLOYED 2026-11-27 in `v0.0.107-prod` (task definition rev 101): on production the main KG space has not been scanned in 9.4 h, and every scan that did run ended ABSORBABLE.
 
 ## Found
 
@@ -196,3 +196,49 @@ tables' own churn, and a quad-only write does not move it.
   The fixed gate waits out the 30 minutes, scans once, and then holds a current verdict.
 - **The control** rebinds the old module's functions in the running process (the old
   source from `HEAD` before this change), and runs the same script.
+
+## On production after the deploy (2026-11-27, read-only, deploy session)
+
+`v0.0.107-prod`, task definition rev 101, rolled out 03:23 UTC; 2/2 tasks, serving clean.
+Every `type agreement:` outcome line over the ~9.4 h since, production streams only:
+
+| space (role) | kind | runs | total | per run | outcome |
+|---|---|---:|---:|---:|---|
+| main KG | edge + frame | **0** | 0 | - | never scanned |
+| UW | edge | 5 | 1,298.9 s | 260 s | ABSORBABLE x5 |
+| UW | frame | 5 | 246.3 s | 49 s | ABSORBABLE x5 |
+| business KG | frame | 5 | 63.0 s | 13 s | ABSORBABLE x5 |
+| business KG | edge | 5 | 27.9 s | 6 s | ABSORBABLE x5 |
+| **total** | | **20** | **1,636 s** | | **~174 s/h** |
+
+Against the two windows in "Measured" above, per hour:
+
+| | before `349` | after `349` | after `354` |
+|---|---:|---:|---:|
+| main KG attempts | 3 in 45 h (0.07/h) | 9 in ~22 h (0.41/h) | **0 in 9.4 h** |
+| born stale or timed out (all spaces) | 6 | 9 | **0** |
+| UW edge runs | 0.35/h | 0.68/h | 0.53/h |
+| business KG runs (edge + frame) | 0.62/h | 1.45/h | 1.06/h |
+| scan time | ~107 s/h | ~216 s/h | **~174 s/h** |
+
+- **The target is met.** The main KG space, whose every attempt was wasted, has not been
+  scanned. That accounted for all 9 of the after-`349` born-stale or timed-out attempts,
+  so "no scan ends born stale" follows from it: the UW and business KG scans were already
+  all ABSORBABLE after `349`.
+- **The forecast for UW and business KG was too optimistic.** Their rescans fell by about
+  a quarter (0.68 → 0.53/h, 1.45 → 1.06/h), not by half. They go quiet for 30 min often
+  enough. The UW scans came 1.5-3 h apart (04:33, 06:12, 08:04, 09:37, 12:37 UTC). Those
+  verdicts are ABSORBABLE, so no born-stale backoff applies: the gaps are UW's own write
+  pattern.
+- **The UW edge scan costs more per run than before:** 260 s, against 121 s after `349` and
+  216 s before (3.46 M rows). It is now the largest type-agreement cost, ~138 s/h, and
+  why the total sits above the before-`349` level. Not explained yet: the cache state at
+  the time of the scan is one candidate. Re-read after a few days before acting on it.
+- **The window is short:** 9.4 h, 20 scans. Re-read at ~48 h for the per-run cost and the
+  UW cadence.
+
+**What remains is outside this issue.** Each UW scan buys a verdict that is usable until
+the next write. Keeping it across writes that do not change type structure is option 3
+above (a `type_agrees` flag maintained at write time). A longer `QUIET_S` would only trade
+fewer rescans for a verdict that comes back later. Not opened as an issue: the cost
+(~138 s/h, about 4 % of one core) does not justify it yet.
